@@ -1,0 +1,14 @@
+@model PandaAuth.Server.Features.Account.LoginViewModel
+@{
+    ViewData["Title"] = "登录";
+}
+
+<form asp-action="Login" asp-controller="Account" method="post">
+    <input type="hidden" asp-for="ReturnUrl" />
+    <div asp-validation-summary="All" class="error"></div>
+    <label asp-for="UserName">用户名 / 邮箱</label>
+    <input asp-for="UserName" type="text" autocomplete="username" autofocus />
+    <label asp-for="Password">密码</label>
+    <input asp-for="Password" type="password" autocomplete="current-password" />
+    <button type="submit">登录</button>
+</form>

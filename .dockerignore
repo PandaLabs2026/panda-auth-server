@@ -1,0 +1,17 @@
+**/bin/
+**/obj/
+**/.git/
+**/.vs/
+**/.vscode/
+**/.idea/
+**/node_modules/
+**/TestResults/
+**/*.user
+**/appsettings.Local.json
+**/appsettings.*.Local.json
+.env
+*.env
+!deploy/.env.example
+deploy/backups/
+*.md
+!README.md

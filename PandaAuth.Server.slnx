@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/PandaAuth.Server/PandaAuth.Server.csproj" />
+  <Project Path="samples/PandaAuth.DemoClient/PandaAuth.DemoClient.csproj" />
+  <Project Path="tests/PandaAuth.Tests/PandaAuth.Tests.csproj" />
+</Solution>

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>@ViewData["Title"] - PandaAuth</title>
+    <style>
+        :root { --panda-green: #2f6f4f; --panda-green-dark: #245741; --bg: #f6f8f7; --card: #ffffff; --text: #1f2937; --muted: #6b7280; }
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; color: var(--text); }
+        .card { width: 100%; max-width: 380px; background: var(--card); border: 1px solid #e5e7eb; border-radius: 14px; padding: 32px 28px; box-shadow: 0 8px 24px rgba(0,0,0,.05); }
+        .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+        .brand .logo { font-size: 30px; }
+        .brand h1 { font-size: 20px; margin: 0; color: var(--panda-green); letter-spacing: .5px; }
+        .brand small { color: var(--muted); font-size: 12px; }
+        label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+        input[type=text], input[type=password] { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; }
+        input:focus { outline: 2px solid var(--panda-green); border-color: transparent; }
+        button { width: 100%; margin-top: 20px; padding: 11px 0; border: 0; border-radius: 8px; background: var(--panda-green); color: #fff; font-size: 15px; cursor: pointer; }
+        button:hover { background: var(--panda-green-dark); }
+        .error { margin-top: 14px; color: #b91c1c; font-size: 13px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 12px; }
+        .validation-summary-valid { display: none; }
+        footer { margin-top: 20px; text-align: center; color: var(--muted); font-size: 12px; }
+    </style>
+</head>
+<body>
+    <main class="card">
+        <div class="brand">
+            <span class="logo">🐼</span>
+            <div>
+                <h1>PandaAuth</h1>
+                <small>熊猫实验室统一身份认证</small>
+            </div>
+        </div>
+        @RenderBody()
+        <footer>PandaAuth IDP · Phase 0</footer>
+    </main>
+</body>
+</html>

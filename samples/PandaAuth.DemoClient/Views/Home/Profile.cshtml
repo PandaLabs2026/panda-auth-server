@@ -1,0 +1,34 @@
+@{
+    ViewData["Title"] = "我的身份";
+}
+
+<h1>登录成功 · 身份信息</h1>
+
+<table border="1" cellpadding="6" cellspacing="0">
+    <thead>
+        <tr><th>Claim</th><th>Value</th></tr>
+    </thead>
+    <tbody>
+        @foreach (var claim in User.Claims)
+        {
+            <tr><td>@claim.Type</td><td>@claim.Value</td></tr>
+        }
+    </tbody>
+</table>
+
+<p>
+    <span>Access Token: @((bool)(ViewData["HasAccessToken"] ?? false) ? "已存储" : "无")</span> ·
+    <span>Refresh Token: @((bool)(ViewData["HasRefreshToken"] ?? false) ? "已存储" : "无")</span>
+</p>
+
+<form method="post" asp-controller="Home" asp-action="Refresh">
+    <button type="submit">使用 Refresh Token 刷新</button>
+</form>
+
+<form method="post" asp-controller="Home" asp-action="Revoke">
+    <button type="submit">吊销 Token 并登出</button>
+</form>
+
+<form method="post" asp-controller="Home" asp-action="Logout">
+    <button type="submit">RP 发起登出</button>
+</form>

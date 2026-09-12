@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>PandaAuth.Server</RootNamespace>
+    <AssemblyName>PandaAuth.Server</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="PandaAuth.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 跨仓共享契约；要求 panda-auth-share 与本仓同级克隆（工作区布局见元仓 WORKSPACE.md） -->
+    <ProjectReference Include="..\..\..\panda-auth-share\src\PandaAuth.Shared\PandaAuth.Shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="OpenIddict.AspNetCore" />
+    <PackageReference Include="OpenIddict.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="Konscious.Security.Cryptography.Argon2" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>
