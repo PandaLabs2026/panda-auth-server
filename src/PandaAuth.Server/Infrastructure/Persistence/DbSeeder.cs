@@ -130,5 +130,44 @@ public static class DbSeeder
                 },
             });
         }
+
+        // me-web：机密客户端，自助中心（panda-auth-me）的第一方专用客户端。
+        // 生产回调 https://auth.pandalabs.cn/me/callback/login/pandaauth，密钥经环境变量覆盖。
+        if (await applications.FindByClientIdAsync("me-web") is null)
+        {
+            await applications.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "me-web",
+                ClientType = ClientTypes.Confidential,
+                ClientSecret = "me-web-secret-change-me",
+                ConsentType = ConsentTypes.Implicit,
+                DisplayName = "PandaAuth 账户中心",
+                RedirectUris =
+                {
+                    new Uri("http://localhost:9007/callback/login/pandaauth"),
+                    new Uri("https://auth.pandalabs.cn/me/callback/login/pandaauth"),
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("http://localhost:9007/"),
+                    new Uri("https://auth.pandalabs.cn/me/"),
+                },
+                Permissions =
+                {
+                    Permissions.Endpoints.Authorization,
+                    Permissions.Endpoints.Token,
+                    Permissions.Endpoints.EndSession,
+                    Permissions.Endpoints.Revocation,
+                    Permissions.GrantTypes.AuthorizationCode,
+                    Permissions.GrantTypes.RefreshToken,
+                    Permissions.ResponseTypes.Code,
+                    Permissions.Scopes.Email,
+                    Permissions.Scopes.Profile,
+                    Permissions.Scopes.Roles,
+                    Permissions.Prefixes.Scope + Scopes.OfflineAccess,
+                    Requirements.Features.ProofKeyForCodeExchange,
+                },
+            });
+        }
     }
 }
