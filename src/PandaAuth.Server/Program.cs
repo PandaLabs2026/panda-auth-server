@@ -171,6 +171,9 @@ app.UseForwardedHeaders(new ForwardedHeadersOptions
 
 app.UseMiddleware<SecurityHeadersMiddleware>();
 
+// 品牌静态资源（wwwroot/brand/：登录页 favicon 与 mark），安全头之后挂载使 CSP 等头部同样覆盖静态响应。
+app.UseStaticFiles();
+
 if (app.Environment.IsDevelopment())
 {
     // 开发环境：启动时幂等执行种子数据（生产通过 --migrate 显式执行）。
