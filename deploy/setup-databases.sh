@@ -147,15 +147,15 @@ awk '
   cat <<'HBA'
 # BEGIN PANDAAUTH MANAGED RULES
 local panda_auth panda_auth reject
-local panda_auth_migrator panda_auth reject
+local panda_auth_migrator panda_auth_migrator reject
 host panda_auth panda_auth 127.0.0.1/32 scram-sha-256
 host panda_auth panda_auth ::1/128 scram-sha-256
-host panda_auth_migrator panda_auth 127.0.0.1/32 scram-sha-256
-host panda_auth_migrator panda_auth ::1/128 scram-sha-256
+host panda_auth panda_auth_migrator 127.0.0.1/32 scram-sha-256
+host panda_auth panda_auth_migrator ::1/128 scram-sha-256
 host panda_auth panda_auth 0.0.0.0/0 reject
 host panda_auth panda_auth ::/0 reject
-host panda_auth_migrator panda_auth 0.0.0.0/0 reject
-host panda_auth_migrator panda_auth ::/0 reject
+host panda_auth panda_auth_migrator 0.0.0.0/0 reject
+host panda_auth panda_auth_migrator ::/0 reject
 # END PANDAAUTH MANAGED RULES
 HBA
   cat "$TEMP_FILE"
@@ -172,6 +172,43 @@ if ! sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c 'SELECT pg_reload_conf()' >/
   cp -a "$HBA_BACKUP" "$HBA_FILE"
   sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c 'SELECT pg_reload_conf()' >/dev/null || true
   echo "PostgreSQL rejected the HBA configuration; restored the backup at $HBA_BACKUP." >&2
+  exit 1
+fi
+
+if ! HBA_RULES_OK="$(sudo -u postgres psql -X -v ON_ERROR_STOP=1 -tA <<'SQL'
+WITH expected(type, database_name, role_name, address, netmask, auth_method) AS (
+  VALUES
+    ('local', 'panda_auth', 'panda_auth', NULL::inet, NULL::inet, 'reject'),
+    ('local', 'panda_auth', 'panda_auth_migrator', NULL::inet, NULL::inet, 'reject'),
+    ('host', 'panda_auth', 'panda_auth', '127.0.0.1'::inet, '255.255.255.255'::inet, 'scram-sha-256'),
+    ('host', 'panda_auth', 'panda_auth', '::1'::inet, 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'::inet, 'scram-sha-256'),
+    ('host', 'panda_auth', 'panda_auth', '0.0.0.0'::inet, '0.0.0.0'::inet, 'reject'),
+    ('host', 'panda_auth', 'panda_auth', '::'::inet, '::'::inet, 'reject'),
+    ('host', 'panda_auth', 'panda_auth_migrator', '127.0.0.1'::inet, '255.255.255.255'::inet, 'scram-sha-256'),
+    ('host', 'panda_auth', 'panda_auth_migrator', '::1'::inet, 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'::inet, 'scram-sha-256'),
+    ('host', 'panda_auth', 'panda_auth_migrator', '0.0.0.0'::inet, '0.0.0.0'::inet, 'reject'),
+    ('host', 'panda_auth', 'panda_auth_migrator', '::'::inet, '::'::inet, 'reject')
+)
+SELECT count(*) = 10
+FROM expected e
+WHERE EXISTS (
+  SELECT 1
+  FROM pg_hba_file_rules r
+  WHERE r.error IS NULL
+    AND r.type = e.type
+    AND r.database @> ARRAY[e.database_name]
+    AND r.user_name @> ARRAY[e.role_name]
+    AND r.auth_method = e.auth_method
+    AND (e.type = 'local' OR (r.address = e.address AND r.netmask = e.netmask))
+);
+SQL
+)"; then
+  HBA_RULES_OK="f"
+fi
+if [ "$HBA_RULES_OK" != "t" ]; then
+  cp -a "$HBA_BACKUP" "$HBA_FILE"
+  sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c 'SELECT pg_reload_conf()' >/dev/null || true
+  echo "Required database/role HBA rules were not loaded; restored the backup at $HBA_BACKUP." >&2
   exit 1
 fi
 
