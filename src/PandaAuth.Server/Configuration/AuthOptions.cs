@@ -46,4 +46,8 @@ public sealed class SeedOptions
 
     /// <summary>管理员初始密码；为空则跳过管理员账号创建。生产环境通过 Seed__AdminPassword 环境变量注入。</summary>
     public string AdminPassword { get; set; } = string.Empty;
+
+    /// <summary>账户中心客户端密钥；生产通过 Auth__Seed__MeClientSecret 环境变量注入。</summary>
+    public string MeClientSecret { get; set; } = string.Empty;
+
 }

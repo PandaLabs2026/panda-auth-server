@@ -35,7 +35,9 @@ public static class SigningKeyStore
 
         if (signingKeys.Count == 0 || now - signingKeys[0].NotBefore >= TimeSpan.FromDays(options.RotationIntervalDays))
         {
-            signingKeys.Insert(0, CreateAndInsert(context, KeyUse.Signing, "RS256", now, options));
+            var newSigningKey = CreateAndInsert(context, KeyUse.Signing, "RS256", now, options);
+            signingKeys.Insert(0, newSigningKey);
+            records.Add(newSigningKey);
         }
 
         // 退役超出有效期的旧签名密钥；有效期大于轮换周期，保证旧 Access Token 在过期前仍可验签。

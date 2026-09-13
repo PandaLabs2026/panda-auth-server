@@ -2,27 +2,27 @@
 
 生产编排在[元仓部署指南](https://github.com/PandaLabs2026/panda-auth/blob/main/deploy/README.md)，本目录只保存 Server 专属脚本和迁移说明。
 
-> 当前启动与迁移入口存在静态阻断项，见[能力矩阵](https://github.com/PandaLabs2026/panda-auth/blob/main/docs/open-source/capabilities.md)的 G00。以下说明源码入口与目标流程，不代表已经验证可部署；本轮没有运行数据库命令。
+> MVC 注册、迁移时 OpenIddict Core 注册、Seed.Enabled 语义和首次签名密钥装配已修复，并在临时 PostgreSQL 18 上验证空库迁移、运行账号启动、健康检查和登录视图。生产数据库与发布仍未配置完成。
 
 ## 数据库与权限
 
 运行依赖 PostgreSQL，开发配置见 [appsettings.Development.json](../src/PandaAuth.Server/appsettings.Development.json)，使用独立开发库。不要让开发配置指向生产，也不要将演示凭据用于生产。
 
-[setup-databases.sh](setup-databases.sh)面向宿主机已有 PostgreSQL 容器，会创建角色/数据库并授予运行角色 public schema 的 CREATE/ALL。当前脚本与“不为运行账号扩大迁移 DDL 权限”的治理目标不一致，尚未整改；不能把它作为已经落实最小权限的通用安装步骤。权限分离与恢复演练跟踪在 G08。
+[setup-databases.sh](setup-databases.sh)面向宿主机 PostgreSQL 18，由管理员执行。脚本创建独立 `panda_auth`（运行）与 `panda_auth_migrator`（迁移）角色；数据库由 migrator 所有，运行角色只有 DML 权限。通过 `\password` 交互设置密码，并为本机回环连接增加 SCRAM 规则。服务器密钥文件保存 `DB_PASSWORD`、`DB_MIGRATOR_PASSWORD` 等值；不要将它们提交到仓库。
 
 ## 迁移与启动
 
-`dotnet run --project src/PandaAuth.Server -- --migrate` 是本仓根目录的一次性入口，会执行 EF 迁移并调用种子逻辑。当前分支在注册 OpenIddict 前调用依赖其 ApplicationManager 的 Seeder，需要先修复；命令失败也可能已经修改数据库。
+`dotnet run --project src/PandaAuth.Server -- --migrate` 是本仓根目录的一次性入口，使用 `ConnectionStrings:Migration` 执行 EF 迁移并调用 OpenIddict 种子逻辑；常驻服务仅使用 `ConnectionStrings:Default`。`Auth:Seed:Enabled=false` 会跳过全部种子数据。创建 `me-web` 时必须注入 `Auth:Seed:MeClientSecret`。
 
-常驻命令 `dotnet run --project src/PandaAuth.Server` 在启动前读取密钥表。Development 仅执行种子逻辑，不自动迁移。不得把新数据库直接正常启动当成初始化流程；Seed.Enabled 开关目前也未在 Seeder 中检查。
+常驻命令 `dotnet run --project src/PandaAuth.Server` 仅使用 `ConnectionStrings:Default` 并在启动前读取密钥表。Development 可执行种子逻辑，不自动迁移；`Seed.Enabled=false` 会跳过整个 Seeder。不得把新数据库直接正常启动当成初始化流程。
 
 生产一次性迁移的固定命令（只在修复、备份和独立恢复验证完成后，在服务器 `~/app/panda-auth/deploy` 使用）：
 
 ```bash
-docker compose -p panda-auth --env-file .env --env-file ~/.config/panda-auth/panda-auth.env run --rm auth-server --migrate
+docker compose -p panda-auth --env-file .env --env-file ~/.config/panda-auth/panda-auth.env --profile migrate run --rm auth-server-migrate
 ```
 
-结构变化前用 `pg_dump -Fc` 备份到 `~/app/panda-auth/backups/pre-<变更>-<UTC时间戳>.dump`，并在临时 postgres:18 容器验证可恢复；不得覆盖生产数据库。通过一次性迁移执行结构变化，不依赖常驻服务启动迁移，不为运行角色扩大 DDL 权限。
+结构变化前用 `pg_dump -Fc` 备份到 `~/app/panda-auth/backups/pre-<变更>-<UTC时间戳>.dump`，并在临时 postgres:18 容器验证可恢复；不得覆盖生产数据库。通过一次性迁移账号执行结构变化，不依赖常驻服务启动迁移，不为运行角色扩大 DDL 权限。
 
 ## 开发构建与验证
 

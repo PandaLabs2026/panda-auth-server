@@ -14,6 +14,11 @@ public static class DbSeeder
     public static async Task SeedAsync(IServiceProvider services)
     {
         var options = services.GetRequiredService<IOptions<AuthOptions>>().Value;
+        if (!options.Seed.Enabled)
+        {
+            return;
+        }
+
         var roleManager = services.GetRequiredService<RoleManager<PandaAuthRole>>();
         var userManager = services.GetRequiredService<UserManager<PandaAuthUser>>();
         var applications = services.GetRequiredService<IOpenIddictApplicationManager>();
@@ -139,7 +144,9 @@ public static class DbSeeder
             {
                 ClientId = "me-web",
                 ClientType = ClientTypes.Confidential,
-                ClientSecret = "me-web-secret-change-me",
+                ClientSecret = string.IsNullOrWhiteSpace(options.Seed.MeClientSecret)
+                    ? throw new InvalidOperationException("缺少 Auth:Seed:MeClientSecret 配置。")
+                    : options.Seed.MeClientSecret,
                 ConsentType = ConsentTypes.Implicit,
                 DisplayName = "PandaAuth 账户中心",
                 RedirectUris =

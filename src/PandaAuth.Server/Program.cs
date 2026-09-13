@@ -15,13 +15,15 @@ using PandaAuth.Server.Infrastructure.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var connectionString = builder.Configuration.GetConnectionString("Default")
-    ?? throw new InvalidOperationException("缺少连接字符串 ConnectionStrings:Default。");
+var isMigrateCommand = args.Contains("--migrate", StringComparer.Ordinal);
+var connectionStringName = isMigrateCommand ? "Migration" : "Default";
+var connectionString = builder.Configuration.GetConnectionString(connectionStringName)
+    ?? throw new InvalidOperationException($"缺少连接字符串 ConnectionStrings:{connectionStringName}。");
+
+builder.Services.AddControllersWithViews();
 
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
 var authOptions = builder.Configuration.GetSection(AuthOptions.SectionName).Get<AuthOptions>() ?? new AuthOptions();
-
-var isMigrateCommand = args.Contains("--migrate", StringComparer.Ordinal);
 
 builder.Services.AddDbContext<PandaAuthDbContext>(options =>
 {
@@ -77,7 +79,12 @@ if (authOptions.DataProtectionKeyPath.Length > 0)
         .SetApplicationName("PandaAuth");
 }
 
-// 一次性迁移模式：docker compose run --rm auth-server --migrate（生产发布流程）。
+// OpenIddict Core 也用于迁移后执行应用/客户端种子数据。
+var openIddict = builder.Services
+    .AddOpenIddict()
+    .AddCore(options => options.UseEntityFrameworkCore().UseDbContext<PandaAuthDbContext>());
+
+// 一次性迁移模式：docker compose run --rm auth-server --migrate（使用独立 DDL 账号）。
 if (isMigrateCommand)
 {
     using var migrateApp = builder.Build();
@@ -91,10 +98,7 @@ if (isMigrateCommand)
 // OpenIddict 要求在容器构建前注册密钥：从数据库加载（无密钥自动生成、超期自动轮换）。
 var keys = await SigningKeyStore.LoadOrCreateAsync(connectionString, authOptions.Keys);
 
-builder.Services
-    .AddOpenIddict()
-    .AddCore(options => options.UseEntityFrameworkCore().UseDbContext<PandaAuthDbContext>())
-    .AddServer(options =>
+openIddict.AddServer(options =>
     {
         options
             .AllowAuthorizationCodeFlow()
