@@ -178,16 +178,16 @@ fi
 if ! HBA_RULES_OK="$(sudo -u postgres psql -X -v ON_ERROR_STOP=1 -tA <<'SQL'
 WITH expected(type, database_name, role_name, address, netmask, auth_method) AS (
   VALUES
-    ('local', 'panda_auth', 'panda_auth', NULL::inet, NULL::inet, 'reject'),
-    ('local', 'panda_auth', 'panda_auth_migrator', NULL::inet, NULL::inet, 'reject'),
-    ('host', 'panda_auth', 'panda_auth', '127.0.0.1'::inet, '255.255.255.255'::inet, 'scram-sha-256'),
-    ('host', 'panda_auth', 'panda_auth', '::1'::inet, 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'::inet, 'scram-sha-256'),
-    ('host', 'panda_auth', 'panda_auth', '0.0.0.0'::inet, '0.0.0.0'::inet, 'reject'),
-    ('host', 'panda_auth', 'panda_auth', '::'::inet, '::'::inet, 'reject'),
-    ('host', 'panda_auth', 'panda_auth_migrator', '127.0.0.1'::inet, '255.255.255.255'::inet, 'scram-sha-256'),
-    ('host', 'panda_auth', 'panda_auth_migrator', '::1'::inet, 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'::inet, 'scram-sha-256'),
-    ('host', 'panda_auth', 'panda_auth_migrator', '0.0.0.0'::inet, '0.0.0.0'::inet, 'reject'),
-    ('host', 'panda_auth', 'panda_auth_migrator', '::'::inet, '::'::inet, 'reject')
+    ('local', 'panda_auth', 'panda_auth', NULL::text, NULL::text, 'reject'),
+    ('local', 'panda_auth', 'panda_auth_migrator', NULL::text, NULL::text, 'reject'),
+    ('host', 'panda_auth', 'panda_auth', '127.0.0.1', '255.255.255.255', 'scram-sha-256'),
+    ('host', 'panda_auth', 'panda_auth', '::1', 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'scram-sha-256'),
+    ('host', 'panda_auth', 'panda_auth', '0.0.0.0', '0.0.0.0', 'reject'),
+    ('host', 'panda_auth', 'panda_auth', '::', '::', 'reject'),
+    ('host', 'panda_auth', 'panda_auth_migrator', '127.0.0.1', '255.255.255.255', 'scram-sha-256'),
+    ('host', 'panda_auth', 'panda_auth_migrator', '::1', 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'scram-sha-256'),
+    ('host', 'panda_auth', 'panda_auth_migrator', '0.0.0.0', '0.0.0.0', 'reject'),
+    ('host', 'panda_auth', 'panda_auth_migrator', '::', '::', 'reject')
 )
 SELECT count(*) = 10
 FROM expected e
