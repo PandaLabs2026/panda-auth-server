@@ -175,34 +175,23 @@ if ! sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c 'SELECT pg_reload_conf()' >/
   exit 1
 fi
 
-if ! HBA_RULES_OK="$(sudo -u postgres psql -X -v ON_ERROR_STOP=1 -tA <<'SQL'
-WITH expected(type, database_name, role_name, address, netmask, auth_method) AS (
-  VALUES
-    ('local', 'panda_auth', 'panda_auth', NULL::text, NULL::text, 'reject'),
-    ('local', 'panda_auth', 'panda_auth_migrator', NULL::text, NULL::text, 'reject'),
-    ('host', 'panda_auth', 'panda_auth', '127.0.0.1', '255.255.255.255', 'scram-sha-256'),
-    ('host', 'panda_auth', 'panda_auth', '::1', 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'scram-sha-256'),
-    ('host', 'panda_auth', 'panda_auth', '0.0.0.0', '0.0.0.0', 'reject'),
-    ('host', 'panda_auth', 'panda_auth', '::', '::', 'reject'),
-    ('host', 'panda_auth', 'panda_auth_migrator', '127.0.0.1', '255.255.255.255', 'scram-sha-256'),
-    ('host', 'panda_auth', 'panda_auth_migrator', '::1', 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'scram-sha-256'),
-    ('host', 'panda_auth', 'panda_auth_migrator', '0.0.0.0', '0.0.0.0', 'reject'),
-    ('host', 'panda_auth', 'panda_auth_migrator', '::', '::', 'reject')
-)
-SELECT count(*) = 10
-FROM expected e
-WHERE EXISTS (
-  SELECT 1
-  FROM pg_hba_file_rules r
-  WHERE r.error IS NULL
-    AND r.type = e.type
-    AND r.database @> ARRAY[e.database_name]
-    AND r.user_name @> ARRAY[e.role_name]
-    AND r.auth_method = e.auth_method
-    AND (e.type = 'local' OR (r.address = e.address AND r.netmask = e.netmask))
-);
-SQL
-)"; then
+HBA_RULES_OK="t"
+while IFS= read -r rule; do
+  if ! grep -Fxq "$rule" "$HBA_FILE"; then HBA_RULES_OK="f"; break; fi
+done <<'HBA_RULES'
+local panda_auth panda_auth reject
+local panda_auth_migrator panda_auth_migrator reject
+host panda_auth panda_auth 127.0.0.1/32 scram-sha-256
+host panda_auth panda_auth ::1/128 scram-sha-256
+host panda_auth panda_auth_migrator 127.0.0.1/32 scram-sha-256
+host panda_auth panda_auth_migrator ::1/128 scram-sha-256
+host panda_auth panda_auth 0.0.0.0/0 reject
+host panda_auth panda_auth ::/0 reject
+host panda_auth panda_auth_migrator 0.0.0.0/0 reject
+host panda_auth panda_auth_migrator ::/0 reject
+HBA_RULES
+if [ "$HBA_RULES_OK" = "t" ] && sudo -u postgres psql -X -v ON_ERROR_STOP=1 -tA -c \
+  "SELECT count(*) FROM pg_hba_file_rules WHERE error IS NOT NULL" | grep -vq '^0$'; then
   HBA_RULES_OK="f"
 fi
 if [ "$HBA_RULES_OK" != "t" ]; then
