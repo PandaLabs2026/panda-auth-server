@@ -42,3 +42,16 @@ releases/
 !**/deploy/.env.example
 **/deploy/backups/
 
+# SPA 构建产物：本上下文（工作区根）里 me 与 webadmin 各有一份，两份都排。
+# 它们的 src/<Proj>/wwwroot/ 被各自 .gitignore 忽略、git ls-files 命中 0，
+# 100% 是 `npm run build` 的输出。二者都进不了 server 的镜像
+# （本文件只 COPY panda-auth-server/ 与 panda-auth-share/），但会进上下文与构建缓存。
+# 别动 server / website 自己的 wwwroot（品牌资产，随源码提交）。
+panda-auth-me/src/PandaAuth.Me/wwwroot/
+panda-auth-webadmin/src/PandaAuth.WebAdmin/wwwroot/
+
+# 本地流程账本（.superpowers/，未入库、随机器与每轮任务变化）。与 .zcode/ 同类：
+# 不是源码、任何构建都不读它（release.sh 无引用），留在上下文里只会让上下文传输
+# 与缓存键随各机器的本地状态漂移。
+**/.superpowers/
+
