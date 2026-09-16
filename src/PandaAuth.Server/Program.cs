@@ -126,7 +126,7 @@ openIddict.AddServer(options =>
             OpenIddictConstants.Scopes.OfflineAccess,
             "api");
 
-        // Issuer 全部来自配置（生产 https://auth.pandalabs.cn，海外实例改环境变量即可，零代码切换）。
+        // Issuer 全部来自配置（生产 https://auth.pandalabs.cc，海外实例改环境变量即可，零代码切换）。
         options.SetIssuer(IssuerUri());
 
         foreach (var (record, key) in keys)
@@ -193,7 +193,7 @@ Uri IssuerUri()
     if (string.IsNullOrWhiteSpace(authOptions.Issuer))
     {
         throw new InvalidOperationException(
-            "缺少 Auth:Issuer 配置。生产示例：Auth__Issuer=https://auth.pandalabs.cn");
+            "缺少 Auth:Issuer 配置。生产示例：Auth__Issuer=https://auth.pandalabs.cc");
     }
 
     return new Uri(authOptions.Issuer.EndsWith('/') ? authOptions.Issuer : authOptions.Issuer + "/", UriKind.Absolute);

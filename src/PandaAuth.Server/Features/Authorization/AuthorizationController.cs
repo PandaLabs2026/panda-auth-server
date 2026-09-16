@@ -126,10 +126,10 @@ public sealed class AuthorizationController(
 
         if (principal.HasScope(Scopes.Profile))
         {
-            var nickname = principal.GetClaim("nickname");
+            var nickname = principal.GetClaim(PandaAuthClaims.Nickname);
             if (!string.IsNullOrEmpty(nickname))
             {
-                response["nickname"] = nickname;
+                response[PandaAuthClaims.Nickname] = nickname;
             }
         }
 
@@ -165,7 +165,7 @@ public sealed class AuthorizationController(
 
         if (scopes.Contains(Scopes.Profile))
         {
-            identity.AddClaim(new Claim("nickname", user.Nickname ?? user.UserName ?? string.Empty));
+            identity.AddClaim(new Claim(PandaAuthClaims.Nickname, user.Nickname ?? user.UserName ?? string.Empty));
         }
 
         if (scopes.Contains(Scopes.Email) && !string.IsNullOrEmpty(user.Email))
