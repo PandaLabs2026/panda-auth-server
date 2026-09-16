@@ -57,6 +57,9 @@ public sealed class AccountController(
         if (user is not null && user.Status != UserStatus.Active)
         {
             failureReason = "account_frozen";
+            // 冻结状态在文案里已明示（不是秘密），但响应耗时不应额外区分路径：
+            // 与「用户不存在」一样支付一次等价哈希代价，避免各分支耗时形成可枚举的指纹。
+            passwordHasher.VerifyHashedPassword(DummyUser, dummyPasswordHash.Value, model.Password);
             await loginAudit.RecordAsync(BuildLog(), cancellationToken);
             return ViewWithError("账号已被冻结，请联系管理员。");
         }

@@ -6,6 +6,7 @@ using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Account;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Shared;
 using Xunit;
 
 namespace PandaAuth.Tests;
@@ -57,6 +58,28 @@ public class AccountLoginTimingTests
         Assert.Equal(model.UserName, entry.UserName);
         Assert.False(entry.Succeeded);
         Assert.Equal("user_not_found", entry.FailureReason);
+    }
+
+    [Fact]
+    public async Task FrozenAccount_StillVerifiesPasswordOnceAgainstDummyHash()
+    {
+        // 冻结分支与「用户不存在」分支保持同一代价：文案已明示冻结，但耗时不应再额外区分路径。
+        var hasher = new RecordingPasswordHasher();
+        using var provider = TestIdentityHost.Create(passwordHasher: hasher);
+        var userManager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
+        var frozen = new PandaAuthUser { UserName = "frozen-user", Status = UserStatus.Frozen };
+        Assert.True((await userManager.CreateAsync(frozen, "Sup3r$ecret-Password")).Succeeded);
+
+        var controller = TestIdentityHost.CreateAccountController(provider, hasher);
+        var model = UnknownUser("frozen-user");
+
+        var result = await controller.Login(model, CancellationToken.None);
+
+        Assert.IsType<ViewResult>(result);
+        Assert.Equal(1, hasher.VerifyCalls);
+        // 与未知用户路径一致：校验的是固定 dummy 哈希，而不是该账号的真实哈希。
+        Assert.NotNull(hasher.LastHashedPassword);
+        Assert.StartsWith("$argon2id$", hasher.LastHashedPassword);
     }
 
     [Fact]
