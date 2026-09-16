@@ -4,7 +4,7 @@ public sealed class AuthOptions
 {
     public const string SectionName = "Auth";
 
-    /// <summary>OIDC Issuer（生产由环境变量 Auth__Issuer 注入，如 https://auth.pandalabs.cn；国内/海外双实例零代码切换）。</summary>
+    /// <summary>OIDC Issuer（生产由环境变量 Auth__Issuer 注入，如 https://auth.pandalabs.cc；国内/海外双实例零代码切换）。</summary>
     public string Issuer { get; set; } = string.Empty;
 
     /// <summary>是否强制 HTTPS（生产强制开启；本地开发可关闭）。</summary>
@@ -40,14 +40,47 @@ public sealed class SigningKeyOptions
 
 public sealed class SeedOptions
 {
+    /// <summary>总开关；false 时跳过全部种子数据（含管理员、me-web 与 demo 客户端）。</summary>
     public bool Enabled { get; set; } = true;
 
-    public string AdminEmail { get; set; } = "admin@pandalabs.cn";
+    public AdminSeedOptions Admin { get; set; } = new();
 
-    /// <summary>管理员初始密码；为空则跳过管理员账号创建。生产环境通过 Seed__AdminPassword 环境变量注入。</summary>
-    public string AdminPassword { get; set; } = string.Empty;
+    public MeSeedOptions Me { get; set; } = new();
 
-    /// <summary>账户中心客户端密钥；生产通过 Auth__Seed__MeClientSecret 环境变量注入。</summary>
-    public string MeClientSecret { get; set; } = string.Empty;
+    public DemoSeedOptions Demo { get; set; } = new();
+}
 
+public sealed class AdminSeedOptions
+{
+    public string Email { get; set; } = "admin@pandalabs.cc";
+
+    /// <summary>管理员初始密码；为空则跳过管理员账号创建。生产环境通过 Auth__Seed__Admin__Password 环境变量注入。</summary>
+    public string Password { get; set; } = string.Empty;
+}
+
+public sealed class MeSeedOptions
+{
+    /// <summary>是否播种/订正 me-web；默认开启，仅供不需要账户中心的部署关闭。</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>账户中心客户端密钥；生产通过 Auth__Seed__Me__ClientSecret 环境变量注入。</summary>
+    public string ClientSecret { get; set; } = string.Empty;
+
+    /// <summary>登录回调白名单；播种 me-web 时必填，非空时整体替换存量值。生产通过 Auth__Seed__Me__RedirectUris 注入。</summary>
+    public string[] RedirectUris { get; set; } = [];
+
+    /// <summary>登出回跳白名单；播种 me-web 时必填，非空时整体替换存量值。生产通过 Auth__Seed__Me__PostLogoutRedirectUris 注入。</summary>
+    public string[] PostLogoutRedirectUris { get; set; } = [];
+}
+
+public sealed class DemoSeedOptions
+{
+    /// <summary>是否播种演示客户端（demo-public/demo-web/demo-service）；默认关闭，生产一般不开启。</summary>
+    public bool Enabled { get; set; } = false;
+
+    /// <summary>demo-web 机密客户端密钥；开启 Demo 播种时必填，经 Auth__Seed__Demo__WebSecret 注入。</summary>
+    public string WebSecret { get; set; } = string.Empty;
+
+    /// <summary>demo-service 机密客户端密钥；开启 Demo 播种时必填，经 Auth__Seed__Demo__ServiceSecret 注入。</summary>
+    public string ServiceSecret { get; set; } = string.Empty;
 }

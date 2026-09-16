@@ -8,7 +8,7 @@ using static OpenIddict.Abstractions.OpenIddictConstants;
 
 namespace PandaAuth.Server.Infrastructure.Persistence;
 
-/// <summary>幂等种子数据：管理员角色/账号与内置演示客户端。</summary>
+/// <summary>幂等种子数据：管理员角色/账号、me-web 第一方客户端与可选 demo 客户端。</summary>
 public static class DbSeeder
 {
     public static async Task SeedAsync(IServiceProvider services)
@@ -33,20 +33,20 @@ public static class DbSeeder
             }
         }
 
-        if (options.Seed.AdminPassword.Length > 0)
+        if (options.Seed.Admin.Password.Length > 0)
         {
-            var admin = await userManager.FindByNameAsync(options.Seed.AdminEmail);
+            var admin = await userManager.FindByNameAsync(options.Seed.Admin.Email);
             if (admin is null)
             {
                 admin = new PandaAuthUser
                 {
-                    UserName = options.Seed.AdminEmail,
-                    Email = options.Seed.AdminEmail,
+                    UserName = options.Seed.Admin.Email,
+                    Email = options.Seed.Admin.Email,
                     EmailConfirmed = true,
                     Nickname = "PandaAdmin",
                     RegisterChannel = RegisterChannel.Password,
                 };
-                var userResult = await userManager.CreateAsync(admin, options.Seed.AdminPassword);
+                var userResult = await userManager.CreateAsync(admin, options.Seed.Admin.Password);
                 if (!userResult.Succeeded)
                 {
                     throw new InvalidOperationException(
@@ -55,6 +55,32 @@ public static class DbSeeder
 
                 await userManager.AddToRoleAsync(admin, PandaAuthUser.AdminRole);
             }
+        }
+
+        if (options.Seed.Demo.Enabled)
+        {
+            await SeedDemoApplicationsAsync(applications, options.Seed.Demo);
+        }
+
+        if (options.Seed.Me.Enabled)
+        {
+            await SeedMeWebApplicationAsync(applications, options.Seed.Me);
+        }
+    }
+
+    /// <summary>demo 三客户端：默认关闭播种；开启后密钥必须经配置注入，源码不内置任何密钥常量。</summary>
+    private static async Task SeedDemoApplicationsAsync(IOpenIddictApplicationManager applications, DemoSeedOptions demo)
+    {
+        if (demo.WebSecret.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "Auth:Seed:Demo:Enabled=true 但缺少 Auth:Seed:Demo:WebSecret 配置（demo-web 机密客户端密钥）。");
+        }
+
+        if (demo.ServiceSecret.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "Auth:Seed:Demo:Enabled=true 但缺少 Auth:Seed:Demo:ServiceSecret 配置（demo-service 机密客户端密钥）。");
         }
 
         // demo-public：公共客户端（模拟移动端/桌面端），授权码 + 强制 PKCE + 刷新令牌。
@@ -93,7 +119,7 @@ public static class DbSeeder
             {
                 ClientId = "demo-web",
                 ClientType = ClientTypes.Confidential,
-                ClientSecret = "demo-web-secret-change-me",
+                ClientSecret = demo.WebSecret,
                 ConsentType = ConsentTypes.Implicit,
                 DisplayName = "PandaAuth Demo（机密客户端）",
                 RedirectUris = { new Uri("http://localhost:5201/callback/login/pandaauth") },
@@ -123,7 +149,7 @@ public static class DbSeeder
             {
                 ClientId = "demo-service",
                 ClientType = ClientTypes.Confidential,
-                ClientSecret = "demo-service-secret-change-me",
+                ClientSecret = demo.ServiceSecret,
                 ConsentType = ConsentTypes.Implicit,
                 DisplayName = "PandaAuth Demo（服务间调用）",
                 Permissions =
@@ -135,30 +161,35 @@ public static class DbSeeder
                 },
             });
         }
+    }
 
-        // me-web：机密客户端，自助中心（panda-auth-me）的第一方专用客户端。
-        // 生产回调 https://auth.pandalabs.cn/me/callback/login/pandaauth，密钥经环境变量覆盖。
-        if (await applications.FindByClientIdAsync("me-web") is null)
+    /// <summary>me-web：账户中心第一方客户端；不存在则按配置创建，已存在则按配置订正回调白名单（upsert）。</summary>
+    private static async Task SeedMeWebApplicationAsync(IOpenIddictApplicationManager applications, MeSeedOptions me)
+    {
+        var existing = await applications.FindByClientIdAsync("me-web");
+        if (existing is null)
         {
-            await applications.CreateAsync(new OpenIddictApplicationDescriptor
+            // 回调白名单经 Auth:Seed:Me:RedirectUris / Auth:Seed:Me:PostLogoutRedirectUris 配置注入，缺失即失败（第一方必备客户端）。
+            if (me.RedirectUris.Length == 0)
+            {
+                throw new InvalidOperationException("缺少 Auth:Seed:Me:RedirectUris 配置（me-web 为第一方必备客户端）。");
+            }
+
+            if (me.PostLogoutRedirectUris.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    "缺少 Auth:Seed:Me:PostLogoutRedirectUris 配置（me-web 为第一方必备客户端）。");
+            }
+
+            var descriptor = new OpenIddictApplicationDescriptor
             {
                 ClientId = "me-web",
                 ClientType = ClientTypes.Confidential,
-                ClientSecret = string.IsNullOrWhiteSpace(options.Seed.MeClientSecret)
-                    ? throw new InvalidOperationException("缺少 Auth:Seed:MeClientSecret 配置。")
-                    : options.Seed.MeClientSecret,
+                ClientSecret = string.IsNullOrWhiteSpace(me.ClientSecret)
+                    ? throw new InvalidOperationException("缺少 Auth:Seed:Me:ClientSecret 配置。")
+                    : me.ClientSecret,
                 ConsentType = ConsentTypes.Implicit,
                 DisplayName = "PandaAuth 账户中心",
-                RedirectUris =
-                {
-                    new Uri("http://localhost:9007/callback/login/pandaauth"),
-                    new Uri("https://auth.pandalabs.cn/me/callback/login/pandaauth"),
-                },
-                PostLogoutRedirectUris =
-                {
-                    new Uri("http://localhost:9007/"),
-                    new Uri("https://auth.pandalabs.cn/me/"),
-                },
                 Permissions =
                 {
                     Permissions.Endpoints.Authorization,
@@ -174,7 +205,51 @@ public static class DbSeeder
                     Permissions.Prefixes.Scope + Scopes.OfflineAccess,
                     Requirements.Features.ProofKeyForCodeExchange,
                 },
-            });
+            };
+
+            foreach (var uri in me.RedirectUris)
+            {
+                descriptor.RedirectUris.Add(new Uri(uri, UriKind.Absolute));
+            }
+
+            foreach (var uri in me.PostLogoutRedirectUris)
+            {
+                descriptor.PostLogoutRedirectUris.Add(new Uri(uri, UriKind.Absolute));
+            }
+
+            await applications.CreateAsync(descriptor);
+            return;
         }
+
+        // 存量订正：配置数组非空时用配置值整体替换对应白名单（如 .cn → .cc 域名切换），
+        // 两者皆空则不动；不触碰密钥等其他字段。全部经 ApplicationManager API 完成，不直接写 EF。
+        if (me.RedirectUris.Length == 0 && me.PostLogoutRedirectUris.Length == 0)
+        {
+            return;
+        }
+
+        var updated = new OpenIddictApplicationDescriptor();
+        await applications.PopulateAsync(updated, existing);
+
+        if (me.RedirectUris.Length > 0)
+        {
+            updated.RedirectUris.Clear();
+            foreach (var uri in me.RedirectUris)
+            {
+                updated.RedirectUris.Add(new Uri(uri, UriKind.Absolute));
+            }
+        }
+
+        if (me.PostLogoutRedirectUris.Length > 0)
+        {
+            updated.PostLogoutRedirectUris.Clear();
+            foreach (var uri in me.PostLogoutRedirectUris)
+            {
+                updated.PostLogoutRedirectUris.Add(new Uri(uri, UriKind.Absolute));
+            }
+        }
+
+        await applications.PopulateAsync(existing, updated);
+        await applications.UpdateAsync(existing);
     }
 }
