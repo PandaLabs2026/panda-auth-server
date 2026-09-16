@@ -138,6 +138,56 @@ public class LoginRateLimiterTests : IDisposable
     }
 
     [Fact]
+    public void ConcurrentColdStart_DoesNotAmplifyPermits()
+    {
+        // 并发冷启动回归：同一 key 首次出现（缓存未命中）时，大量并发请求若各自新建 limiter，
+        // 每个实例都带满额许可，单次突发会被放行到并发数倍。用真线程 + 屏障同时释放最大化该竞争；
+        // 每轮换新 key（等价于冷启动），避免命中路径掩盖缺陷。
+        const int concurrency = 64;
+        const int rounds = 20;
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        using var limiter = new LoginRateLimiter(cache, Options.Create(new AuthOptions
+        {
+            RateLimit = new RateLimitOptions { AccountPerMinute = 1 },
+        }));
+
+        var worst = 0;
+        for (var round = 0; round < rounds; round++)
+        {
+            var key = $"cold-start-account-{round}";
+            var barrier = new Barrier(concurrency);
+            var acquired = 0;
+            var threads = new Thread[concurrency];
+
+            for (var index = 0; index < concurrency; index++)
+            {
+                threads[index] = new Thread(() =>
+                {
+                    barrier.SignalAndWait();
+                    if (limiter.AttemptByAccount(key).IsAcquired)
+                    {
+                        Interlocked.Increment(ref acquired);
+                    }
+                });
+                threads[index].Start();
+            }
+
+            foreach (var thread in threads)
+            {
+                thread.Join();
+            }
+
+            Assert.True(
+                acquired <= 1,
+                $"第 {round} 轮冷启动突发（{concurrency} 并发、许可 1）放行了 {acquired} 次，超过许可数。");
+            worst = Math.Max(worst, acquired);
+        }
+
+        // 同时必须有请求真的拿到许可，否则说明限流器把正常请求一并拒了。
+        Assert.Equal(1, worst);
+    }
+
+    [Fact]
     public void Dispose_ReleasesTrackedLimiters_SoQuotaIsNotReusedFromDisposedInstances()
     {
         using var cache = new MemoryCache(new MemoryCacheOptions());

@@ -37,6 +37,13 @@ public sealed class LoginRateLimiter : IDisposable
     /// </summary>
     private readonly ConcurrentDictionary<string, FixedWindowRateLimiter> _live = new();
 
+    /// <summary>
+    /// 未命中路径的串行化锁（临界区只做「建 limiter + 写缓存」，无 I/O）。
+    /// 冷启动时同一 key 的并发请求会同时未命中，若各自建实例就等于把许可放大到并发数倍；
+    /// 锁内二次检查保证同一 key 同时只有一个 limiter 对外服务。命中路径不加锁。
+    /// </summary>
+    private readonly Lock _resolveLock = new();
+
     public LoginRateLimiter(IMemoryCache cache, IOptions<AuthOptions> options)
         : this(cache, options, DefaultEntryTimeToLive)
     {
@@ -84,27 +91,40 @@ public sealed class LoginRateLimiter : IDisposable
 
     private FixedWindowRateLimiter Resolve(string key, int permitsPerMinute)
     {
-        if (_cache.TryGetValue(key, out var cached) && cached is FixedWindowRateLimiter liveLimiter)
+        // 快路径：命中缓存，拿到的即该 key 当前唯一的 limiter 实例。
+        if (_cache.TryGetValue(key, out var cached) && cached is FixedWindowRateLimiter cachedLimiter)
         {
-            return liveLimiter;
+            return cachedLimiter;
         }
 
-        var limiter = new FixedWindowRateLimiter(new FixedWindowRateLimiterOptions
+        // 慢路径：冷启动（或条目刚过期）时并发请求会同时未命中。必须串行化并二次检查，
+        // 否则每个并发请求都会 new 出一个带满额许可的 limiter（后写覆盖先写，先写的实例仍被调用方使用），
+        // 等效把许可放大到并发数倍。旧实现用 ConcurrentDictionary.GetOrAdd 天然避免了这一点，
+        // 改为内存缓存后必须显式补回同一语义。
+        lock (_resolveLock)
         {
-            PermitLimit = permitsPerMinute,
-            Window = Window,
-            QueueLimit = 0,
-        });
+            if (_cache.TryGetValue(key, out var raced) && raced is FixedWindowRateLimiter racedLimiter)
+            {
+                return racedLimiter;
+            }
 
-        // 覆盖镜像中可能残留的旧实例：旧实例的回收回调按值匹配移除，不匹配则不做任何事，
-        // 因此不会误删或误释放这个新实例。
-        _live[key] = limiter;
-        _cache.Set(key, limiter, new MemoryCacheEntryOptions
-        {
-            AbsoluteExpirationRelativeToNow = _entryTimeToLive,
-        }.RegisterPostEvictionCallback(OnEntryEvicted, key));
+            var limiter = new FixedWindowRateLimiter(new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = permitsPerMinute,
+                Window = Window,
+                QueueLimit = 0,
+            });
 
-        return limiter;
+            // 覆盖镜像中可能残留的旧实例：旧实例的回收回调按值匹配移除，不匹配则不做任何事，
+            // 因此不会误删或误释放这个新实例。
+            _live[key] = limiter;
+            _cache.Set(key, limiter, new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = _entryTimeToLive,
+            }.RegisterPostEvictionCallback(OnEntryEvicted, key));
+
+            return limiter;
+        }
     }
 
     /// <summary>
