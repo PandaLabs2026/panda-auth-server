@@ -14,7 +14,7 @@
 
 运行角色对 `signing_keys` 只有 `SELECT/INSERT/UPDATE`，**无 `DELETE`**：代码（`Infrastructure/Security/SigningKeyStore.cs`）只新增密钥、把超期密钥置 `Retired`，从无删除路径，收紧后可消除「运行账号被攻陷即抹除密钥历史」的破坏面。
 
-⚠️ **首次装机要跑两次本脚本**，顺序是：跑本脚本（建角色/库）→ 跑一次性迁移（建表）→ **再跑一次本脚本**（收紧 `signing_keys` 的 `DELETE`）。原因：`ALTER DEFAULT PRIVILEGES` 只作用于此后新建的表，而首次装机时 `signing_keys` 还不存在，第一次运行时 `REVOKE` 是空操作。脚本在这种状态下不会静默通过——结束时会在 stderr 明确打印「未完成：signing_keys 尚不存在…迁移完成后请重跑本脚本」；表存在且权限已收紧时打印「已收紧并自检通过」；表存在但仍带 `DELETE` 时直接非零退出。已迁移的生产库重跑一次即生效。
+⚠️ **首次装机要跑两次本脚本**，顺序是：跑本脚本（建角色/库）→ 跑一次性迁移（建表）→ **再跑一次本脚本**（收紧 `signing_keys` 的 `DELETE`）。原因：`ALTER DEFAULT PRIVILEGES` 只作用于此后新建的表，而首次装机时 `signing_keys` 还不存在，第一次运行时 `REVOKE` 是空操作。脚本在这种状态下不会静默通过——结束时会在 stderr 明确打印「未完成：signing_keys 尚不存在…迁移完成后请重跑本脚本」；表存在且权限已收紧时打印「已收紧并自检通过」。脚本内的权限自检（`has_table_privilege`）属**纵深防御**：`REVOKE` 先于自检执行，正常运行中自检预期通过；若 `DELETE` 仍残留（例如授权来自 `PUBLIC` 等非直接路径，`REVOKE … FROM panda_auth` 覆盖不到），自检会以非零退出。已迁移的生产库重跑一次即生效。
 
 `signing_keys` 若被重建（例如迁移中 drop/create）同样会重新带上 `DELETE`（默认权限所致），需再重跑本脚本；本脚本幂等，可反复执行。
 

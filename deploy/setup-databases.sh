@@ -269,7 +269,7 @@ case "$SIGNING_KEYS_STATE" in
   absent)
     echo "未完成：signing_keys 尚不存在（本机还没迁移），本次没有收紧它的 DELETE 权限。" >&2
     echo "        迁移完成后请重跑本脚本：默认权限会给新建的 signing_keys 带上 DELETE。" >&2
-    echo "        重跑命令：sudo bash $(basename "$0")" >&2
+    echo "        重跑命令：sudo bash $0" >&2
     ;;
   *)
     echo "签名密钥权限自检未通过（状态：$SIGNING_KEYS_STATE），请检查 panda_auth 对 signing_keys 的授权。" >&2
