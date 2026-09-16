@@ -163,7 +163,7 @@ public static class DbSeeder
         }
     }
 
-    /// <summary>me-web：账户中心第一方客户端；不存在则按配置创建，已存在则按配置订正回调白名单（upsert）。</summary>
+    /// <summary>me-web：账户中心第一方客户端；不存在则按配置创建，已存在则按配置订正回调白名单与客户端密钥（upsert）。</summary>
     private static async Task SeedMeWebApplicationAsync(IOpenIddictApplicationManager applications, MeSeedOptions me)
     {
         var existing = await applications.FindByClientIdAsync("me-web");
@@ -221,35 +221,64 @@ public static class DbSeeder
             return;
         }
 
-        // 存量订正：配置数组非空时用配置值整体替换对应白名单（如 .cn → .cc 域名切换），
-        // 两者皆空则不动；不触碰密钥等其他字段。全部经 ApplicationManager API 完成，不直接写 EF。
-        if (me.RedirectUris.Length == 0 && me.PostLogoutRedirectUris.Length == 0)
+        // 存量订正：白名单替换与密钥对账各自独立判断，两者都不需要做时才提前返回——
+        // 旧实现见任一白名单数组为空就 return，会连带跳过密钥对账。
+        // 全部经 ApplicationManager API 完成，不直接写 EF。
+        var replaceRedirectUris = me.RedirectUris.Length > 0;
+        var replacePostLogoutRedirectUris = me.PostLogoutRedirectUris.Length > 0;
+
+        // 密钥对账：密钥唯一事实源是服务器 env 文件（Auth:Seed:Me:ClientSecret）。
+        // 幂等依据：ValidateClientSecretAsync 命中即说明库内哈希已对应配置密钥，此时不改写；
+        // 反证——UpdateAsync(application, secret) 每次都重新加盐哈希，无守卫地调用会让密钥哈希列
+        // 每次 migrate 都变化（实证见 tests/PandaAuth.Tests 的密钥对账用例）。
+        // 配置密钥缺失（空/空白）时跳过对账且不抛异常：创建路径抛是因为第一方客户端必须有密钥，
+        // 而更新路径上贸然抛异常会让「已存在的部署 + 临时未配密钥」的 migrate 直接失败，风险更大。
+        var reconcileSecret = !string.IsNullOrWhiteSpace(me.ClientSecret) &&
+            !await applications.ValidateClientSecretAsync(existing, me.ClientSecret);
+
+        if (!replaceRedirectUris && !replacePostLogoutRedirectUris && !reconcileSecret)
         {
             return;
         }
 
-        var updated = new OpenIddictApplicationDescriptor();
-        await applications.PopulateAsync(updated, existing);
-
-        if (me.RedirectUris.Length > 0)
+        if (replaceRedirectUris || replacePostLogoutRedirectUris)
         {
-            updated.RedirectUris.Clear();
-            foreach (var uri in me.RedirectUris)
+            var updated = new OpenIddictApplicationDescriptor();
+            await applications.PopulateAsync(updated, existing);
+
+            if (replaceRedirectUris)
             {
-                updated.RedirectUris.Add(new Uri(uri, UriKind.Absolute));
+                updated.RedirectUris.Clear();
+                foreach (var uri in me.RedirectUris)
+                {
+                    updated.RedirectUris.Add(new Uri(uri, UriKind.Absolute));
+                }
             }
+
+            if (replacePostLogoutRedirectUris)
+            {
+                updated.PostLogoutRedirectUris.Clear();
+                foreach (var uri in me.PostLogoutRedirectUris)
+                {
+                    updated.PostLogoutRedirectUris.Add(new Uri(uri, UriKind.Absolute));
+                }
+            }
+
+            await applications.PopulateAsync(existing, updated);
         }
 
-        if (me.PostLogoutRedirectUris.Length > 0)
+        // 密钥改写必须走 UpdateAsync(application, secret)：它才是会重新哈希的那条路径。
+        // 不能用 descriptor.ClientSecret + PopulateAsync 写回——实测那是逐字拷贝、不哈希，
+        // 结果是明文入库且新旧密钥双双校验失败（等于把客户端登不进来）。
+        // 顺序上密钥更新必须排在白名单写回之后：PopulateAsync 写回会把读出时拿到的旧哈希原样写回，
+        // 若先改密钥再写回，新哈希会被旧哈希覆盖掉（实测如此）。
+        if (reconcileSecret)
         {
-            updated.PostLogoutRedirectUris.Clear();
-            foreach (var uri in me.PostLogoutRedirectUris)
-            {
-                updated.PostLogoutRedirectUris.Add(new Uri(uri, UriKind.Absolute));
-            }
+            await applications.UpdateAsync(existing, me.ClientSecret);
         }
-
-        await applications.PopulateAsync(existing, updated);
-        await applications.UpdateAsync(existing);
+        else if (replaceRedirectUris || replacePostLogoutRedirectUris)
+        {
+            await applications.UpdateAsync(existing);
+        }
     }
 }

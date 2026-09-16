@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using OpenIddict.Abstractions;
+using OpenIddict.EntityFrameworkCore.Models;
 using PandaAuth.Server.Configuration;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Persistence;
@@ -20,6 +21,12 @@ public class DbSeederTests
     private const string MePostLogoutUri = "https://auth.pandalabs.cc/me/";
 
     private const string MeClientSecret = "me-web-test-secret";
+
+    // 密钥对账用例用的存量旧回调：刻意不用已退役域名，避免与域名退役门禁的
+    // 负断言夹具（`.cn` 命中数基线）重复计数。
+    private const string LegacyRedirectUri = "http://localhost:9007/callback/login/pandaauth";
+
+    private const string LegacyPostLogoutUri = "http://localhost:9007/";
 
     [Fact]
     public async Task SeedDisabled_DoesNotResolveSeedDependencies()
@@ -126,6 +133,8 @@ public class DbSeederTests
     public async Task MeWebExists_ReplacesWhitelistFromConfigAndKeepsSecret()
     {
         // 存量事故现场：库内 me-web 仍登记 .cn 回调；配置改为 .cc 后由 upsert 整体订正。
+        // 库内密钥与配置一致（漂移场景由 MeWebExists_ClientSecretDriftIsReconciledAndOldSecretRejected 覆盖），
+        // 这里验证的是白名单写回不会顺手把已正确的密钥哈希改掉。
         var options = ValidOptions();
         options.Seed.Me.RedirectUris =
             [MeRedirectUri, "http://localhost:9007/me/callback/login/pandaauth"];
@@ -140,7 +149,7 @@ public class DbSeederTests
                 "http://localhost:9007/callback/login/pandaauth",
             ],
             postLogoutUris: ["https://auth.pandalabs.cn/me/"],
-            clientSecret: "me-web-original-secret");
+            clientSecret: MeClientSecret);
 
         await DbSeeder.SeedAsync(provider);
 
@@ -156,10 +165,133 @@ public class DbSeederTests
         var postLogoutUris = await applications.GetPostLogoutRedirectUrisAsync(meWeb);
         Assert.Equal(new[] { MePostLogoutUri }, postLogoutUris.OrderBy(x => x));
 
-        // 订正仅动白名单：原密钥与其他字段（客户端类型、权限）保持不变。
-        Assert.True(await applications.ValidateClientSecretAsync(meWeb, "me-web-original-secret"));
+        // 密钥无需对账（已与配置一致）→ 保持可用；其余字段（客户端类型、权限）不受影响。
+        Assert.True(await applications.ValidateClientSecretAsync(meWeb, MeClientSecret));
         Assert.Equal(ClientTypes.Confidential, await applications.GetClientTypeAsync(meWeb));
         Assert.True(await applications.HasPermissionAsync(meWeb, Permissions.Endpoints.Token));
+    }
+
+    [Fact]
+    public async Task MeWebExists_ClientSecretDriftIsReconciledAndOldSecretRejected()
+    {
+        // 两端漂移现场：库内 me-web 密钥仍是 A，服务器 env 已改成 B；Seeder 对账后应以 B 为准。
+        const string configuredSecret = "me-web-configured-secret";
+        var options = ValidOptions();
+        options.Seed.Me.ClientSecret = configuredSecret;
+
+        using var provider = BuildProvider(options);
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        await CreateMeWebAsync(applications,
+            redirectUris: [LegacyRedirectUri],
+            postLogoutUris: [LegacyPostLogoutUri],
+            clientSecret: "me-web-original-secret");
+
+        await DbSeeder.SeedAsync(provider);
+
+        var meWeb = await applications.FindByClientIdAsync("me-web");
+        Assert.NotNull(meWeb);
+
+        Assert.True(await applications.ValidateClientSecretAsync(meWeb, configuredSecret));
+        Assert.False(await applications.ValidateClientSecretAsync(meWeb, "me-web-original-secret"));
+
+        // 密钥必须是以哈希形态落库，而不是把配置明文直接写进列里
+        // （descriptor.ClientSecret + PopulateAsync 写回正是后者，会让新旧密钥双双校验失败）。
+        Assert.NotEqual(configuredSecret, await ReadStoredClientSecretAsync(provider));
+
+        // 顺带确认同一轮里白名单订正没有被密钥改写带坏。
+        var redirectUris = await applications.GetRedirectUrisAsync(meWeb);
+        Assert.Equal(new[] { MeRedirectUri }, redirectUris.OrderBy(x => x));
+    }
+
+    [Fact]
+    public async Task MeWebExists_ClientSecretReconciliationIsIdempotent()
+    {
+        // 幂等：第二次 migrate 时密钥已能通过校验，不得再重写哈希列（否则每次启动都会换盐）。
+        const string configuredSecret = "me-web-configured-secret";
+        var options = ValidOptions();
+        options.Seed.Me.ClientSecret = configuredSecret;
+
+        using var provider = BuildProvider(options);
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        await CreateMeWebAsync(applications,
+            redirectUris: [LegacyRedirectUri],
+            postLogoutUris: [LegacyPostLogoutUri],
+            clientSecret: "me-web-original-secret");
+
+        await DbSeeder.SeedAsync(provider);
+        var afterFirstRun = await ReadStoredClientSecretAsync(provider);
+
+        await DbSeeder.SeedAsync(provider);
+        var afterSecondRun = await ReadStoredClientSecretAsync(provider);
+
+        Assert.Equal(afterFirstRun, afterSecondRun);
+
+        var meWeb = await applications.FindByClientIdAsync("me-web");
+        Assert.NotNull(meWeb);
+        Assert.True(await applications.ValidateClientSecretAsync(meWeb, configuredSecret));
+    }
+
+    [Fact]
+    public async Task MeWebExists_EmptyConfiguredSecret_KeepsExistingSecretWithoutThrowing()
+    {
+        // 已存在的部署 + 临时未配密钥：不抛异常（否则 migrate 直接失败），也不动库内密钥。
+        var options = ValidOptions();
+        options.Seed.Me.ClientSecret = "";
+        options.Seed.Me.RedirectUris =
+            [MeRedirectUri, "http://localhost:9007/me/callback/login/pandaauth"];
+        options.Seed.Me.PostLogoutRedirectUris = [MePostLogoutUri];
+
+        using var provider = BuildProvider(options);
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        await CreateMeWebAsync(applications,
+            redirectUris: [LegacyRedirectUri],
+            postLogoutUris: [LegacyPostLogoutUri],
+            clientSecret: "me-web-original-secret");
+        var hashBefore = await ReadStoredClientSecretAsync(provider);
+
+        await DbSeeder.SeedAsync(provider);
+
+        var meWeb = await applications.FindByClientIdAsync("me-web");
+        Assert.NotNull(meWeb);
+        Assert.True(await applications.ValidateClientSecretAsync(meWeb, "me-web-original-secret"));
+        Assert.Equal(hashBefore, await ReadStoredClientSecretAsync(provider));
+
+        // 白名单订正照常生效，证明这一轮 Seeder 确实跑到了更新路径。
+        var redirectUris = await applications.GetRedirectUrisAsync(meWeb);
+        Assert.Equal(
+            new[] { MeRedirectUri, "http://localhost:9007/me/callback/login/pandaauth" }.OrderBy(x => x),
+            redirectUris.OrderBy(x => x));
+    }
+
+    [Fact]
+    public async Task MeWebExists_OnlySecretConfigured_StillReconcilesSecret()
+    {
+        // 只配密钥、不配白名单：旧实现的早退分支会在这里跳掉对账，重构后必须仍然订正密钥。
+        const string configuredSecret = "me-web-configured-secret";
+        var options = ValidOptions();
+        options.Seed.Me.ClientSecret = configuredSecret;
+        options.Seed.Me.RedirectUris = [];
+        options.Seed.Me.PostLogoutRedirectUris = [];
+
+        using var provider = BuildProvider(options);
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        await CreateMeWebAsync(applications,
+            redirectUris: [LegacyRedirectUri],
+            postLogoutUris: [LegacyPostLogoutUri],
+            clientSecret: "me-web-original-secret");
+
+        await DbSeeder.SeedAsync(provider);
+
+        var meWeb = await applications.FindByClientIdAsync("me-web");
+        Assert.NotNull(meWeb);
+        Assert.True(await applications.ValidateClientSecretAsync(meWeb, configuredSecret));
+        Assert.False(await applications.ValidateClientSecretAsync(meWeb, "me-web-original-secret"));
+
+        // 未配白名单 → 存量白名单原样保留。
+        var redirectUris = await applications.GetRedirectUrisAsync(meWeb);
+        Assert.Equal(new[] { LegacyRedirectUri }, redirectUris.OrderBy(x => x));
+        var postLogoutUris = await applications.GetPostLogoutRedirectUrisAsync(meWeb);
+        Assert.Equal(new[] { LegacyPostLogoutUri }, postLogoutUris.OrderBy(x => x));
     }
 
     [Fact]
@@ -287,6 +419,17 @@ public class DbSeederTests
         services.AddOpenIddict()
             .AddCore(builder => builder.UseEntityFrameworkCore().UseDbContext<PandaAuthDbContext>());
         return services.BuildServiceProvider();
+    }
+
+    /// <summary>从 EF 直读 me-web 的 ClientSecret 列（哈希原文），用于断言哈希是否被无意义重写。</summary>
+    private static async Task<string?> ReadStoredClientSecretAsync(ServiceProvider provider)
+    {
+        var db = provider.GetRequiredService<PandaAuthDbContext>();
+        return await db.Set<OpenIddictEntityFrameworkCoreApplication>()
+            .AsNoTracking()
+            .Where(x => x.ClientId == "me-web")
+            .Select(x => x.ClientSecret)
+            .SingleAsync();
     }
 
     /// <summary>模拟事故前的存量 me-web：固定 .cn 回调 + 旧密钥。</summary>
