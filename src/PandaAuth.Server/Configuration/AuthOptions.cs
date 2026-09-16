@@ -12,6 +12,8 @@ public sealed class AuthOptions
 
     public RateLimitOptions RateLimit { get; set; } = new();
 
+    public AuditOptions Audit { get; set; } = new();
+
     public SigningKeyOptions Keys { get; set; } = new();
 
     public SeedOptions Seed { get; set; } = new();
@@ -27,6 +29,15 @@ public sealed class RateLimitOptions
 
     /// <summary>同一账号每分钟允许的登录尝试次数。</summary>
     public int AccountPerMinute { get; set; } = 5;
+}
+
+public sealed class AuditOptions
+{
+    /// <summary>
+    /// 登录审计日志（login_logs）保留天数；超期记录由后台清理任务按天删除。
+    /// 每次登录尝试（含失败）都会写一行，无保留期会被无界撑大。≤0 视为误配，清理任务会拒绝执行并告警。
+    /// </summary>
+    public int RetentionDays { get; set; } = 90;
 }
 
 public sealed class SigningKeyOptions

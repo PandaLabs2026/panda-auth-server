@@ -10,6 +10,21 @@
 
 [setup-databases.sh](setup-databases.sh)面向宿主机 PostgreSQL 18，由管理员执行。脚本创建独立 `panda_auth`（运行）与 `panda_auth_migrator`（迁移）角色；数据库由 migrator 所有，运行角色只有 DML 权限。通过 `\password` 交互设置密码，并为本机回环连接增加 SCRAM 规则。服务器密钥文件保存 `DB_PASSWORD`、`DB_MIGRATOR_PASSWORD` 等值；不要将它们提交到仓库。
 
+脚本不绑定具体账号与个人路径，默认规则（均可覆盖）见脚本头注释：运行账号默认取 `SUDO_USER`（`PANDA_AUTH_RUN_USER` 可覆盖），密钥文件默认取该账号家目录下的 `.config/panda-auth/panda-auth.env`（`PANDA_AUTH_SECRET_FILE` 可覆盖），并要求该文件属于该账号且权限为 0600。
+
+运行角色对 `signing_keys` 只有 `SELECT/INSERT/UPDATE`，**无 `DELETE`**：代码（`Infrastructure/Security/SigningKeyStore.cs`）只新增密钥、把超期密钥置 `Retired`，从无删除路径，收紧后可消除「运行账号被攻陷即抹除密钥历史」的破坏面。脚本执行结束前会自检该权限，不满足即非零退出。注意默认权限只作用于此后新建的表——`signing_keys` 若被重建（如迁移中 drop/create）会重新带上 `DELETE`，届时需重跑本脚本（幂等）。
+
+## 登录审计日志保留
+
+每次登录尝试（含失败）都会同步写一行 `login_logs`，该表无分区，因此有明确的保留口径：
+
+- 保留期由 `Auth:Audit:RetentionDays` 配置，默认 **90 天**（生产可在 `.env` 用 `Auth__Audit__RetentionDays` 覆盖）；
+- 清理由常驻服务内的后台任务执行（`Infrastructure/Security/LoginLogRetentionService.cs`）：进程启动后立即清理一次，此后每 24 小时一次，删除 `CreatedAt` 早于「当前时间 − 保留天数」的记录，每批 500 行，避免长事务与长时间持锁；
+- 启动时会打印一条 info 日志说明该口径（保留天数、周期、批大小）；单次失败只记录错误并在下一周期重试，不会让清理任务退出；
+- `RetentionDays ≤ 0` 视为误配：任务拒绝执行并打印 warning（避免把「删光全部审计」当成合法配置）。
+
+查询当前保留口径：`docker compose -p panda-auth logs auth-server | grep 登录审计日志保留策略`。
+
 ## 迁移与启动
 
 `dotnet run --project src/PandaAuth.Server -- --migrate` 是本仓根目录的一次性入口，使用 `ConnectionStrings:Migration` 执行 EF 迁移并调用 OpenIddict 种子逻辑；常驻服务仅使用 `ConnectionStrings:Default`。`Auth:Seed:Enabled=false` 会跳过全部种子数据。创建 `me-web` 时必须注入 `Auth:Seed:MeClientSecret`。

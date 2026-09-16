@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 # Configure the local PostgreSQL roles and least-privilege access for PandaAuth.
 # Run with sudo. Passwords are entered through psql's hidden interactive prompt.
+#
+# 默认规则（均可用环境变量覆盖，无个人路径硬编码）：
+#   RUN_USER    运行服务、并且必须拥有密钥文件的操作系统账号。
+#               默认取 SUDO_USER（sudo 调用者），非 sudo 直接以 root 执行时取当前用户；
+#               可用 PANDA_AUTH_RUN_USER 显式指定。
+#   SECRET_FILE 密钥文件（含 DB_PASSWORD / DB_MIGRATOR_PASSWORD）的路径，
+#               默认 <RUN_USER 家目录>/.config/panda-auth/panda-auth.env；
+#               可用 PANDA_AUTH_SECRET_FILE 显式指定。
+#               文件必须属于 RUN_USER 且权限为 0600，否则脚本拒绝执行。
+# 例：sudo PANDA_AUTH_SECRET_FILE=/srv/panda-auth/panda-auth.env bash setup-databases.sh
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -11,16 +21,30 @@ fi
 command -v psql >/dev/null || { echo "psql is required." >&2; exit 1; }
 command -v python3 >/dev/null || { echo "python3 is required to read the env file safely." >&2; exit 1; }
 
-SECRET_FILE=/home/jiayuhu/.config/panda-auth/panda-auth.env
+RUN_USER="${PANDA_AUTH_RUN_USER:-${SUDO_USER:-$(id -un)}}"
+if ! RUN_UID="$(id -u "$RUN_USER" 2>/dev/null)" || [ -z "$RUN_UID" ]; then
+  echo "Cannot resolve runtime user '$RUN_USER'; set PANDA_AUTH_RUN_USER explicitly." >&2
+  exit 1
+fi
+
+SECRET_FILE="${PANDA_AUTH_SECRET_FILE:-}"
+if [ -z "$SECRET_FILE" ]; then
+  RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+  if [ -z "$RUN_HOME" ]; then
+    echo "Cannot resolve the home directory of '$RUN_USER'; set PANDA_AUTH_SECRET_FILE explicitly." >&2
+    exit 1
+  fi
+  SECRET_FILE="$RUN_HOME/.config/panda-auth/panda-auth.env"
+fi
+
 if [ ! -f "$SECRET_FILE" ] || [ ! -r "$SECRET_FILE" ]; then
   echo "Missing or unreadable $SECRET_FILE; create it with mode 0600 first." >&2
   exit 1
 fi
-JIAYUHU_UID="$(id -u jiayuhu)"
 SECRET_UID="$(stat -c '%u' "$SECRET_FILE")"
 SECRET_MODE="$(stat -c '%a' "$SECRET_FILE")"
-if [ "$SECRET_UID" != "$JIAYUHU_UID" ] || [ "$SECRET_MODE" != "600" ]; then
-  echo "$SECRET_FILE must be owned by jiayuhu and have mode 0600." >&2
+if [ "$SECRET_UID" != "$RUN_UID" ] || [ "$SECRET_MODE" != "600" ]; then
+  echo "$SECRET_FILE must be owned by $RUN_USER (uid $RUN_UID) and have mode 0600." >&2
   exit 1
 fi
 
@@ -118,8 +142,16 @@ REVOKE ALL ON SCHEMA public FROM panda_auth;
 GRANT USAGE ON SCHEMA public TO panda_auth;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM panda_auth;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO panda_auth;
+-- 运行角色不得删除签名密钥：代码（Infrastructure/Security/SigningKeyStore）只新增密钥与置 Retired，
+-- 从无删除路径。收紧为 SELECT/INSERT/UPDATE 可消除「运行账号被攻陷即可抹除密钥历史」的破坏面。
+-- 表可能尚未迁移出来（首次在空库上执行），故仅在存在时收紧。
+SELECT 'REVOKE DELETE ON TABLE public.signing_keys FROM panda_auth'
+WHERE to_regclass('public.signing_keys') IS NOT NULL
+\gexec
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM panda_auth;
 GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO panda_auth;
+-- 默认权限只作用于此后新建的表：signing_keys 若被重建（例如迁移中 drop/create）会重新带上 DELETE，
+-- 届时需重跑本脚本收紧（脚本幂等）。
 ALTER DEFAULT PRIVILEGES FOR ROLE panda_auth_migrator IN SCHEMA public
   REVOKE ALL ON TABLES FROM PUBLIC, panda_auth;
 ALTER DEFAULT PRIVILEGES FOR ROLE panda_auth_migrator IN SCHEMA public
@@ -128,6 +160,15 @@ ALTER DEFAULT PRIVILEGES FOR ROLE panda_auth_migrator IN SCHEMA public
   REVOKE ALL ON SEQUENCES FROM PUBLIC, panda_auth;
 ALTER DEFAULT PRIVILEGES FOR ROLE panda_auth_migrator IN SCHEMA public
   GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO panda_auth;
+-- 自检：signing_keys 存在时运行角色必须已无 DELETE，否则以非零退出（ON_ERROR_STOP=1）。
+DO $$
+BEGIN
+  IF to_regclass('public.signing_keys') IS NOT NULL
+     AND has_table_privilege('panda_auth', 'public.signing_keys', 'DELETE') THEN
+    RAISE EXCEPTION 'panda_auth still holds DELETE on public.signing_keys';
+  END IF;
+END
+$$;
 SQL
 
 HBA_FILE="$(sudo -u postgres psql -X -v ON_ERROR_STOP=1 -tA -c 'SHOW hba_file' | tr -d '[:space:]')"

@@ -175,6 +175,8 @@ builder.Services.AddScoped<LoginAuditWriter>();
 builder.Services.AddScoped<TokenRevocationService>();
 // 登录时间侧信道拉平用的 dummy 哈希：必须单例（只算一次哈希），校验仍用 scoped hasher。
 builder.Services.AddSingleton<DummyPasswordHash>();
+// login_logs 保留策略：后台按天删除超期审计记录（Auth:Audit:RetentionDays，默认 90 天）。
+builder.Services.AddHostedService<LoginLogRetentionService>();
 builder.Services.AddHealthChecks();
 
 var app = builder.Build();

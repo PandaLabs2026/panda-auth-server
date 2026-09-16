@@ -11,7 +11,7 @@ PandaAuth IDP 核心：ASP.NET Core Identity、EF Core/PostgreSQL 与 OpenIddict
 ## 当前实现与限制
 
 - [协议注册](src/PandaAuth.Server/Program.cs)启用授权码配合 PKCE、客户端凭证和刷新令牌；配置 authorize/token/userinfo/logout/introspect/revoke 端点。
-- [密码哈希](src/PandaAuth.Server/Infrastructure/Security/Argon2idPasswordHasher.cs)采用 Argon2id；[限流](src/PandaAuth.Server/Infrastructure/Security/LoginRateLimiter.cs)为内存 IP/账号双维固定窗口；登录审计写入数据库。
+- [密码哈希](src/PandaAuth.Server/Infrastructure/Security/Argon2idPasswordHasher.cs)采用 Argon2id；[限流](src/PandaAuth.Server/Infrastructure/Security/LoginRateLimiter.cs)为内存 IP/账号双维固定窗口，条目按 TTL 回收；登录审计写入数据库，并由后台任务按默认 90 天的保留期清理（口径见[部署说明](deploy/README.md)）。
 - [密钥存储](src/PandaAuth.Server/Infrastructure/Security/SigningKeyStore.cs)在启动时检查签名密钥轮换，不是运行中的定时轮换；加密密钥仅在缺失时创建。新旧密钥生效需要测试。
 - [批量吊销服务](src/PandaAuth.Server/Features/Tokens/TokenRevocationService.cs)存在，尚未接入改密/冻结/注销流程。标准 revoke 处理单个提交的 token，不代表所有 API 或 Cookie 会话即时失效。
 - [Web DemoClient](samples/PandaAuth.DemoClient)包含登录、profile、刷新、单 token 撤销和 RP 退出代码；[单元测试](tests/PandaAuth.Tests)覆盖哈希和限流，不是完整协议验证。
