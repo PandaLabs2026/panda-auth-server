@@ -41,6 +41,9 @@ public class AccountLoginTimingTests
         Assert.NotNull(hasher.LastHashedPassword);
         Assert.StartsWith("$argon2id$", hasher.LastHashedPassword);
         Assert.Equal(model.Password, hasher.LastProvidedPassword);
+        // 只断 PHC 前缀无法区分 dummy 哈希与任何别的真实哈希（两者前缀相同），
+        // 故直接与单例持有的那份 dummy 哈希比对。
+        Assert.Equal(provider.GetRequiredService<DummyPasswordHash>().Value, hasher.LastHashedPassword);
     }
 
     [Fact]
@@ -78,8 +81,13 @@ public class AccountLoginTimingTests
         Assert.IsType<ViewResult>(result);
         Assert.Equal(1, hasher.VerifyCalls);
         // 与未知用户路径一致：校验的是固定 dummy 哈希，而不是该账号的真实哈希。
+        // 注意断言强度：两者都是 $argon2id$ PHC 串，只断前缀无法区分——把控制器里的
+        // dummyPasswordHash.Value 换成 user.PasswordHash，前缀断言照样通过。
+        // 故显式断言「不是该账号的真实哈希」且「就是单例持有的那份 dummy 哈希」。
         Assert.NotNull(hasher.LastHashedPassword);
         Assert.StartsWith("$argon2id$", hasher.LastHashedPassword);
+        Assert.NotEqual(frozen.PasswordHash, hasher.LastHashedPassword);
+        Assert.Equal(provider.GetRequiredService<DummyPasswordHash>().Value, hasher.LastHashedPassword);
     }
 
     [Fact]

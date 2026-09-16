@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -169,9 +170,15 @@ public class LoginLogRetentionTests
         => await provider.GetRequiredService<PandaAuthDbContext>().LoginLogs.CountAsync();
 
     /// <summary>记录日志级别的替身，用于断言误配时确实告警。</summary>
+    /// <remarks>
+    /// 必须线程安全：后台服务的 <c>ExecuteAsync</c> 在自己的线程上追加日志，而测试线程同时轮询
+    /// 这个集合（先轮询等告警、再断言）。用 <see cref="List{T}"/> 会在罕见时序下抛
+    /// 「Collection was modified」或读到撕裂状态，表现为 flaky。
+    /// 用 <see cref="ConcurrentQueue{T}"/> 而不是 <c>ConcurrentBag</c>：队列保留追加顺序，断言语义不变。
+    /// </remarks>
     private sealed class RecordingLogger : ILogger<LoginLogRetentionService>
     {
-        public List<(LogLevel Level, string Message)> Messages { get; } = [];
+        public ConcurrentQueue<(LogLevel Level, string Message)> Messages { get; } = new();
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
@@ -180,7 +187,7 @@ public class LoginLogRetentionTests
         public void Log<TState>(
             LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)
-            => Messages.Add((logLevel, formatter(state, exception)));
+            => Messages.Enqueue((logLevel, formatter(state, exception)));
     }
 
     private static PandaAuthDbContext CreateContext() => new(
