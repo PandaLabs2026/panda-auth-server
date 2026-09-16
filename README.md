@@ -14,9 +14,9 @@ PandaAuth IDP 核心：ASP.NET Core Identity、EF Core/PostgreSQL 与 OpenIddict
 - [密码哈希](src/PandaAuth.Server/Infrastructure/Security/Argon2idPasswordHasher.cs)采用 Argon2id；[限流](src/PandaAuth.Server/Infrastructure/Security/LoginRateLimiter.cs)为内存 IP/账号双维固定窗口，条目按 TTL 回收；登录审计写入数据库，并由后台任务按默认 90 天的保留期清理（口径见[部署说明](deploy/README.md)）。
 - [密钥存储](src/PandaAuth.Server/Infrastructure/Security/SigningKeyStore.cs)在启动时检查签名密钥轮换，不是运行中的定时轮换；加密密钥仅在缺失时创建。新旧密钥生效需要测试。
 - [批量吊销服务](src/PandaAuth.Server/Features/Tokens/TokenRevocationService.cs)存在，尚未接入改密/冻结/注销流程。标准 revoke 处理单个提交的 token，不代表所有 API 或 Cookie 会话即时失效。
-- [Web DemoClient](samples/PandaAuth.DemoClient)包含登录、profile、刷新、单 token 撤销和 RP 退出代码；[单元测试](tests/PandaAuth.Tests)覆盖哈希和限流，不是完整协议验证。
+- [Web DemoClient](samples/PandaAuth.DemoClient)包含登录、profile、刷新、单 token 撤销和 RP 退出代码；[单元测试](tests/PandaAuth.Tests)覆盖哈希、限流（含冷启动并发放大的并发用例）、登录时间侧信道、ForwardedHeaders 取值、Seeder 与登录审计保留期，**59 例**，但不是完整协议验证。
 
-**静态核查发现启动阻断项：** `Program.cs` 调用 MapControllers 但缺少 MVC 服务注册；`--migrate` 分支调用 Seeder 时尚未注册其 OpenIddict 依赖。常驻启动先访问密钥表，Development 只播种，不自动迁移；Seed.Enabled 也尚未在 Seeder 中检查。当前不能将以下入口视为已验证 QuickStart。追踪见元仓 G00/G04/G07。
+**2026-09-14 静态核查发现的三项启动阻断项均已修复并验证：** 已注册 MVC 服务；`--migrate` 分支在调用 Seeder 前已注册 OpenIddict 依赖；Seeder 现在检查 `Seed:Enabled` 与 Demo/Admin/Me 三个独立开关（`Auth:Seed:Demo:Enabled` **默认 `false`**，demo 客户端不再默认播种）。生产上的 `--migrate` 已跑通（一次性 migrator 角色迁移/播种，常驻服务用无 DDL 的运行角色启动）。**这仍不等于认证 QuickStart 已验收**：完成登录之后的 userinfo / 刷新 / 登出链路未验证，非维护者在干净环境的可复现步骤也未验收。追踪见元仓 G00/G04/G07。
 
 ## 前置条件与构建运行
 
@@ -29,11 +29,11 @@ dotnet build PandaAuth.Server.slnx
 dotnet test tests/PandaAuth.Tests/PandaAuth.Tests.csproj
 ```
 
-以下为源码已有入口及其用途，须先修复启动阻断并验证，不是当前可直接照抄的安装步骤：
+以下为源码已有入口及其用途。启动阻断项已修复，但这些命令仍**不是已验收的安装步骤**（认证闭环的端到端验收未完成）：
 
 | 命令 | 用途与副作用 |
 | --- | --- |
-| `dotnet run --project src/PandaAuth.Server -- --migrate` | 一次性迁移与种子入口；会修改数据库，当前种子依赖注册有缺口，失败不能推断数据库未改变 |
+| `dotnet run --project src/PandaAuth.Server -- --migrate` | 一次性迁移与种子入口；会修改数据库，失败不能推断数据库未改变。批量播种是 **upsert 对账**：会订正存量客户端（例如 me-web 的回调/登出白名单与缺省白名单不一致时会被整体替换），客户端密钥仅在库内现有哈希校验不通过时才重写 |
 | `dotnet run --project src/PandaAuth.Server` | 常驻服务，开发监听 http://localhost:9004；结构需先准备 |
 | `dotnet run --project samples/PandaAuth.DemoClient` | Web 示例，http://localhost:5201；需可用 IDP，通常在另一终端运行 |
 
