@@ -36,6 +36,23 @@ public sealed class SigningKeyOptions
 
     /// <summary>签名密钥总有效期（天），需大于轮换周期，保证旧密钥在旧 Access Token 过期前仍可验签。</summary>
     public int ValidityDays { get; set; } = 180;
+
+    /// <summary>
+    /// 启动期校验密钥周期配置，非法即失败关闭。
+    /// 代码依赖「ValidityDays &gt; RotationIntervalDays」：轮换出新密钥后旧密钥在 NotAfter 之前必须仍可验签，
+    /// 否则误配会让上一轮签发的 Access Token 在过期前验签失败（静默 401，无异常日志）。
+    /// </summary>
+    /// <exception cref="InvalidOperationException">RotationIntervalDays ≤ 0，或 ValidityDays ≤ RotationIntervalDays。</exception>
+    public void Validate()
+    {
+        if (RotationIntervalDays <= 0 || ValidityDays <= RotationIntervalDays)
+        {
+            throw new InvalidOperationException(
+                $"Auth:Keys 配置非法：RotationIntervalDays={RotationIntervalDays}、ValidityDays={ValidityDays}；" +
+                "要求 RotationIntervalDays > 0 且 ValidityDays > RotationIntervalDays。" +
+                "当前取值下旧签名密钥会在上一轮签发的 Access Token 过期前退役，导致验签静默失败。");
+        }
+    }
 }
 
 public sealed class SeedOptions
