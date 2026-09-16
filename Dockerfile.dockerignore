@@ -1,0 +1,25 @@
+# PandaAuth.Server 构建上下文过滤（BuildKit per-Dockerfile 忽略文件）。
+#
+# 为什么需要它：release.sh 对 server 的构建上下文是**工作区根**（svc_context → "."），
+# 而 Docker 只读上下文根的 .dockerignore —— 本仓的 .dockerignore 因此完全不生效。
+# BuildKit 会优先取与 Dockerfile 同名的 `<Dockerfile>.dockerignore`，模式相对**上下文根**。
+#
+# 目的：把各仓构建产物与 VCS/编辑器元数据挡在上下文之外，否则构建结果会随构建机
+# 本地状态漂移（bin/obj 让 dotnet restore 复用陈旧产物，node_modules 体积巨大）。
+#
+# 刻意不排除的路径：
+#   **/wwwroot/  —— server / website 的 wwwroot/brand/** 是随源码提交的品牌资产，
+#                   排除会让生产 favicon 404。
+#   *.md         —— 无收益，徒增风险。
+
+**/bin/
+**/obj/
+**/.git/
+**/node_modules/
+**/dist/
+**/TestResults/
+**/.vs/
+**/.vscode/
+**/.idea/
+**/.zcode/
+releases/
