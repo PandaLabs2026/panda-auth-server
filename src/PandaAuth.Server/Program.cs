@@ -12,6 +12,7 @@ using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Tokens;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Shared;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -106,12 +107,15 @@ openIddict.AddServer(options =>
             .AllowClientCredentialsFlow()
             .AllowRefreshTokenFlow();
 
-        options.SetAuthorizationEndpointUris("/connect/authorize")
-            .SetTokenEndpointUris("/connect/token")
-            .SetUserInfoEndpointUris("/connect/userinfo")
-            .SetEndSessionEndpointUris("/connect/logout")
-            .SetIntrospectionEndpointUris("/connect/introspect")
-            .SetRevocationEndpointUris("/connect/revoke");
+        // 端点路径统一取自 PandaAuth 契约常量（share 仓 PandaAuthEndpoints），避免服务端与契约双源。
+        options.SetAuthorizationEndpointUris(PandaAuthEndpoints.Authorization)
+            .SetTokenEndpointUris(PandaAuthEndpoints.Token)
+            .SetUserInfoEndpointUris(PandaAuthEndpoints.Userinfo)
+            .SetEndSessionEndpointUris(PandaAuthEndpoints.Logout)
+            .SetIntrospectionEndpointUris(PandaAuthEndpoints.Introspection)
+            .SetRevocationEndpointUris(PandaAuthEndpoints.Revocation)
+            // JWKS 路径显式化：此前依赖 OpenIddict 默认值（同为 /.well-known/jwks），行为不变，契约成为单一事实源。
+            .SetJsonWebKeySetEndpointUris(PandaAuthEndpoints.JsonWebKeySet);
 
         // 文档门禁：AccessToken 10 分钟；RefreshToken 可吊销。
         options.SetAccessTokenLifetime(TimeSpan.FromMinutes(10))
