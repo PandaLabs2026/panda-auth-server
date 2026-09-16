@@ -23,3 +23,17 @@
 **/.idea/
 **/.zcode/
 releases/
+
+# 本仓 .dockerignore 里这几条同样对工作区根上下文失效，在此并入做纵深防御：
+# 同样必须带 `**/` 前缀——照抄原文件的 `.env` / `*.env` 只匹配工作区根，
+# 而 deploy/.env（真实会放密钥的位置）在 panda-auth-server/ 下（2026-09-16 实测：
+# 无前缀时 deploy/.env 仍进入上下文；带前缀后 ENV_IN_CTX=0）。
+# `!**/deploy/.env.example` 刻意保留示例文件（它不含密钥）。
+**/*.user
+**/appsettings.Local.json
+**/appsettings.*.Local.json
+**/.env
+**/*.env
+!**/deploy/.env.example
+**/deploy/backups/
+
