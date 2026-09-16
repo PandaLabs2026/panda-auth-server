@@ -169,6 +169,8 @@ openIddict.AddServer(options =>
 builder.Services.AddSingleton<LoginRateLimiter>();
 builder.Services.AddScoped<LoginAuditWriter>();
 builder.Services.AddScoped<TokenRevocationService>();
+// 登录时间侧信道拉平用的 dummy 哈希：必须单例（只算一次哈希），校验仍用 scoped hasher。
+builder.Services.AddSingleton<DummyPasswordHash>();
 builder.Services.AddHealthChecks();
 
 var app = builder.Build();

@@ -12,8 +12,13 @@ public sealed class AccountController(
     UserManager<PandaAuthUser> userManager,
     SignInManager<PandaAuthUser> signInManager,
     LoginRateLimiter loginRateLimiter,
-    LoginAuditWriter loginAudit) : Controller
+    LoginAuditWriter loginAudit,
+    IPasswordHasher<PandaAuthUser> passwordHasher,
+    DummyPasswordHash dummyPasswordHash) : Controller
 {
+    /// <summary>dummy 校验用的占位用户；Argon2 校验只依赖哈希与口令，不读取该实例的状态。</summary>
+    private static readonly PandaAuthUser DummyUser = new();
+
     [HttpGet("login")]
     public IActionResult Login(string? returnUrl = null)
     {
@@ -64,6 +69,12 @@ public sealed class AccountController(
                 : result.IsLockedOut ? "locked_out"
                 : result.IsNotAllowed ? "not_allowed"
                 : "wrong_password";
+        }
+        else
+        {
+            // 时间侧信道拉平：用户不存在时同样付出一次 Argon2 代价（对固定 dummy 哈希校验一次），
+            // 使两条路径耗时接近。否则「不存在的用户名」明显更快返回，响应内容再一致也可枚举账号。
+            passwordHasher.VerifyHashedPassword(DummyUser, dummyPasswordHash.Value, model.Password);
         }
 
         await loginAudit.RecordAsync(BuildLog(), cancellationToken);

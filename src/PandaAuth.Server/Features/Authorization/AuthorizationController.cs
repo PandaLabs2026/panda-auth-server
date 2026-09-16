@@ -133,10 +133,15 @@ public sealed class AuthorizationController(
             }
         }
 
-        var roles = principal.FindAll(Claims.Role).Select(claim => claim.Value).ToArray();
-        if (roles.Length > 0)
+        // 角色只在客户端显式申请 roles scope 时披露：CreatePrincipalAsync 会把用户全部角色写入
+        // 令牌主体，若无条件回显，任何持 Access Token 的客户端都能读到角色，超出最小披露。
+        if (principal.HasScope(Scopes.Roles))
         {
-            response[Claims.Role] = roles;
+            var roles = principal.FindAll(Claims.Role).Select(claim => claim.Value).ToArray();
+            if (roles.Length > 0)
+            {
+                response[Claims.Role] = roles;
+            }
         }
 
         return Ok(response);
