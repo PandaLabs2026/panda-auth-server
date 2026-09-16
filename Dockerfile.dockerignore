@@ -8,8 +8,11 @@
 # 本地状态漂移（bin/obj 让 dotnet restore 复用陈旧产物，node_modules 体积巨大）。
 #
 # 刻意不排除的路径：
-#   **/wwwroot/  —— server / website 的 wwwroot/brand/** 是随源码提交的品牌资产，
-#                   排除会让生产 favicon 404。
+#   server / website 的 wwwroot/ —— 它们的 wwwroot/brand/** 是**随源码提交**的品牌
+#                   资产，排除会让生产 favicon 404。因此**不能笼统排除 `**/wwwroot/`**：
+#                   属于构建产物的 SPA 输出（me / webadmin 的 wwwroot/<spa>）须按仓
+#                   **定向**排除，不在这里一刀切。server 自身无 SPA 输出，故本文件
+#                   不出现该类路径；me 那份见其文件末。
 #   *.md         —— 无收益，徒增风险。
 
 **/bin/
@@ -24,10 +27,12 @@
 **/.zcode/
 releases/
 
-# 本仓 .dockerignore 里这几条同样对工作区根上下文失效，在此并入做纵深防御：
-# 同样必须带 `**/` 前缀——照抄原文件的 `.env` / `*.env` 只匹配工作区根，
-# 而 deploy/.env（真实会放密钥的位置）在 panda-auth-server/ 下（2026-09-16 实测：
-# 无前缀时 deploy/.env 仍进入上下文；带前缀后 ENV_IN_CTX=0）。
+# 敏感文件：各仓 .dockerignore 里的同类规则对工作区根上下文失效，故在此重写一遍
+# （工作区里任何一份 .env / appsettings.*.Local.json / *.user 都不该进入构建上下文
+# 与构建缓存）。
+# ⚠️ 必须带 `**/` 前缀——照抄仓内 .dockerignore 的 `.env` / `*.env` 只匹配工作区根，
+# 而真实会放密钥的位置在工作区**子目录**下（2026-09-16 实测：无前缀时
+# deploy/.env 与 rev-local.env 仍进入上下文；带前缀后 ENV_IN_CTX=0）。
 # `!**/deploy/.env.example` 刻意保留示例文件（它不含密钥）。
 **/*.user
 **/appsettings.Local.json
