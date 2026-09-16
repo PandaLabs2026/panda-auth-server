@@ -74,6 +74,15 @@ builder.Services.AddScoped<IPasswordHasher<PandaAuthUser>, Argon2idPasswordHashe
 
 if (authOptions.DataProtectionKeyPath.Length > 0)
 {
+    // 路径必须已存在：生产由 compose 命名卷挂载保证；不存在即说明「配置路径与卷挂载点不一致」，
+    // 此时绝不能静默创建到容器临时层（密钥随容器重建即丢），必须失败关闭。
+    // PersistKeysToFileSystem 自身会静默创建缺失目录且不告警，故守卫必须显式。
+    if (!Directory.Exists(authOptions.DataProtectionKeyPath))
+    {
+        throw new InvalidOperationException(
+            $"DataProtection 密钥目录不存在：{authOptions.DataProtectionKeyPath}（生产应由 compose 命名卷挂载到该路径）");
+    }
+
     builder.Services
         .AddDataProtection()
         .PersistKeysToFileSystem(new DirectoryInfo(authOptions.DataProtectionKeyPath))
