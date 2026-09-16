@@ -12,7 +12,11 @@
 
 脚本不绑定具体账号与个人路径，默认规则（均可覆盖）见脚本头注释：运行账号默认取 `SUDO_USER`（`PANDA_AUTH_RUN_USER` 可覆盖），密钥文件默认取该账号家目录下的 `.config/panda-auth/panda-auth.env`（`PANDA_AUTH_SECRET_FILE` 可覆盖），并要求该文件属于该账号且权限为 0600。
 
-运行角色对 `signing_keys` 只有 `SELECT/INSERT/UPDATE`，**无 `DELETE`**：代码（`Infrastructure/Security/SigningKeyStore.cs`）只新增密钥、把超期密钥置 `Retired`，从无删除路径，收紧后可消除「运行账号被攻陷即抹除密钥历史」的破坏面。脚本执行结束前会自检该权限，不满足即非零退出。注意默认权限只作用于此后新建的表——`signing_keys` 若被重建（如迁移中 drop/create）会重新带上 `DELETE`，届时需重跑本脚本（幂等）。
+运行角色对 `signing_keys` 只有 `SELECT/INSERT/UPDATE`，**无 `DELETE`**：代码（`Infrastructure/Security/SigningKeyStore.cs`）只新增密钥、把超期密钥置 `Retired`，从无删除路径，收紧后可消除「运行账号被攻陷即抹除密钥历史」的破坏面。
+
+⚠️ **首次装机要跑两次本脚本**，顺序是：跑本脚本（建角色/库）→ 跑一次性迁移（建表）→ **再跑一次本脚本**（收紧 `signing_keys` 的 `DELETE`）。原因：`ALTER DEFAULT PRIVILEGES` 只作用于此后新建的表，而首次装机时 `signing_keys` 还不存在，第一次运行时 `REVOKE` 是空操作。脚本在这种状态下不会静默通过——结束时会在 stderr 明确打印「未完成：signing_keys 尚不存在…迁移完成后请重跑本脚本」；表存在且权限已收紧时打印「已收紧并自检通过」；表存在但仍带 `DELETE` 时直接非零退出。已迁移的生产库重跑一次即生效。
+
+`signing_keys` 若被重建（例如迁移中 drop/create）同样会重新带上 `DELETE`（默认权限所致），需再重跑本脚本；本脚本幂等，可反复执行。
 
 ## 登录审计日志保留
 

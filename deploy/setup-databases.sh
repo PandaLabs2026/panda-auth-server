@@ -160,11 +160,14 @@ ALTER DEFAULT PRIVILEGES FOR ROLE panda_auth_migrator IN SCHEMA public
   REVOKE ALL ON SEQUENCES FROM PUBLIC, panda_auth;
 ALTER DEFAULT PRIVILEGES FOR ROLE panda_auth_migrator IN SCHEMA public
   GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO panda_auth;
--- 自检：signing_keys 存在时运行角色必须已无 DELETE，否则以非零退出（ON_ERROR_STOP=1）。
+-- 自检：signing_keys 存在时必须已无 DELETE（否则以非零退出）。
+-- 首次装机在迁移之前跑本脚本时该表还不存在、上面的 REVOKE 是空操作：这种状态下不能静默通过，
+-- 必须显式告警要求「迁移完成后重跑」，否则默认权限会让迁移新建的表重新带上 DELETE。
 DO $$
 BEGIN
-  IF to_regclass('public.signing_keys') IS NOT NULL
-     AND has_table_privilege('panda_auth', 'public.signing_keys', 'DELETE') THEN
+  IF to_regclass('public.signing_keys') IS NULL THEN
+    RAISE WARNING 'signing_keys 尚不存在：本次未收紧其 DELETE 权限（迁移完成后请重跑本脚本）。';
+  ELSIF has_table_privilege('panda_auth', 'public.signing_keys', 'DELETE') THEN
     RAISE EXCEPTION 'panda_auth still holds DELETE on public.signing_keys';
   END IF;
 END
@@ -250,3 +253,26 @@ fi
 echo "Database roles, least-privilege grants, and loopback-only SCRAM rules are configured."
 echo "Add DB_MIGRATOR_PASSWORD to $SECRET_FILE (mode 0600) using the password just entered."
 echo "Before release, verify DB_MIGRATOR_PASSWORD and use the one-off migration container."
+
+# 显式报告签名密钥权限状态：首次装机（迁移前）该表还不存在，上面的 REVOKE 是空操作，
+# 必须让运维一眼看到「还没收紧、迁移后要重跑」，而不是把静默通过当成已完成。
+SIGNING_KEYS_STATE="$(sudo -u postgres psql -X -v ON_ERROR_STOP=1 -tA -d panda_auth -c \
+  "SELECT CASE
+     WHEN to_regclass('public.signing_keys') IS NULL THEN 'absent'
+     WHEN has_table_privilege('panda_auth', 'public.signing_keys', 'DELETE') THEN 'still-delete'
+     ELSE 'hardened'
+   END" | tr -d '[:space:]')"
+case "$SIGNING_KEYS_STATE" in
+  hardened)
+    echo "signing_keys 的 DELETE 权限已收紧并自检通过（运行角色仅 SELECT/INSERT/UPDATE）。"
+    ;;
+  absent)
+    echo "未完成：signing_keys 尚不存在（本机还没迁移），本次没有收紧它的 DELETE 权限。" >&2
+    echo "        迁移完成后请重跑本脚本：默认权限会给新建的 signing_keys 带上 DELETE。" >&2
+    echo "        重跑命令：sudo bash $(basename "$0")" >&2
+    ;;
+  *)
+    echo "签名密钥权限自检未通过（状态：$SIGNING_KEYS_STATE），请检查 panda_auth 对 signing_keys 的授权。" >&2
+    exit 1
+    ;;
+esac
