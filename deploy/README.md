@@ -2,7 +2,7 @@
 
 生产编排在[元仓部署指南](https://github.com/PandaLabs2026/panda-auth/blob/main/deploy/README.md)，本目录只保存 Server 专属脚本和迁移说明。
 
-> MVC 注册、迁移时 OpenIddict Core 注册、Seed.Enabled 语义和首次签名密钥装配已修复，并在临时 PostgreSQL 18 上验证空库迁移、运行账号启动、健康检查和登录视图。生产数据库与发布仍未配置完成。
+> MVC 注册、迁移时 OpenIddict Core 注册、Seed.Enabled 语义和首次签名密钥装配已修复，并在临时 PostgreSQL 18 上验证空库迁移、运行账号启动、健康检查和登录视图。**生产数据库与首次发布已配置并执行**：2026-09-16 的一次性 `--migrate` 已在生产跑通（独立 migrator 角色迁移/播种，常驻服务用无 DDL 的运行角色启动），Seeder 据此 upsert 订正了存量 me-web 的回调/登出白名单。**仍需注意**：下面「数据库与权限」一节里 `signing_keys` 的权限收紧，要在**已迁移的生产库**上重跑一次本脚本才生效。
 
 ## 数据库与权限
 
@@ -31,9 +31,9 @@
 
 ## 迁移与启动
 
-`dotnet run --project src/PandaAuth.Server -- --migrate` 是本仓根目录的一次性入口，使用 `ConnectionStrings:Migration` 执行 EF 迁移并调用 OpenIddict 种子逻辑；常驻服务仅使用 `ConnectionStrings:Default`。`Auth:Seed:Enabled=false` 会跳过全部种子数据。创建 `me-web` 时必须注入 `Auth:Seed:MeClientSecret`。
+`dotnet run --project src/PandaAuth.Server -- --migrate` 是本仓根目录的一次性入口，使用 `ConnectionStrings:Migration` 执行 EF 迁移并调用 OpenIddict 种子逻辑；常驻服务仅使用 `ConnectionStrings:Default`。`Auth:Seed:Enabled=false` 会跳过全部种子数据。创建 `me-web` 时必须注入 `Auth:Seed:Me:ClientSecret`，并同时注入 `Auth:Seed:Me:RedirectUris__0/__1` 与 `Auth:Seed:Me:PostLogoutRedirectUris__0/__1`——回调/登出白名单已改为**配置注入**，Seeder 会按这些值 **upsert 订正存量客户端**（不再「只插不改」）。Demo 三客户端只在 `Auth:Seed:Demo:Enabled=true` 时播种，**默认 `false`**。
 
-常驻命令 `dotnet run --project src/PandaAuth.Server` 仅使用 `ConnectionStrings:Default` 并在启动前读取密钥表。Development 可执行种子逻辑，不自动迁移；`Seed.Enabled=false` 会跳过整个 Seeder。不得把新数据库直接正常启动当成初始化流程。
+常驻命令 `dotnet run --project src/PandaAuth.Server` 仅使用 `ConnectionStrings:Default` 并在启动前读取密钥表。Development 可执行种子逻辑，不自动迁移；`Auth:Seed:Enabled=false` 会跳过整个 Seeder。不得把新数据库直接正常启动当成初始化流程。
 
 生产一次性迁移的固定命令（只在修复、备份和独立恢复验证完成后，在服务器 `~/app/panda-auth/deploy` 使用）：
 
@@ -54,7 +54,7 @@ dotnet test tests/PandaAuth.Tests/PandaAuth.Tests.csproj
 
 EF 工具版本在 [.config/dotnet-tools.json](../.config/dotnet-tools.json)。需要开发新迁移时先 `dotnet tool restore`，再使用本仓的设计时工厂；新增迁移属于服务开发任务，不是本文档治理的验证步骤。
 
-修复启动问题后，开发服务入口为 http://localhost:9004，DemoClient 为 http://localhost:5201。端到端验证需要单独完成。
+开发服务入口为 http://localhost:9004，DemoClient 为 http://localhost:5201。端到端验证（完成登录之后的 userinfo / 刷新 / 登出）需要单独完成。
 
 ## 镜像
 
