@@ -160,7 +160,8 @@ public sealed class AuthorizationController(
         return SignOut(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
     }
 
-    private async Task<ClaimsPrincipal> CreatePrincipalAsync(PandaAuthUser user, ImmutableArray<string> scopes)
+    // internal 而非 private：签发给 AT 的声明集合属对外契约（角色受 roles scope 约束），需要可测。
+    internal async Task<ClaimsPrincipal> CreatePrincipalAsync(PandaAuthUser user, ImmutableArray<string> scopes)
     {
         var identity = new ClaimsIdentity(
             TokenValidationParameters.DefaultAuthenticationType, Claims.Name, Claims.Role);
@@ -178,8 +179,15 @@ public sealed class AuthorizationController(
             identity.AddClaim(new Claim(Claims.Email, user.Email));
         }
 
-        var roles = await userManager.GetRolesAsync(user);
-        identity.AddClaims(roles.Select(role => new Claim(Claims.Role, role)));
+        // 角色写入 Access Token 受 roles scope 约束（最小披露）：AT 只交给自身受众，但无条件携带角色
+        // 会让**未申请该 scope** 的客户端也从 AT（及其内省结果）读到角色。
+        // **契约**：资源服务器若需从 AT 读取角色，其客户端必须申请 `roles` scope。
+        // 工作区内消费方（panda-auth-me、Server 的 DemoClient）均已申请，故行为不变。
+        if (scopes.Contains(Scopes.Roles))
+        {
+            var roles = await userManager.GetRolesAsync(user);
+            identity.AddClaims(roles.Select(role => new Claim(Claims.Role, role)));
+        }
 
         identity.SetScopes(scopes);
 

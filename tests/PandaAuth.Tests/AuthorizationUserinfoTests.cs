@@ -14,8 +14,9 @@ namespace PandaAuth.Tests;
 
 /// <summary>
 /// userinfo 最小披露回归：角色只在客户端申请了 roles scope 时返回。
-/// CreatePrincipalAsync 会把用户全部角色写入令牌主体，若无条件回显，任何持 Access Token
-/// 的客户端都能读到角色。
+/// 本文件测的是 **userinfo 的输出侧**（合成一个已含角色的 AT 主体，验证无 scope 时不回显）；
+/// **签发侧**（CreatePrincipalAsync 是否把角色写进 AT）见 <see cref="AuthorizationTokenClaimsTests"/>。
+/// 两侧都需要守卫：只守输出侧时，未申请 roles 的客户端仍能从 AT 载荷或内省结果读到角色。
 /// </summary>
 public class AuthorizationUserinfoTests
 {
