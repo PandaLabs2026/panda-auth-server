@@ -180,9 +180,12 @@ public sealed class AuthorizationController(
         }
 
         // 角色写入 Access Token 受 roles scope 约束（最小披露）：AT 只交给自身受众，但无条件携带角色
-        // 会让**未申请该 scope** 的客户端也从 AT（及其内省结果）读到角色。
+        // 会让**未申请该 scope** 的客户端也从内省结果读到角色。
         // **契约**：资源服务器若需从 AT 读取角色，其客户端必须申请 `roles` scope。
         // 工作区内消费方（panda-auth-me、Server 的 DemoClient）均已申请，故行为不变。
+        //
+        // 另注：本服务签发的 AT 是**加密的 JWE**（OpenIddict 注册了加密密钥），载荷不可直接解码；
+        // 资源服务器应经 `/connect/introspect` 读取声明（需授予该客户端内省权限），而不是解 JWT。
         if (scopes.Contains(Scopes.Roles))
         {
             var roles = await userManager.GetRolesAsync(user);
