@@ -8,7 +8,7 @@ using static OpenIddict.Abstractions.OpenIddictConstants;
 
 namespace PandaAuth.Server.Infrastructure.Persistence;
 
-/// <summary>幂等种子数据：管理员角色/账号、me-web 第一方客户端与可选 demo 客户端。</summary>
+/// <summary>幂等种子数据：管理员角色/账号、me-web 与 admin-web 第一方客户端、可选 demo 客户端。</summary>
 public static class DbSeeder
 {
     public static async Task SeedAsync(IServiceProvider services)
@@ -64,7 +64,13 @@ public static class DbSeeder
 
         if (options.Seed.Me.Enabled)
         {
-            await SeedMeWebApplicationAsync(applications, options.Seed.Me);
+            await SeedFirstPartyWebApplicationAsync(applications, "me-web", "PandaAuth 账户中心", "Auth:Seed:Me", options.Seed.Me);
+        }
+
+        if (options.Seed.AdminWeb.Enabled)
+        {
+            await SeedFirstPartyWebApplicationAsync(
+                applications, "admin-web", "PandaAuth 管理后台", "Auth:Seed:AdminWeb", options.Seed.AdminWeb);
         }
     }
 
@@ -163,33 +169,41 @@ public static class DbSeeder
         }
     }
 
-    /// <summary>me-web：账户中心第一方客户端；不存在则按配置创建，已存在则按配置订正回调白名单与客户端密钥（upsert）。</summary>
-    private static async Task SeedMeWebApplicationAsync(IOpenIddictApplicationManager applications, MeSeedOptions me)
+    /// <summary>
+    /// 第一方机密 Web 客户端（me-web / admin-web）的 upsert 播种：不存在则按配置创建，
+    /// 已存在则按配置订正回调白名单与客户端密钥。两者共用本方法，行为一致。
+    /// </summary>
+    private static async Task SeedFirstPartyWebApplicationAsync(
+        IOpenIddictApplicationManager applications,
+        string clientId,
+        string displayName,
+        string configPrefix,
+        FirstPartyWebSeedOptions seed)
     {
-        var existing = await applications.FindByClientIdAsync("me-web");
+        var existing = await applications.FindByClientIdAsync(clientId);
         if (existing is null)
         {
-            // 回调白名单经 Auth:Seed:Me:RedirectUris / Auth:Seed:Me:PostLogoutRedirectUris 配置注入，缺失即失败（第一方必备客户端）。
-            if (me.RedirectUris.Length == 0)
+            // 回调白名单经 {configPrefix}:RedirectUris / PostLogoutRedirectUris 配置注入，缺失即失败（第一方必备客户端）。
+            if (seed.RedirectUris.Length == 0)
             {
-                throw new InvalidOperationException("缺少 Auth:Seed:Me:RedirectUris 配置（me-web 为第一方必备客户端）。");
+                throw new InvalidOperationException($"缺少 {configPrefix}:RedirectUris 配置（{clientId} 为第一方必备客户端）。");
             }
 
-            if (me.PostLogoutRedirectUris.Length == 0)
+            if (seed.PostLogoutRedirectUris.Length == 0)
             {
                 throw new InvalidOperationException(
-                    "缺少 Auth:Seed:Me:PostLogoutRedirectUris 配置（me-web 为第一方必备客户端）。");
+                    $"缺少 {configPrefix}:PostLogoutRedirectUris 配置（{clientId} 为第一方必备客户端）。");
             }
 
             var descriptor = new OpenIddictApplicationDescriptor
             {
-                ClientId = "me-web",
+                ClientId = clientId,
                 ClientType = ClientTypes.Confidential,
-                ClientSecret = string.IsNullOrWhiteSpace(me.ClientSecret)
-                    ? throw new InvalidOperationException("缺少 Auth:Seed:Me:ClientSecret 配置。")
-                    : me.ClientSecret,
+                ClientSecret = string.IsNullOrWhiteSpace(seed.ClientSecret)
+                    ? throw new InvalidOperationException($"缺少 {configPrefix}:ClientSecret 配置。")
+                    : seed.ClientSecret,
                 ConsentType = ConsentTypes.Implicit,
-                DisplayName = "PandaAuth 账户中心",
+                DisplayName = displayName,
                 Permissions =
                 {
                     Permissions.Endpoints.Authorization,
@@ -207,12 +221,12 @@ public static class DbSeeder
                 },
             };
 
-            foreach (var uri in me.RedirectUris)
+            foreach (var uri in seed.RedirectUris)
             {
                 descriptor.RedirectUris.Add(new Uri(uri, UriKind.Absolute));
             }
 
-            foreach (var uri in me.PostLogoutRedirectUris)
+            foreach (var uri in seed.PostLogoutRedirectUris)
             {
                 descriptor.PostLogoutRedirectUris.Add(new Uri(uri, UriKind.Absolute));
             }
@@ -224,17 +238,17 @@ public static class DbSeeder
         // 存量订正：白名单替换与密钥对账各自独立判断，两者都不需要做时才提前返回——
         // 旧实现见任一白名单数组为空就 return，会连带跳过密钥对账。
         // 全部经 ApplicationManager API 完成，不直接写 EF。
-        var replaceRedirectUris = me.RedirectUris.Length > 0;
-        var replacePostLogoutRedirectUris = me.PostLogoutRedirectUris.Length > 0;
+        var replaceRedirectUris = seed.RedirectUris.Length > 0;
+        var replacePostLogoutRedirectUris = seed.PostLogoutRedirectUris.Length > 0;
 
-        // 密钥对账：密钥唯一事实源是服务器 env 文件（Auth:Seed:Me:ClientSecret）。
+        // 密钥对账：密钥唯一事实源是服务器 env 文件（{configPrefix}:ClientSecret）。
         // 幂等依据：ValidateClientSecretAsync 命中即说明库内哈希已对应配置密钥，此时不改写；
         // 反证——UpdateAsync(application, secret) 每次都重新加盐哈希，无守卫地调用会让密钥哈希列
         // 每次 migrate 都变化（实证见 tests/PandaAuth.Tests 的密钥对账用例）。
         // 配置密钥缺失（空/空白）时跳过对账且不抛异常：创建路径抛是因为第一方客户端必须有密钥，
         // 而更新路径上贸然抛异常会让「已存在的部署 + 临时未配密钥」的 migrate 直接失败，风险更大。
-        var reconcileSecret = !string.IsNullOrWhiteSpace(me.ClientSecret) &&
-            !await applications.ValidateClientSecretAsync(existing, me.ClientSecret);
+        var reconcileSecret = !string.IsNullOrWhiteSpace(seed.ClientSecret) &&
+            !await applications.ValidateClientSecretAsync(existing, seed.ClientSecret);
 
         if (!replaceRedirectUris && !replacePostLogoutRedirectUris && !reconcileSecret)
         {
@@ -249,7 +263,7 @@ public static class DbSeeder
             if (replaceRedirectUris)
             {
                 updated.RedirectUris.Clear();
-                foreach (var uri in me.RedirectUris)
+                foreach (var uri in seed.RedirectUris)
                 {
                     updated.RedirectUris.Add(new Uri(uri, UriKind.Absolute));
                 }
@@ -258,7 +272,7 @@ public static class DbSeeder
             if (replacePostLogoutRedirectUris)
             {
                 updated.PostLogoutRedirectUris.Clear();
-                foreach (var uri in me.PostLogoutRedirectUris)
+                foreach (var uri in seed.PostLogoutRedirectUris)
                 {
                     updated.PostLogoutRedirectUris.Add(new Uri(uri, UriKind.Absolute));
                 }
@@ -274,7 +288,7 @@ public static class DbSeeder
         // 若先改密钥再写回，新哈希会被旧哈希覆盖掉（实测如此）。
         if (reconcileSecret)
         {
-            await applications.UpdateAsync(existing, me.ClientSecret);
+            await applications.UpdateAsync(existing, seed.ClientSecret);
         }
         else if (replaceRedirectUris || replacePostLogoutRedirectUris)
         {

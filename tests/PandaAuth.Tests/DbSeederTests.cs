@@ -13,7 +13,7 @@ using static OpenIddict.Abstractions.OpenIddictConstants;
 
 namespace PandaAuth.Tests;
 
-/// <summary>Seeder 集成测试：EF InMemory + 真实 OpenIddict Core 管理器，验证播种开关与 me-web upsert 行为。</summary>
+/// <summary>Seeder 集成测试：EF InMemory + 真实 OpenIddict Core 管理器，验证播种开关与 me-web / admin-web upsert 行为。</summary>
 public class DbSeederTests
 {
     private const string MeRedirectUri = "https://auth.pandalabs.cc/me/callback/login/pandaauth";
@@ -21,6 +21,12 @@ public class DbSeederTests
     private const string MePostLogoutUri = "https://auth.pandalabs.cc/me/";
 
     private const string MeClientSecret = "me-web-test-secret";
+
+    private const string AdminWebRedirectUri = "https://auth.pandalabs.cc/admin/callback/login/pandaauth";
+
+    private const string AdminWebPostLogoutUri = "https://auth.pandalabs.cc/admin/";
+
+    private const string AdminWebClientSecret = "admin-web-test-secret";
 
     // 密钥对账用例用的存量旧回调：刻意不用已退役域名，避免与域名退役门禁的
     // 负断言夹具（`.cn` 命中数基线）重复计数。
@@ -53,8 +59,9 @@ public class DbSeederTests
         Assert.Null(await applications.FindByClientIdAsync("demo-web"));
         Assert.Null(await applications.FindByClientIdAsync("demo-service"));
 
-        // 总开关开启时仅播种第一方客户端，证明 Seeder 确实执行过。
+        // 总开关开启时仅播种第一方客户端（me-web 与 admin-web），证明 Seeder 确实执行过。
         Assert.NotNull(await applications.FindByClientIdAsync("me-web"));
+        Assert.NotNull(await applications.FindByClientIdAsync("admin-web"));
     }
 
     [Fact]
@@ -142,7 +149,9 @@ public class DbSeederTests
 
         using var provider = BuildProvider(options);
         var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
-        await CreateMeWebAsync(applications,
+        await CreateFirstPartyWebAsync(applications,
+            "me-web",
+            "PandaAuth 账户中心",
             redirectUris:
             [
                 "https://auth.pandalabs.cn/me/callback/login/pandaauth",
@@ -181,7 +190,9 @@ public class DbSeederTests
 
         using var provider = BuildProvider(options);
         var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
-        await CreateMeWebAsync(applications,
+        await CreateFirstPartyWebAsync(applications,
+            "me-web",
+            "PandaAuth 账户中心",
             redirectUris: [LegacyRedirectUri],
             postLogoutUris: [LegacyPostLogoutUri],
             clientSecret: "me-web-original-secret");
@@ -196,7 +207,7 @@ public class DbSeederTests
 
         // 密钥必须是以哈希形态落库，而不是把配置明文直接写进列里
         // （descriptor.ClientSecret + PopulateAsync 写回正是后者，会让新旧密钥双双校验失败）。
-        Assert.NotEqual(configuredSecret, await ReadStoredClientSecretAsync(provider));
+        Assert.NotEqual(configuredSecret, await ReadStoredClientSecretAsync(provider, "me-web"));
 
         // 顺带确认同一轮里白名单订正没有被密钥改写带坏。
         var redirectUris = await applications.GetRedirectUrisAsync(meWeb);
@@ -213,16 +224,18 @@ public class DbSeederTests
 
         using var provider = BuildProvider(options);
         var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
-        await CreateMeWebAsync(applications,
+        await CreateFirstPartyWebAsync(applications,
+            "me-web",
+            "PandaAuth 账户中心",
             redirectUris: [LegacyRedirectUri],
             postLogoutUris: [LegacyPostLogoutUri],
             clientSecret: "me-web-original-secret");
 
         await DbSeeder.SeedAsync(provider);
-        var afterFirstRun = await ReadStoredClientSecretAsync(provider);
+        var afterFirstRun = await ReadStoredClientSecretAsync(provider, "me-web");
 
         await DbSeeder.SeedAsync(provider);
-        var afterSecondRun = await ReadStoredClientSecretAsync(provider);
+        var afterSecondRun = await ReadStoredClientSecretAsync(provider, "me-web");
 
         Assert.Equal(afterFirstRun, afterSecondRun);
 
@@ -243,18 +256,20 @@ public class DbSeederTests
 
         using var provider = BuildProvider(options);
         var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
-        await CreateMeWebAsync(applications,
+        await CreateFirstPartyWebAsync(applications,
+            "me-web",
+            "PandaAuth 账户中心",
             redirectUris: [LegacyRedirectUri],
             postLogoutUris: [LegacyPostLogoutUri],
             clientSecret: "me-web-original-secret");
-        var hashBefore = await ReadStoredClientSecretAsync(provider);
+        var hashBefore = await ReadStoredClientSecretAsync(provider, "me-web");
 
         await DbSeeder.SeedAsync(provider);
 
         var meWeb = await applications.FindByClientIdAsync("me-web");
         Assert.NotNull(meWeb);
         Assert.True(await applications.ValidateClientSecretAsync(meWeb, "me-web-original-secret"));
-        Assert.Equal(hashBefore, await ReadStoredClientSecretAsync(provider));
+        Assert.Equal(hashBefore, await ReadStoredClientSecretAsync(provider, "me-web"));
 
         // 白名单订正照常生效，证明这一轮 Seeder 确实跑到了更新路径。
         var redirectUris = await applications.GetRedirectUrisAsync(meWeb);
@@ -275,7 +290,9 @@ public class DbSeederTests
 
         using var provider = BuildProvider(options);
         var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
-        await CreateMeWebAsync(applications,
+        await CreateFirstPartyWebAsync(applications,
+            "me-web",
+            "PandaAuth 账户中心",
             redirectUris: [LegacyRedirectUri],
             postLogoutUris: [LegacyPostLogoutUri],
             clientSecret: "me-web-original-secret");
@@ -358,6 +375,12 @@ public class DbSeederTests
             await applications.GetRedirectUrisAsync(meWeb));
         Assert.True(await applications.ValidateClientSecretAsync(meWeb, "me-web-dev-secret"));
 
+        var adminWeb = await applications.FindByClientIdAsync("admin-web");
+        Assert.NotNull(adminWeb);
+        Assert.Contains("http://localhost:9006/admin/callback/login/pandaauth",
+            await applications.GetRedirectUrisAsync(adminWeb));
+        Assert.True(await applications.ValidateClientSecretAsync(adminWeb, "admin-web-dev-secret"));
+
         var userManager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
         Assert.NotNull(await userManager.FindByNameAsync("admin@pandalabs.cc"));
     }
@@ -371,7 +394,9 @@ public class DbSeederTests
 
         using var provider = BuildProvider(options);
         var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
-        await CreateMeWebAsync(applications,
+        await CreateFirstPartyWebAsync(applications,
+            "me-web",
+            "PandaAuth 账户中心",
             redirectUris: ["https://auth.pandalabs.cn/me/callback/login/pandaauth"],
             postLogoutUris: ["https://auth.pandalabs.cn/me/"],
             clientSecret: "me-web-original-secret");
@@ -384,6 +409,94 @@ public class DbSeederTests
         var redirectUris = await applications.GetRedirectUrisAsync(meWeb);
         Assert.Equal(new[] { "https://auth.pandalabs.cn/me/callback/login/pandaauth" }, redirectUris.OrderBy(x => x));
         Assert.True(await applications.ValidateClientSecretAsync(meWeb, "me-web-original-secret"));
+    }
+
+    // admin-web 与 me-web 共用 SeedFirstPartyWebApplicationAsync；方法级行为（白名单整体替换、
+    // 密钥幂等对账、明文不得入库）已由上面 me-web 套件覆盖，这里只验证 admin-web 调用点的接线：
+    // clientId / 配置键前缀 / 白名单取值正确，以及独立开关生效。
+    // 存量旧回调一律用 localhost 值，不新增 .cn 命中（域名退役门禁按文件计数基线卡总量）。
+
+    [Fact]
+    public async Task AdminWebMissing_CreatedWithWhitelistFromConfig()
+    {
+        var options = ValidOptions();
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var adminWeb = await applications.FindByClientIdAsync("admin-web");
+        Assert.NotNull(adminWeb);
+
+        var redirectUris = await applications.GetRedirectUrisAsync(adminWeb);
+        Assert.Equal(new[] { AdminWebRedirectUri }, redirectUris.OrderBy(x => x));
+
+        var postLogoutUris = await applications.GetPostLogoutRedirectUrisAsync(adminWeb);
+        Assert.Equal(new[] { AdminWebPostLogoutUri }, postLogoutUris.OrderBy(x => x));
+
+        Assert.True(await applications.ValidateClientSecretAsync(adminWeb, AdminWebClientSecret));
+        Assert.Equal(ClientTypes.Confidential, await applications.GetClientTypeAsync(adminWeb));
+        // 门禁依赖 roles scope：admin-web 注册必须带该 scope 权限。
+        Assert.True(await applications.HasPermissionAsync(adminWeb, Permissions.Scopes.Roles));
+    }
+
+    [Fact]
+    public async Task AdminWebMissingWithoutRedirectUris_Throws()
+    {
+        var options = ValidOptions();
+        options.Seed.AdminWeb.RedirectUris = [];
+
+        using var provider = BuildProvider(options);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => DbSeeder.SeedAsync(provider));
+
+        Assert.Contains("Auth:Seed:AdminWeb:RedirectUris", exception.Message);
+    }
+
+    [Fact]
+    public async Task AdminWebExists_ClientSecretDriftIsReconciledAndWhitelistKept()
+    {
+        const string configuredSecret = "admin-web-configured-secret";
+        var options = ValidOptions();
+        options.Seed.AdminWeb.ClientSecret = configuredSecret;
+        options.Seed.AdminWeb.RedirectUris = [];
+        options.Seed.AdminWeb.PostLogoutRedirectUris = [];
+
+        using var provider = BuildProvider(options);
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        await CreateFirstPartyWebAsync(applications,
+            "admin-web",
+            "PandaAuth 管理后台",
+            redirectUris: [LegacyRedirectUri],
+            postLogoutUris: [LegacyPostLogoutUri],
+            clientSecret: "admin-web-original-secret");
+
+        await DbSeeder.SeedAsync(provider);
+
+        var adminWeb = await applications.FindByClientIdAsync("admin-web");
+        Assert.NotNull(adminWeb);
+        Assert.True(await applications.ValidateClientSecretAsync(adminWeb, configuredSecret));
+        Assert.False(await applications.ValidateClientSecretAsync(adminWeb, "admin-web-original-secret"));
+
+        // 未配白名单 → 存量白名单原样保留。
+        var redirectUris = await applications.GetRedirectUrisAsync(adminWeb);
+        Assert.Equal(new[] { LegacyRedirectUri }, redirectUris.OrderBy(x => x));
+    }
+
+    [Fact]
+    public async Task AdminWebDisabled_SkipsSeedAndUpsert()
+    {
+        var options = ValidOptions();
+        options.Seed.AdminWeb.Enabled = false;
+        options.Seed.AdminWeb.RedirectUris = [];
+        options.Seed.AdminWeb.PostLogoutRedirectUris = [];
+        options.Seed.AdminWeb.ClientSecret = "";
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        Assert.Null(await applications.FindByClientIdAsync("admin-web"));
     }
 
     /// <summary>构造播种总开关开启、Me 配置齐全、Demo 默认关闭的合法选项。</summary>
@@ -399,6 +512,13 @@ public class DbSeederTests
                 ClientSecret = MeClientSecret,
                 RedirectUris = [MeRedirectUri],
                 PostLogoutRedirectUris = [MePostLogoutUri],
+            },
+            AdminWeb = new AdminWebSeedOptions
+            {
+                Enabled = true,
+                ClientSecret = AdminWebClientSecret,
+                RedirectUris = [AdminWebRedirectUri],
+                PostLogoutRedirectUris = [AdminWebPostLogoutUri],
             },
             Demo = new DemoSeedOptions(),
         },
@@ -421,31 +541,33 @@ public class DbSeederTests
         return services.BuildServiceProvider();
     }
 
-    /// <summary>从 EF 直读 me-web 的 ClientSecret 列（哈希原文），用于断言哈希是否被无意义重写。</summary>
-    private static async Task<string?> ReadStoredClientSecretAsync(ServiceProvider provider)
+    /// <summary>从 EF 直读指定客户端的 ClientSecret 列（哈希原文），用于断言哈希是否被无意义重写。</summary>
+    private static async Task<string?> ReadStoredClientSecretAsync(ServiceProvider provider, string clientId)
     {
         var db = provider.GetRequiredService<PandaAuthDbContext>();
         return await db.Set<OpenIddictEntityFrameworkCoreApplication>()
             .AsNoTracking()
-            .Where(x => x.ClientId == "me-web")
+            .Where(x => x.ClientId == clientId)
             .Select(x => x.ClientSecret)
             .SingleAsync();
     }
 
-    /// <summary>模拟事故前的存量 me-web：固定 .cn 回调 + 旧密钥。</summary>
-    private static async Task CreateMeWebAsync(
+    /// <summary>模拟存量第一方 Web 客户端（me-web / admin-web）：旧回调 + 旧密钥。</summary>
+    private static async Task CreateFirstPartyWebAsync(
         IOpenIddictApplicationManager applications,
+        string clientId,
+        string displayName,
         string[] redirectUris,
         string[] postLogoutUris,
         string clientSecret)
     {
         var descriptor = new OpenIddictApplicationDescriptor
         {
-            ClientId = "me-web",
+            ClientId = clientId,
             ClientType = ClientTypes.Confidential,
             ClientSecret = clientSecret,
             ConsentType = ConsentTypes.Implicit,
-            DisplayName = "PandaAuth 账户中心",
+            DisplayName = displayName,
             Permissions =
             {
                 Permissions.Endpoints.Authorization,

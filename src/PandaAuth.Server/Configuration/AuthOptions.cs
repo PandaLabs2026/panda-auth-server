@@ -75,6 +75,8 @@ public sealed class SeedOptions
 
     public MeSeedOptions Me { get; set; } = new();
 
+    public AdminWebSeedOptions AdminWeb { get; set; } = new();
+
     public DemoSeedOptions Demo { get; set; } = new();
 }
 
@@ -86,19 +88,31 @@ public sealed class AdminSeedOptions
     public string Password { get; set; } = string.Empty;
 }
 
-public sealed class MeSeedOptions
+/// <summary>
+/// 第一方机密 Web 客户端（BFF 形态：授权码 + PKCE + 刷新令牌）的共有种子配置。
+/// me-web 与 admin-web 同构，共用 DbSeeder 的 upsert 播种路径；差异只有 clientId/DisplayName 与配置键前缀。
+/// </summary>
+public abstract class FirstPartyWebSeedOptions
 {
-    /// <summary>是否播种/订正 me-web；默认开启，仅供不需要账户中心的部署关闭。</summary>
+    /// <summary>是否播种/订正该客户端；第一方客户端默认开启。</summary>
     public bool Enabled { get; set; } = true;
 
-    /// <summary>账户中心客户端密钥；生产通过 Auth__Seed__Me__ClientSecret 环境变量注入。</summary>
+    /// <summary>客户端密钥；生产经环境变量注入（如 Auth__Seed__Me__ClientSecret）。</summary>
     public string ClientSecret { get; set; } = string.Empty;
 
-    /// <summary>登录回调白名单；播种 me-web 时必填，非空时整体替换存量值。生产通过 Auth__Seed__Me__RedirectUris 注入。</summary>
+    /// <summary>登录回调白名单；播种时必填，非空时整体替换存量值。</summary>
     public string[] RedirectUris { get; set; } = [];
 
-    /// <summary>登出回跳白名单；播种 me-web 时必填，非空时整体替换存量值。生产通过 Auth__Seed__Me__PostLogoutRedirectUris 注入。</summary>
+    /// <summary>登出回跳白名单；播种时必填，非空时整体替换存量值。</summary>
     public string[] PostLogoutRedirectUris { get; set; } = [];
+}
+
+public sealed class MeSeedOptions : FirstPartyWebSeedOptions
+{
+}
+
+public sealed class AdminWebSeedOptions : FirstPartyWebSeedOptions
+{
 }
 
 public sealed class DemoSeedOptions
