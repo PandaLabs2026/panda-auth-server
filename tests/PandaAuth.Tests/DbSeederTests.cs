@@ -24,7 +24,7 @@ public class DbSeederTests
 
     private const string AdminWebRedirectUri = "https://auth.pandalabs.cc/admin/callback/login/pandaauth";
 
-    private const string AdminWebPostLogoutUri = "https://auth.pandalabs.cc/admin/";
+    private const string AdminWebPostLogoutUri = "https://auth.pandalabs.cc/admin/callback/logout/pandaauth";
 
     private const string AdminWebClientSecret = "admin-web-test-secret";
 
@@ -379,8 +379,11 @@ public class DbSeederTests
         Assert.NotNull(adminWeb);
         Assert.Contains("http://localhost:9006/admin/callback/login/pandaauth",
             await applications.GetRedirectUrisAsync(adminWeb));
+        // 登出回跳必须是专用路径（/admin/callback/logout/...），不得复用 SPA 根 /admin/：
+        // PostLogoutRedirectUri 与 SPA 根重合会让 OpenIddict 客户端拦截每次首页访问（空 state → 400）。
+        Assert.Contains("http://localhost:9006/admin/callback/logout/pandaauth",
+            await applications.GetPostLogoutRedirectUrisAsync(adminWeb));
         Assert.True(await applications.ValidateClientSecretAsync(adminWeb, "admin-web-dev-secret"));
-
         var userManager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
         Assert.NotNull(await userManager.FindByNameAsync("admin@pandalabs.cc"));
     }
