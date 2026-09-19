@@ -171,8 +171,14 @@ openIddict.AddServer(options =>
     // 自定义 API（/admin-api/*）的 Bearer 验证用 Validation 方案，而非 Server 方案——
     // Server 方案只对它管理的端点（/connect/*，如 userinfo）提取身份，自定义端点会抛
     // 「An identity cannot be extracted from this request」（2026-09-19 生产实测）。
-    // Validation 与 Server 同进程注册时自动复用其签名/加密凭据，无需另行配置 issuer/keys。
-    .AddValidation(options => options.UseAspNetCore());
+    // UseLocalServer：同进程导入 Server 的签名/加密凭据与配置——缺它时认证中间件惰性解析
+    // options 即抛「server configuration or an issuer URI must be registered」（2026-09-19 生产实测，
+    // 连 /healthz 都 500，因认证中间件对每个请求都会探测已注册的 handler）。
+    .AddValidation(options =>
+    {
+        options.UseLocalServer();
+        options.UseAspNetCore();
+    });
 
 // Admin API 角色门禁：按 claim 短名（"role"）断言而非 Roles=——后者走 IsInRole，
 // 依赖 identity 的 RoleClaimType 映射（validation 方案默认是 ASP.NET 长名 URI），会静默 403。
