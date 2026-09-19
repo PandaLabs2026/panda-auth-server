@@ -184,10 +184,13 @@ public sealed class CredentialController(
     /// <summary>
     /// 移除旧密码并写入新密码（走完整密码策略校验）。校验失败时回滚旧哈希——
     /// 不回滚会把账号锁死在「无密码」状态（与管理端重置同一处实证结论）。
+    /// 安全戳一并回滚：AddPasswordAsync 内部已轮换，不还原会让一次失败的改密
+    /// 仍然踹掉目标既有 Cookie 会话（与管理端重置同一口径）。
     /// </summary>
     private async Task<(bool Changed, string? Error)> ReplacePasswordAsync(PandaAuthUser user, string newPassword)
     {
         var originalHash = user.PasswordHash;
+        var originalStamp = user.SecurityStamp;
         var remove = await userManager.RemovePasswordAsync(user);
         if (!remove.Succeeded)
         {
@@ -198,6 +201,7 @@ public sealed class CredentialController(
         if (!add.Succeeded)
         {
             user.PasswordHash = originalHash;
+            user.SecurityStamp = originalStamp;
             await userManager.UpdateAsync(user);
             return (false, string.Join("；", add.Errors.Select(error => error.Description)));
         }
