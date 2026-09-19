@@ -102,6 +102,15 @@ public sealed class AdminUsersController(
             return NotFound();
         }
 
+        // 封禁自冻结（含反向自解冻）：冻结自己是把自己锁在门外——冻结账号无法登录任何端点，
+        // 解铃还须另一个管理员；与自重置封禁（ResetPassword）同一口径（2026-09-20 用户拍板）。
+        var statusActorId = User.FindFirst(Claims.Subject)?.Value;
+        if (string.Equals(user.Id, statusActorId, StringComparison.Ordinal))
+        {
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "不能变更自己的账号状态",
+                detail: "冻结自己会把当前管理会话立即锁在门外，且冻结账号无法登录任何端点。");
+        }
+
         if (user.Status == request.Status)
         {
             return Ok(SummaryOf(user));

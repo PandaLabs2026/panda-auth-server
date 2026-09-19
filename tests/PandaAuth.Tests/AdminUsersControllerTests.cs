@@ -187,6 +187,30 @@ public class AdminUsersControllerTests
     }
 
     [Fact]
+    public async Task SetStatus_ByTheAccountOwnerIsRejected()
+    {
+        var (controller, provider, revoker) = Create();
+        var user = await SeedUserAsync(provider, "self-freeze");
+
+        controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim(Claims.Subject, user.Id),
+            new Claim(Claims.Name, "self-freeze"),
+            new Claim(Claims.Role, PandaAuthRoles.Admin),
+        ], "TestBearer", Claims.Name, Claims.Role));
+
+        var problem = Assert.IsType<ObjectResult>(
+            await controller.SetStatus(user.Id, new AdminUserStatusRequest(UserStatus.Frozen), CancellationToken.None));
+        Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
+
+        // 未发生状态变更、吊销与审计。
+        Assert.Equal(UserStatus.Active,
+            (await provider.GetRequiredService<UserManager<PandaAuthUser>>().FindByIdAsync(user.Id))!.Status);
+        Assert.Empty(revoker.RevokedUsers);
+        Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
+    }
+
+    [Fact]
     public async Task ResetPassword_ByTheAccountOwnerIsRejected()
     {
         var (controller, provider, revoker) = Create();
