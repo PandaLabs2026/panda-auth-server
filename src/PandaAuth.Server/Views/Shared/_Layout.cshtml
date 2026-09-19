@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="light" />
+    <meta name="color-scheme" content="dark" />
     <title>@ViewData["Title"] - PandaAuth</title>
     <!-- 品牌资产走 /account/brand/*：公网 Caddy 只把 /account/* 等前缀分给 IDP，
          根路径 /brand/* 会落到门户 catch-all 而 404（见 Program.cs 的同名挂载注释）。 -->
@@ -12,22 +12,23 @@
     <link rel="icon" type="image/x-icon" href="/account/brand/favicon.ico" />
     <link rel="apple-touch-icon" href="/account/brand/apple-touch-icon.png" />
     <style>
-        /* 品牌令牌镜像自 panda-auth/design/tokens.css（2026-09 定稿·浅色系令牌）；
-           焦点环保留森林绿为品牌规范指定的功能色（与蓝主题区分）。深色分域迁移见 design/brand.md。 */
-        :root { --pa-primary: #2E6F96; --pa-primary-hover: #25597A; --pa-primary-soft: rgba(46, 111, 150, 0.12); --pa-on-primary: #ffffff; --pa-text: #2B3438; --pa-bg: #FAFAF8; --pa-focus-ring: #2F6F4F; --card: #ffffff; --muted: #6b7280; }
+        /* 品牌令牌镜像自 panda-auth/design/tokens.css 深色档（深浅分域「营销浅、产品深」——
+           IDP 登录页属登录态产品面，2026-09-19 迁移）；层级用明度与边框表达，不用阴影；
+           焦点环保留家族薄荷绿为深色档功能色。 */
+        :root { --pa-primary: #6FA6C9; --pa-primary-hover: #82B6D6; --pa-on-primary: #0E1F2B; --pa-text: #E7ECEA; --pa-bg: #151B1E; --pa-surface: #1F272B; --pa-border: rgba(255,255,255,.1); --pa-focus-ring: #8DD6B2; --muted: #AAB5B1; }
         * { box-sizing: border-box; }
         body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--pa-bg); font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; color: var(--pa-text); }
-        .card { width: 100%; max-width: 380px; background: var(--card); border: 1px solid #e5e7eb; border-radius: 14px; padding: 32px 28px; box-shadow: 0 8px 24px rgba(0,0,0,.05); }
+        .card { width: 100%; max-width: 380px; background: var(--pa-surface); border: 1px solid var(--pa-border); border-radius: 14px; padding: 32px 28px; }
         .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
         .brand img { width: 44px; height: 44px; display: block; }
         .brand h1 { font-size: 20px; margin: 0; color: var(--pa-primary); letter-spacing: .5px; }
         .brand small { color: var(--muted); font-size: 12px; }
         label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
-        input[type=text], input[type=password] { width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; }
+        input[type=text], input[type=password] { width: 100%; padding: 10px 12px; border: 1px solid var(--pa-border); border-radius: 8px; font-size: 14px; background: var(--pa-bg); color: var(--pa-text); }
         input:focus { outline: 2px solid var(--pa-focus-ring); border-color: transparent; }
         button { width: 100%; margin-top: 20px; padding: 11px 0; border: 0; border-radius: 8px; background: var(--pa-primary); color: var(--pa-on-primary); font-size: 15px; cursor: pointer; }
         button:hover { background: var(--pa-primary-hover); }
-        .error { margin-top: 14px; color: #b91c1c; font-size: 13px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 12px; }
+        .error { margin-top: 14px; color: #E07070; font-size: 13px; background: rgba(224,112,112,.12); border: 1px solid rgba(224,112,112,.35); border-radius: 8px; padding: 10px 12px; }
         .validation-summary-valid { display: none; }
         footer { margin-top: 20px; text-align: center; color: var(--muted); font-size: 12px; }
     </style>
@@ -35,7 +36,7 @@
 <body>
     <main class="card">
         <div class="brand">
-            <img src="/account/brand/pandaauth-logo-512.png" alt="PandaAuth" />
+            <img src="/account/brand/pandaauth-icon-512.png" alt="PandaAuth" />
             <div>
                 <h1>PandaAuth</h1>
                 <small>熊猫实验室统一身份认证</small>
