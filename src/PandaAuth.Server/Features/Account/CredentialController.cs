@@ -43,7 +43,10 @@ public sealed class CredentialController(
         using var ipLease = loginRateLimiter.AttemptByIp(HttpContext.Connection.RemoteIpAddress?.ToString());
         if (!ipLease.IsAcquired)
         {
-            return ForgotNeutral(model, email);
+            // 限流命中与成功发出同形（同一跳转、同一提示），不暴露差异。
+            TempData["ResetEmail"] = email;
+            TempData["Info"] = "如果该邮箱存在已注册账号，验证码已发送，请查收（5 分钟内有效）。";
+            return RedirectToAction(nameof(ResetPassword));
         }
 
         try
@@ -63,21 +66,21 @@ public sealed class CredentialController(
             // 吞掉差异：频控命中与成功发出对调用方完全同形。
         }
 
-        return ForgotNeutral(model, email);
-
-        IActionResult ForgotNeutral(ForgotPasswordViewModel viewModel, string normalizedEmail)
-        {
-            TempData["ResetEmail"] = normalizedEmail;
-            ModelState.Clear();
-            ViewData["Info"] = "如果该邮箱存在已注册账号，验证码已发送，请查收（5 分钟内有效）。";
-            return View(viewModel);
-        }
+        // 中性完成后直接带邮箱进重置页——验证码输入框在那里（PRG：刷新/回退不重复发信）。
+        TempData["ResetEmail"] = email;
+        TempData["Info"] = "如果该邮箱存在已注册账号，验证码已发送，请查收（5 分钟内有效）。";
+        return RedirectToAction(nameof(ResetPassword));
     }
 
     [HttpGet("reset-password")]
     public IActionResult ResetPassword()
     {
         var email = TempData["ResetEmail"] as string ?? string.Empty;
+        if (TempData["Info"] is string info)
+        {
+            ViewData["Info"] = info;
+        }
+
         return View(new ResetPasswordViewModel { Email = email });
     }
 

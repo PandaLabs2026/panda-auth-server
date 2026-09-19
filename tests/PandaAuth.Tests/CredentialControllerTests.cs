@@ -94,9 +94,10 @@ public class CredentialControllerTests
         var result = await controller.ForgotPassword(
             new ForgotPasswordViewModel { Email = "nobody@example.com" }, CancellationToken.None);
 
-        // 同一中性提示（视图无错误），且没有真实发送。
-        Assert.IsType<ViewResult>(result);
-        Assert.True(controller.ModelState.ErrorCount == 0);
+        // 中性跳转到重置页（无错误），且没有真实发送。
+        var redirect = Assert.IsType<RedirectToActionResult>(result);
+        Assert.Equal("ResetPassword", redirect.ActionName);
+        Assert.Equal("nobody@example.com", controller.TempData["ResetEmail"]);
         Assert.Empty(sender.VerificationCodes);
     }
 
