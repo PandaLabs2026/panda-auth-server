@@ -147,6 +147,16 @@ public sealed class AdminUsersController(
             return NotFound();
         }
 
+        // 封禁自重置：管理员重置自己的密码会跳过旧密码验证并强制下线自己（会话与令牌全部吊销），
+        // 新密码只能靠响应卡片一次性带回——一旦没接住就被锁在门外。改自己的密码属自助流程
+        // （旧密码验证），随 0.4 自助凭据管理交付（2026-09-19 用户拍板）。
+        var actorId = User.FindFirst(Claims.Subject)?.Value;
+        if (string.Equals(user.Id, actorId, StringComparison.Ordinal))
+        {
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "不能重置自己的密码",
+                detail: "管理端重置会强制下线目标账号的全部会话（包括你当前的管理台会话）。修改自己的密码请使用即将提供的自助改密流程。");
+        }
+
         var generated = string.IsNullOrEmpty(request?.NewPassword);
         var password = generated ? AdminPasswordGenerator.Generate() : request!.NewPassword!;
 

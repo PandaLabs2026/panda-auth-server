@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -183,6 +184,31 @@ public class AdminUsersControllerTests
         var manager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
         Assert.True(await manager.CheckPasswordAsync((await manager.FindByIdAsync(user.Id))!, "Custom!Passw0rdX"));
         Assert.Contains("generated\":false", Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable()).Detail);
+    }
+
+    [Fact]
+    public async Task ResetPassword_ByTheAccountOwnerIsRejected()
+    {
+        var (controller, provider, revoker) = Create();
+        var user = await SeedUserAsync(provider, "self-reset");
+
+        // 把操作者主体换成目标账号本人（sub 对齐），断言自重置被拒且无任何副作用。
+        controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim(Claims.Subject, user.Id),
+            new Claim(Claims.Name, "self-reset"),
+            new Claim(Claims.Role, PandaAuthRoles.Admin),
+        ], "TestBearer", Claims.Name, Claims.Role));
+
+        var problem = Assert.IsType<ObjectResult>(
+            await controller.ResetPassword(user.Id, null, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
+
+        // 未发生密码变更、吊销与审计。
+        var manager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
+        Assert.True(await manager.CheckPasswordAsync((await manager.FindByIdAsync(user.Id))!, "Passw0rd!1234"));
+        Assert.Empty(revoker.RevokedUsers);
+        Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
     }
 
     [Fact]
