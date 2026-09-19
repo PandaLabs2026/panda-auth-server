@@ -15,5 +15,5 @@
         <div class="notice">@notice</div>
     }
     <button type="submit">登录</button>
-    <p class="footnote"><a href="/account/forgot-password">忘记密码？</a></p>
+    <p class="footnote"><a href="/account/forgot-password@(Model.ReturnUrl is { Length: > 0 } ? $"?returnUrl={Uri.EscapeDataString(Model.ReturnUrl)}" : "")">忘记密码？</a></p>
 </form>

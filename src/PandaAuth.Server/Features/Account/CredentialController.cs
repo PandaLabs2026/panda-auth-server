@@ -25,9 +25,9 @@ public sealed class CredentialController(
 {
     /// <summary>忘记密码：输入邮箱请求验证码。防枚举——存在与否都走同一签发路径、回同一句话。</summary>
     [HttpGet("forgot-password")]
-    public IActionResult ForgotPassword()
+    public IActionResult ForgotPassword(string? returnUrl = null)
     {
-        return View(new ForgotPasswordViewModel());
+        return View(new ForgotPasswordViewModel { ReturnUrl = returnUrl });
     }
 
     [HttpPost("forgot-password")]
@@ -45,6 +45,7 @@ public sealed class CredentialController(
         {
             // 限流命中与成功发出同形（同一跳转、同一提示），不暴露差异。
             TempData["ResetEmail"] = email;
+            TempData["ReturnUrl"] = model.ReturnUrl;
             TempData["Info"] = "如果该邮箱存在已注册账号，验证码已发送，请查收（5 分钟内有效）。";
             return RedirectToAction(nameof(ResetPassword));
         }
@@ -67,7 +68,9 @@ public sealed class CredentialController(
         }
 
         // 中性完成后直接带邮箱进重置页——验证码输入框在那里（PRG：刷新/回退不重复发信）。
+        // ReturnUrl（发起方授权上下文）随 TempData 与表单隐藏字段双层携带，重置完成后回原发起方。
         TempData["ResetEmail"] = email;
+        TempData["ReturnUrl"] = model.ReturnUrl;
         TempData["Info"] = "如果该邮箱存在已注册账号，验证码已发送，请查收（5 分钟内有效）。";
         return RedirectToAction(nameof(ResetPassword));
     }
@@ -81,7 +84,7 @@ public sealed class CredentialController(
             ViewData["Info"] = info;
         }
 
-        return View(new ResetPasswordViewModel { Email = email });
+        return View(new ResetPasswordViewModel { Email = email, ReturnUrl = TempData["ReturnUrl"] as string });
     }
 
     [HttpPost("reset-password")]
@@ -128,7 +131,7 @@ public sealed class CredentialController(
         logger.LogInformation("用户通过邮箱验证码自助重置密码 userId={UserId}", user.Id);
 
         TempData["Notice"] = "密码已重置，请使用新密码登录。";
-        return RedirectToAction("Login", "Account");
+        return RedirectToAction("Login", "Account", new { returnUrl = model.ReturnUrl });
     }
 
     /// <summary>自助改密（已登录，IDP Cookie）：旧密码验证 + 新密码；成功后吊销全部令牌并登出。</summary>

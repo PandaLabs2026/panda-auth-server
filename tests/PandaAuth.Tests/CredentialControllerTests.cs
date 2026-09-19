@@ -139,15 +139,42 @@ public class CredentialControllerTests
             new ResetPasswordViewModel { Email = "reset@example.com", Code = code, NewPassword = "NewPass!2026x" },
             CancellationToken.None);
 
-        // 跳回登录页（成功形态），凭据与令牌全部更新。
+        // 跳回登录页并携带发起方 returnUrl（成功形态），凭据与令牌全部更新。
         var redirect = Assert.IsType<RedirectToActionResult>(result);
         Assert.Equal("Account", redirect.ControllerName);
         Assert.Equal("Login", redirect.ActionName);
+        Assert.Null(redirect.RouteValues?["returnUrl"]); // 本用例无发起方上下文
         var reloaded = await users.FindByIdAsync(user.Id);
         Assert.False(await users.CheckPasswordAsync(reloaded!, "Passw0rd!1234"));
         Assert.True(await users.CheckPasswordAsync(reloaded!, "NewPass!2026x"));
         Assert.Equal([user.Id], revoker.RevokedUsers);
         Assert.NotEqual(stampBefore, reloaded!.SecurityStamp);
+    }
+
+    [Fact]
+    public async Task ResetPassword_ReturnUrlFromForgotFlowIsPreserved()
+    {
+        var (controller, _, sender, _, users) = await CreateAsync();
+        await SeedUserAsync(users, "ctx@example.com");
+
+        // 忘记密码携带发起方上下文（OIDC authorize URL）
+        await controller.ForgotPassword(
+            new ForgotPasswordViewModel { Email = "ctx@example.com", ReturnUrl = "/connect/authorize?client_id=admin-web" },
+            CancellationToken.None);
+        Assert.Equal("/connect/authorize?client_id=admin-web", controller.TempData["ReturnUrl"]);
+
+        // GET 重置页把上下文放进表单模型
+        var resetView = Assert.IsType<ViewResult>(controller.ResetPassword());
+        var vm = Assert.IsType<ResetPasswordViewModel>(resetView.Model);
+        Assert.Equal("/connect/authorize?client_id=admin-web", vm.ReturnUrl);
+
+        // 重置成功 → 登录页带着 returnUrl（登录后回到原发起方而非门户首页）
+        var code = sender.VerificationCodes.Single().Code;
+        var result = await controller.ResetPassword(
+            new ResetPasswordViewModel { Email = "ctx@example.com", Code = code, NewPassword = "NewPass!2026x", ReturnUrl = "/connect/authorize?client_id=admin-web" },
+            CancellationToken.None);
+        var redirect = Assert.IsType<RedirectToActionResult>(result);
+        Assert.Equal("/connect/authorize?client_id=admin-web", redirect.RouteValues?["returnUrl"]);
     }
 
     [Fact]

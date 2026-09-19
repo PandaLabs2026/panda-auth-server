@@ -21,6 +21,10 @@ public sealed class ForgotPasswordViewModel
     [Required(ErrorMessage = "请输入邮箱。")]
     [EmailAddress(ErrorMessage = "邮箱格式不正确。")]
     public string Email { get; init; } = string.Empty;
+
+    /// <summary>发起方上下文（如 /connect/authorize?...）：贯穿忘记→重置→登录，完成后回到原发起方。</summary>
+    [HiddenInput]
+    public string? ReturnUrl { get; init; }
 }
 
 public sealed class ResetPasswordViewModel
@@ -35,6 +39,9 @@ public sealed class ResetPasswordViewModel
     [Required(ErrorMessage = "请输入新密码。")]
     [DataType(DataType.Password)]
     public string NewPassword { get; init; } = string.Empty;
+
+    [HiddenInput]
+    public string? ReturnUrl { get; init; }
 }
 
 public sealed class ChangePasswordViewModel
