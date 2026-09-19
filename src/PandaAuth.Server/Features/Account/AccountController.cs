@@ -22,6 +22,12 @@ public sealed class AccountController(
     [HttpGet("login")]
     public IActionResult Login(string? returnUrl = null)
     {
+        // 自助重置/改密（CredentialController）完成后跳转回来时带一次性提示。
+        if (TempData["Notice"] is string notice)
+        {
+            ViewData["Notice"] = notice;
+        }
+
         return View(new LoginViewModel { ReturnUrl = returnUrl });
     }
 

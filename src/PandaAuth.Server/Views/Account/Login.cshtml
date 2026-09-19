@@ -10,5 +10,10 @@
     <input asp-for="UserName" type="text" autocomplete="username" autofocus />
     <label asp-for="Password">密码</label>
     <input asp-for="Password" type="password" autocomplete="current-password" />
+    @if (ViewData["Notice"] is string notice)
+    {
+        <div class="notice">@notice</div>
+    }
     <button type="submit">登录</button>
+    <p class="footnote"><a href="/account/forgot-password">忘记密码？</a></p>
 </form>

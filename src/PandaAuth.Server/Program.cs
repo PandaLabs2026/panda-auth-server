@@ -11,7 +11,9 @@ using PandaAuth.Server.Configuration;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Admin;
 using PandaAuth.Server.Features.Tokens;
+using PandaAuth.Server.Infrastructure.Messaging;
 using PandaAuth.Server.Infrastructure.Persistence;
+using PandaAuth.Server.Features.Account;
 using PandaAuth.Server.Infrastructure.Security;
 using PandaAuth.Shared;
 
@@ -194,6 +196,28 @@ builder.Services.AddScoped<AdminAuditWriter>();
 builder.Services.AddScoped<ITokenRevoker, TokenRevocationService>();
 // 登录时间侧信道拉平用的 dummy 哈希：必须单例（只算一次哈希），校验仍用 scoped hasher。
 builder.Services.AddSingleton<DummyPasswordHash>();
+
+// ---- 邮件通道（Resend，移植自 panda-asst-server）----
+// 生产：缺 Email:ApiKey / Email:FromAddress 启动即失败（密钥经 compose 注入）；typed client
+// 让 HttpClient 处理器轮换由工厂管理。开发：DevEmailSender 验证码落日志，零外部依赖。
+// 注意：注册在 builder 阶段做环境判断用 builder.Environment（app 变量此时尚未创建）。
+builder.Services.AddOptions<EmailOptions>()
+    .Bind(builder.Configuration.GetSection(EmailOptions.SectionName))
+    .Validate(options => !builder.Environment.IsProduction()
+        || (!string.IsNullOrWhiteSpace(options.ApiKey) && !string.IsNullOrWhiteSpace(options.FromAddress)),
+        "生产环境必须配置 Email:ApiKey 与 Email:FromAddress。")
+    .ValidateOnStart();
+if (builder.Environment.IsProduction())
+{
+    builder.Services.AddHttpClient<IEmailSender, ResendEmailSender>();
+}
+else
+{
+    builder.Services.AddSingleton<IEmailSender, DevEmailSender>();
+}
+
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddScoped<OtpService>();
 // login_logs / admin_audit_logs 保留策略：后台按天删除超期审计记录（Auth:Audit:RetentionDays，默认 90 天）。
 builder.Services.AddHostedService<LoginLogRetentionService>();
 builder.Services.AddHealthChecks();
