@@ -5,10 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light" />
     <title>@ViewData["Title"] - PandaAuth</title>
-    <link rel="icon" type="image/png" sizes="32x32" href="~/brand/favicon-32.png" />
-    <link rel="icon" type="image/png" sizes="16x16" href="~/brand/favicon-16.png" />
-    <link rel="icon" type="image/x-icon" href="~/brand/favicon.ico" />
-    <link rel="apple-touch-icon" href="~/brand/apple-touch-icon.png" />
+    <!-- 品牌资产走 /account/brand/*：公网 Caddy 只把 /account/* 等前缀分给 IDP，
+         根路径 /brand/* 会落到门户 catch-all 而 404（见 Program.cs 的同名挂载注释）。 -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/account/brand/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/account/brand/favicon-16.png" />
+    <link rel="icon" type="image/x-icon" href="/account/brand/favicon.ico" />
+    <link rel="apple-touch-icon" href="/account/brand/apple-touch-icon.png" />
     <style>
         /* 品牌令牌镜像自 panda-auth/design/tokens.css（2026-09 定稿·浅色系令牌）；
            焦点环保留森林绿为品牌规范指定的功能色（与蓝主题区分）。深色分域迁移见 design/brand.md。 */
@@ -33,7 +35,7 @@
 <body>
     <main class="card">
         <div class="brand">
-            <img src="~/brand/pandaauth-logo-512.png" alt="PandaAuth" />
+            <img src="/account/brand/pandaauth-logo-512.png" alt="PandaAuth" />
             <div>
                 <h1>PandaAuth</h1>
                 <small>熊猫实验室统一身份认证</small>

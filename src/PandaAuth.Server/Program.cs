@@ -204,6 +204,17 @@ app.UseMiddleware<SecurityHeadersMiddleware>();
 // 品牌静态资源（wwwroot/brand/：登录页 favicon 与 mark），安全头之后挂载使 CSP 等头部同样覆盖静态响应。
 app.UseStaticFiles();
 
+// 公网形态（Caddy 同域分流，见元仓 WORKSPACE.md 路由表）只把 /connect/*、/account/*、/.well-known/*、
+// /healthz 分给 IDP：登录视图引用的 /brand/* 在公网会落到门户 catch-all 而 404（2026-09-19 生产实测
+// logo 404、破图）。故把 wwwroot/brand 以 /account/brand 前缀再挂一份——路径天然落在 IDP 的路由表内，
+// 视图改引 /account/brand/*，不动 Caddy。本地直连 9004 时两种路径都可用。
+app.UseStaticFiles(new StaticFileOptions
+{
+    RequestPath = "/account/brand",
+    FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(
+        Path.Combine(app.Environment.WebRootPath ?? "wwwroot", "brand")),
+});
+
 if (app.Environment.IsDevelopment())
 {
     // 开发环境：启动时幂等执行种子数据（生产通过 --migrate 显式执行）。
