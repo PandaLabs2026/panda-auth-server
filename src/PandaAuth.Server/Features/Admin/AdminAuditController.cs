@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using OpenIddict.Server.AspNetCore;
+using OpenIddict.Validation.AspNetCore;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Shared;
@@ -10,7 +10,7 @@ namespace PandaAuth.Server.Features.Admin;
 
 /// <summary>审计查询（只读）：登录日志与管理操作日志，均带时间过滤与分页。</summary>
 [Route("~/admin-api/audit")]
-[Authorize(AuthenticationSchemes = OpenIddictServerAspNetCoreDefaults.AuthenticationScheme, Roles = PandaAuthRoles.Admin)]
+[Authorize(AuthenticationSchemes = OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme, Policy = AdminApiAuthorization.PolicyName)]
 public sealed class AdminAuditController(PandaAuthDbContext dbContext) : Controller
 {
     internal const int MaxPageSize = 50;

@@ -102,7 +102,8 @@ public class AdminApiAuthorizationContractTests
 
         var authorize = controllerType.GetCustomAttribute<Microsoft.AspNetCore.Authorization.AuthorizeAttribute>();
         Assert.NotNull(authorize);
-        Assert.Equal(OpenIddict.Server.AspNetCore.OpenIddictServerAspNetCoreDefaults.AuthenticationScheme, authorize.AuthenticationSchemes);
-        Assert.Equal(PandaAuthRoles.Admin, authorize.Roles);
+        // 自定义 API 必须走 Validation 方案（Server 方案只对 /connect/* 提取身份）+ admin-api 策略。
+        Assert.Equal(OpenIddict.Validation.AspNetCore.OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme, authorize.AuthenticationSchemes);
+        Assert.Equal(AdminApiAuthorization.PolicyName, authorize.Policy);
     }
 }

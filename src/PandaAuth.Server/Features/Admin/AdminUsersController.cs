@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using OpenIddict.Server.AspNetCore;
+using OpenIddict.Validation.AspNetCore;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Tokens;
 using PandaAuth.Server.Infrastructure.Security;
@@ -17,7 +17,7 @@ namespace PandaAuth.Server.Features.Admin;
 /// 冻结与重置密码都联动批量吊销：令牌即时失效是 G06 的生效边界要求。
 /// </summary>
 [Route("~/admin-api/users")]
-[Authorize(AuthenticationSchemes = OpenIddictServerAspNetCoreDefaults.AuthenticationScheme, Roles = PandaAuthRoles.Admin)]
+[Authorize(AuthenticationSchemes = OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme, Policy = AdminApiAuthorization.PolicyName)]
 public sealed class AdminUsersController(
     UserManager<PandaAuthUser> userManager,
     ITokenRevoker tokenRevoker,

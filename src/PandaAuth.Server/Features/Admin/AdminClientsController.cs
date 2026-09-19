@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using OpenIddict.Abstractions;
 using OpenIddict.EntityFrameworkCore.Models;
-using OpenIddict.Server.AspNetCore;
+using OpenIddict.Validation.AspNetCore;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
 using PandaAuth.Shared;
@@ -17,7 +17,7 @@ namespace PandaAuth.Server.Features.Admin;
 /// 密钥轮换用 <c>UpdateAsync(application, secret)</c>——那是唯一会重新哈希的路径。
 /// </summary>
 [Route("~/admin-api/clients")]
-[Authorize(AuthenticationSchemes = OpenIddictServerAspNetCoreDefaults.AuthenticationScheme, Roles = PandaAuthRoles.Admin)]
+[Authorize(AuthenticationSchemes = OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme, Policy = AdminApiAuthorization.PolicyName)]
 public sealed class AdminClientsController(
     PandaAuthDbContext dbContext,
     IOpenIddictApplicationManager applications,

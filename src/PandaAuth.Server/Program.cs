@@ -9,6 +9,7 @@ using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
 using PandaAuth.Server.Configuration;
 using PandaAuth.Server.Domain;
+using PandaAuth.Server.Features.Admin;
 using PandaAuth.Server.Features.Tokens;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
@@ -166,7 +167,17 @@ openIddict.AddServer(options =>
         {
             options.UseAspNetCore().DisableTransportSecurityRequirement();
         }
-    });
+    })
+    // 自定义 API（/admin-api/*）的 Bearer 验证用 Validation 方案，而非 Server 方案——
+    // Server 方案只对它管理的端点（/connect/*，如 userinfo）提取身份，自定义端点会抛
+    // 「An identity cannot be extracted from this request」（2026-09-19 生产实测）。
+    // Validation 与 Server 同进程注册时自动复用其签名/加密凭据，无需另行配置 issuer/keys。
+    .AddValidation(options => options.UseAspNetCore());
+
+// Admin API 角色门禁：按 claim 短名（"role"）断言而非 Roles=——后者走 IsInRole，
+// 依赖 identity 的 RoleClaimType 映射（validation 方案默认是 ASP.NET 长名 URI），会静默 403。
+builder.Services.AddAuthorization(options => options.AddPolicy(AdminApiAuthorization.PolicyName, policy =>
+    policy.RequireClaim(OpenIddict.Abstractions.OpenIddictConstants.Claims.Role, PandaAuthRoles.Admin)));
 
 // 登录限流器条目承载在内存缓存上并按 TTL 回收（见 LoginRateLimiter）。
 builder.Services.AddMemoryCache();
