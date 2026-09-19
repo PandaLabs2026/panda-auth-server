@@ -6,8 +6,9 @@ using PandaAuth.Server.Infrastructure.Persistence;
 namespace PandaAuth.Server.Infrastructure.Security;
 
 /// <summary>
-/// 登录审计日志保留策略：按天删除超过保留期的 <c>login_logs</c> 记录。
-/// 每次登录尝试（含失败）都会同步写一行，且无分区、无保留期，长期运行会被无界撑大。
+/// 审计日志保留策略：按天删除超过保留期的 <c>login_logs</c> 与 <c>admin_audit_logs</c> 记录。
+/// 登录日志每次尝试（含失败）都同步写一行、管理日志每次变更写一行，且无分区、无保留期，
+/// 长期运行会被无界撑大。两类表共用同一保留期口径。
 /// </summary>
 /// <remarks>
 /// 口径（同时记录在 deploy/README.md，供运维核对）：
@@ -49,7 +50,10 @@ public sealed class LoginLogRetentionService(
                 var dbContext = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
                 var cutoff = ComputeCutoff(DateTimeOffset.UtcNow, retentionDays);
                 var removed = await PurgeAsync(dbContext, cutoff, BatchSize, stoppingToken);
-                logger.LogInformation("登录审计日志清理完成：删除 {Removed} 行，截止点 {Cutoff:O}。", removed, cutoff);
+                var removedAdmin = await PurgeAdminAuditAsync(dbContext, cutoff, BatchSize, stoppingToken);
+                logger.LogInformation(
+                    "审计日志清理完成：login_logs 删除 {Removed} 行、admin_audit_logs 删除 {RemovedAdmin} 行，截止点 {Cutoff:O}。",
+                    removed, removedAdmin, cutoff);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -98,6 +102,34 @@ public sealed class LoginLogRetentionService(
             }
 
             dbContext.LoginLogs.RemoveRange(expired);
+            await dbContext.SaveChangesAsync(cancellationToken);
+            removed += expired.Count;
+
+            if (expired.Count < batchSize)
+            {
+                return removed;
+            }
+        }
+    }
+
+    /// <summary>管理操作审计的同类分批删除（同 PurgeAsync 的实现约束：EF InMemory 不支持批量删除 API）。</summary>
+    internal static async Task<int> PurgeAdminAuditAsync(
+        PandaAuthDbContext dbContext, DateTimeOffset cutoff, int batchSize, CancellationToken cancellationToken)
+    {
+        var removed = 0;
+        while (true)
+        {
+            var expired = await dbContext.AdminAuditLogs
+                .Where(log => log.CreatedAt < cutoff)
+                .OrderBy(log => log.Id)
+                .Take(batchSize)
+                .ToListAsync(cancellationToken);
+            if (expired.Count == 0)
+            {
+                return removed;
+            }
+
+            dbContext.AdminAuditLogs.RemoveRange(expired);
             await dbContext.SaveChangesAsync(cancellationToken);
             removed += expired.Count;
 
