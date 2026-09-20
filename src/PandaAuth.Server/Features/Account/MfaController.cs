@@ -20,13 +20,13 @@ public sealed class MfaController(
     ILogger<MfaController> logger) : Controller
 {
     [HttpGet]
-    public async Task<IActionResult> Index(CancellationToken cancellationToken)
+    public async Task<IActionResult> Index(string? returnUrl, CancellationToken cancellationToken)
     {
         var user = await AdminAsync();
         if (user is null) return Forbid();
         var count = await db.WebAuthnCredentials.CountAsync(item => item.UserId == user.Id && item.RevokedAt == null, cancellationToken);
         var hasTotp = await db.TotpFactors.AnyAsync(item => item.UserId == user.Id && item.RevokedAt == null && item.ConfirmedAt != null, cancellationToken);
-        return View(new MfaViewModel { ActivePasskeyCount = count, HasTotp = hasTotp });
+        return View(new MfaViewModel { ActivePasskeyCount = count, HasTotp = hasTotp, ReturnUrl = Url.IsLocalUrl(returnUrl) ? returnUrl! : "/admin/" });
     }
 
     [HttpPost("enrollment/options")]

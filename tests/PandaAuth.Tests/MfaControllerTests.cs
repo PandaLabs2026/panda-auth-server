@@ -38,7 +38,7 @@ public class MfaControllerTests
             ControllerContext = new ControllerContext { HttpContext = context },
         };
 
-        var result = await controller.Index(CancellationToken.None);
+        var result = await controller.Index(null, CancellationToken.None);
 
         Assert.IsType<ForbidResult>(result);
     }

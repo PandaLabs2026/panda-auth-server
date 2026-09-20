@@ -50,7 +50,7 @@
       const credential = await navigator.credentials.get({ publicKey: assertionOptions(ceremony.publicKey) });
       if (!credential) throw new Error('未能验证 Passkey。');
       await post(root.dataset.assertionUrl, { ceremonyId: ceremony.ceremonyId, response: responseJson(credential) });
-      show('Passkey 验证成功。');
+      location.assign(root.dataset.returnUrl);
     } catch (error) { show(error.message); }
   });
   let totpFactorId;
@@ -71,7 +71,7 @@
   document.getElementById('assert-totp')?.addEventListener('click', async () => {
     try {
       await post(root.dataset.totpAssertUrl, { code: document.getElementById('totp-assert-code').value });
-      show('TOTP 验证成功。');
+      location.assign(root.dataset.returnUrl);
     } catch (error) { show(error.message); }
   });
 })();
