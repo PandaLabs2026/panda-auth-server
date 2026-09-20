@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Shared;
 using Xunit;
 
@@ -55,6 +56,29 @@ public class LoginCookieTests
         await users.UpdateAsync(user);
         using var scope = provider.CreateScope();
         Assert.False((await Context(scope.ServiceProvider, cookie).AuthenticateAsync(LoginSessionService.Scheme)).Succeeded);
+    }
+
+    [Fact]
+    public async Task MarkMfaAsync_ReissuesTicketWithWebAuthnMethodAndTimestamp()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "alice" };
+        await users.CreateAsync(user, "Strong!Pass123");
+        var cookie = await IssueAsync(provider, user);
+
+        using var scope = provider.CreateScope();
+        var context = Context(scope.ServiceProvider, cookie);
+        Assert.True((await context.AuthenticateAsync(LoginSessionService.Scheme)).Succeeded);
+        await scope.ServiceProvider.GetRequiredService<LoginSessionService>()
+            .MarkMfaAsync(context, MfaClaimTypes.WebAuthn);
+        var renewedCookie = context.Response.Headers.SetCookie.Single()!.Split(';')[0];
+
+        using var verificationScope = provider.CreateScope();
+        var verification = await Context(verificationScope.ServiceProvider, renewedCookie)
+            .AuthenticateAsync(LoginSessionService.Scheme);
+        Assert.Equal(MfaClaimTypes.WebAuthn, verification.Principal!.FindFirst(MfaClaimTypes.Method)!.Value);
+        Assert.True(long.TryParse(verification.Principal.FindFirst(MfaClaimTypes.VerifiedAt)!.Value, out _));
     }
 
     private static async Task<string> IssueAsync(ServiceProvider provider, PandaUser user)

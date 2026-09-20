@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using PandaAuth.Server.Domain;
+using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Shared;
 
 namespace PandaAuth.Server.Infrastructure.Security;
@@ -17,7 +18,7 @@ public sealed record LoginOutcome(
     bool IsNotAllowed = false,
     PandaUser? User = null);
 
-public sealed class LoginSessionService(UserService users)
+public sealed class LoginSessionService(UserService users, TimeProvider clock)
 {
     public const string Scheme = "PandaAuth.Login.v2";
     public const string StampClaim = "panda_security_stamp";
@@ -42,6 +43,28 @@ public sealed class LoginSessionService(UserService users)
     }
 
     public Task SignOutAsync(HttpContext context) => context.SignOutAsync(Scheme);
+
+    /// <summary>Rotates the current IDP cookie after a verified MFA ceremony without altering its subject or lifetime.</summary>
+    public async Task MarkMfaAsync(HttpContext context, string method)
+    {
+        if (method is not (MfaClaimTypes.WebAuthn or MfaClaimTypes.Totp))
+        {
+            throw new ArgumentOutOfRangeException(nameof(method));
+        }
+
+        var ticket = await context.AuthenticateAsync(Scheme);
+        if (!ticket.Succeeded || ticket.Principal is null)
+        {
+            throw new InvalidOperationException("当前登录会话无效。");
+        }
+
+        var identity = new ClaimsIdentity(ticket.Principal.Claims.Where(claim =>
+            claim.Type is not MfaClaimTypes.Method and not MfaClaimTypes.VerifiedAt), Scheme);
+        identity.AddClaim(new Claim(MfaClaimTypes.Method, method));
+        identity.AddClaim(new Claim(MfaClaimTypes.VerifiedAt,
+            clock.GetUtcNow().ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        await context.SignInAsync(Scheme, new ClaimsPrincipal(identity), ticket.Properties);
+    }
 
     public static async Task ValidateCookieAsync(CookieValidatePrincipalContext context)
     {

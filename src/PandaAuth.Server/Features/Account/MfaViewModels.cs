@@ -1,0 +1,7 @@
+using Fido2NetLib;
+
+namespace PandaAuth.Server.Features.Account;
+
+public sealed class MfaViewModel { public int ActivePasskeyCount { get; init; } }
+public sealed class CompletePasskeyEnrollmentRequest { public Guid CeremonyId { get; init; } public AuthenticatorAttestationRawResponse? Response { get; init; } public string? FriendlyName { get; init; } }
+public sealed class CompletePasskeyAssertionRequest { public Guid CeremonyId { get; init; } public AuthenticatorAssertionRawResponse? Response { get; init; } }
