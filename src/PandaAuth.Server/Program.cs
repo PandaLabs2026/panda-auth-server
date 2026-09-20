@@ -1,4 +1,5 @@
 using System.Net;
+using Fido2NetLib;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -154,7 +155,9 @@ builder.Services.AddAuthorization(options => options.AddPolicy(AdminApiAuthoriza
 
 // 登录限流器条目承载在内存缓存上并按 TTL 回收（见 LoginRateLimiter）。
 builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<IFido2>(_ => new Fido2(WebAuthnRelyingParty.Create(authOptions.Issuer)));
 builder.Services.AddSingleton<MfaChallengeStore>();
+builder.Services.AddScoped<WebAuthnCeremonyService>();
 builder.Services.AddSingleton(serviceProvider => new TotpSecretProtector(
     authOptions.Mfa.GetEncryptionKey(builder.Environment.IsProduction()), authOptions.Mfa.TotpKeyVersion));
 builder.Services.AddSingleton<LoginRateLimiter>();
