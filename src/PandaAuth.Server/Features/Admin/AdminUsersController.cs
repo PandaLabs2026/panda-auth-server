@@ -6,6 +6,8 @@ using OpenIddict.Validation.AspNetCore;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Tokens;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Server.Infrastructure.Security.Mfa;
+using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Shared;
 using static OpenIddict.Abstractions.OpenIddictConstants;
 
@@ -22,6 +24,7 @@ public sealed class AdminUsersController(
     RoleService roleManager,
     ITokenRevoker tokenRevoker,
     AdminAuditWriter audit,
+    PandaAuthDbContext db,
     ILogger<AdminUsersController> logger) : Controller
 {
     internal const int MaxPageSize = 50;
@@ -518,6 +521,11 @@ public sealed class AdminUsersController(
     [HttpPost("{id}/reset-2fa")]
     public async Task<IActionResult> ResetTwoFactor(string id, CancellationToken cancellationToken)
     {
+        if (!RecentMfaRequirement.HasRecentWebAuthn(User, DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5)))
+        {
+            return Forbid();
+        }
+
         var user = await userManager.FindByIdAsync(id);
         if (user is null)
         {
@@ -529,14 +537,21 @@ public sealed class AdminUsersController(
             return blocked;
         }
 
-        if (!user.TwoFactorEnabled)
+        var actorId = User.FindFirst(Claims.Subject)?.Value;
+        if (string.IsNullOrEmpty(actorId) || string.Equals(actorId, user.Id, StringComparison.Ordinal))
         {
-            return Ok(await DetailOf(user));
+            return BadRequest(new { error = "管理员不能恢复自己的 MFA。" });
         }
 
         user.TwoFactorEnabled = false;
+        var now = DateTimeOffset.UtcNow;
+        foreach (var credential in await db.WebAuthnCredentials.Where(item => item.UserId == user.Id && item.RevokedAt == null).ToListAsync(cancellationToken)) credential.RevokedAt = credential.UpdatedAt = now;
+        foreach (var factor in await db.TotpFactors.Where(item => item.UserId == user.Id && item.RevokedAt == null).ToListAsync(cancellationToken)) factor.RevokedAt = now;
         await userManager.UpdateSecurityStampAsync(user);
         await tokenRevoker.RevokeUserTokensAsync(user.Id, cancellationToken: cancellationToken);
+        db.MfaRecoveryEvents.Add(new MfaRecoveryEvent { ActorUserId = actorId, TargetUserId = user.Id, Reason = "admin_reset", AuthenticationMethod = MfaClaimTypes.WebAuthn, CreatedAt = now });
+        await db.SaveChangesAsync(cancellationToken);
+        await audit.RecordAsync(AdminAuditing.Entry(User!, AdminAuditAction.UserResetTwoFactor, "user", user.Id, new { recovery = true }, HttpContext.Connection.RemoteIpAddress?.ToString()), cancellationToken);
         return Ok(await DetailOf(user));
     }
 

@@ -24,6 +24,7 @@ public class AdminUsersControllerTests
             provider.GetRequiredService<RoleService>(),
             provider.GetRequiredService<ITokenRevoker>(),
             provider.GetRequiredService<AdminAuditWriter>(),
+            provider.GetRequiredService<PandaAuthDbContext>(),
             provider.GetRequiredService<ILoggerFactory>().CreateLogger<AdminUsersController>())
         {
             ControllerContext = new() { HttpContext = AdminTestHost.HttpContext(provider) },
@@ -643,15 +644,16 @@ public class AdminUsersControllerTests
     }
 
     [Fact]
-    public async Task ResetTwoFactor_IdempotentWhenDisabled()
+    public async Task ResetTwoFactor_WhenLegacyFlagDisabled_StillRevokesSessionsAndWritesRecoveryAudit()
     {
         var (controller, provider, revoker) = Create();
         var user = await SeedUserAsync(provider, "no-two-fa");
 
         DetailOf(await controller.ResetTwoFactor(user.Id, CancellationToken.None));
 
-        Assert.Empty(revoker.RevokedUsers);
-        Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
+        Assert.Equal([user.Id], revoker.RevokedUsers);
+        Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().MfaRecoveryEvents.AsEnumerable());
+        Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
     }
 
     // ---- 注销（Deactivate，终态） ----

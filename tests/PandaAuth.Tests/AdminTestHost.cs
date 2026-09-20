@@ -12,6 +12,7 @@ using PandaAuth.Server.Features.Admin;
 using PandaAuth.Server.Features.Tokens;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Shared;
 using Xunit;
 using static OpenIddict.Abstractions.OpenIddictConstants;
@@ -49,6 +50,8 @@ internal static class AdminTestHost
             new Claim(Claims.Subject, "actor-1"),
             new Claim(Claims.Name, "admin"),
             new Claim(Claims.Role, PandaAuthRoles.Admin),
+            new Claim(MfaClaimTypes.Method, MfaClaimTypes.WebAuthn),
+            new Claim(MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
         ], "TestBearer", Claims.Name, Claims.Role));
 
     public static DefaultHttpContext HttpContext(IServiceProvider provider)
