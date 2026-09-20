@@ -17,6 +17,20 @@ public class RecentMfaRequirementTests
     }
 
     [Fact]
+    public void UnixTimestampWrittenByLoginSession_SatisfiesFreshMfaRequirement()
+    {
+        var now = DateTimeOffset.Parse("2026-09-20T12:00:00Z");
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim(MfaClaimTypes.Method, MfaClaimTypes.WebAuthn),
+            new Claim(MfaClaimTypes.VerifiedAt, now.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture)),
+        ], "test"));
+
+        Assert.True(RecentMfaRequirement.HasValidMfa(principal, now, TimeSpan.FromHours(8)));
+        Assert.True(RecentMfaRequirement.HasRecentWebAuthn(principal, now, TimeSpan.FromMinutes(5)));
+    }
+
+    [Fact]
     public void UsedTotpTimeStep_CannotBeAcceptedAgain()
     {
         var secret = System.Text.Encoding.ASCII.GetBytes("12345678901234567890");
