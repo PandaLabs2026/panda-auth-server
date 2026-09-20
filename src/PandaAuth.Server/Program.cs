@@ -2,7 +2,6 @@ using System.Net;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -37,45 +36,9 @@ builder.Services.AddDbContext<PandaAuthDbContext>(options =>
     options.UseOpenIddict();
 });
 
-builder.Services.AddIdentityCore<PandaAuthUser>(options =>
-{
-    options.Lockout.AllowedForNewUsers = true;
-    options.Lockout.MaxFailedAccessAttempts = 5;
-    options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(5);
-    options.Password.RequiredLength = 10;
-    options.Password.RequireDigit = true;
-    options.Password.RequireLowercase = true;
-    options.Password.RequireUppercase = true;
-    options.Password.RequireNonAlphanumeric = true;
-})
-.AddRoles<PandaAuthRole>()
-.AddEntityFrameworkStores<PandaAuthDbContext>()
-.AddSignInManager()
-.AddDefaultTokenProviders();
+builder.Services.AddUserStore(authOptions.HttpsRequired);
 
-builder.Services
-    .AddAuthentication(options =>
-    {
-        options.DefaultScheme = IdentityConstants.ApplicationScheme;
-        options.DefaultSignInScheme = IdentityConstants.ExternalScheme;
-        options.DefaultChallengeScheme = IdentityConstants.ApplicationScheme;
-    })
-    .AddIdentityCookies(options =>
-    {
-        options.ApplicationCookie?.Configure(cookie =>
-        {
-            cookie.LoginPath = "/account/login";
-            cookie.Cookie.Name = "PandaAuth.Login";
-            cookie.Cookie.HttpOnly = true;
-            cookie.Cookie.SameSite = SameSiteMode.Lax;
-            cookie.Cookie.SecurePolicy = authOptions.HttpsRequired
-                ? CookieSecurePolicy.Always
-                : CookieSecurePolicy.SameAsRequest;
-        });
-    });
-
-// Argon2id 替换 Identity 默认哈希器（文档门禁：无明文、无 MD5、无 SHA256 裸存）。
-builder.Services.AddScoped<IPasswordHasher<PandaAuthUser>, Argon2idPasswordHasher>();
+builder.Services.AddScoped<IPasswordHasher, Argon2idPasswordHasher>();
 
 if (authOptions.DataProtectionKeyPath.Length > 0)
 {

@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Identity;
+using PandaAuth.Server.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -384,7 +384,7 @@ public class DbSeederTests
         Assert.Contains("http://localhost:9006/admin/callback/logout/pandaauth",
             await applications.GetPostLogoutRedirectUrisAsync(adminWeb));
         Assert.True(await applications.ValidateClientSecretAsync(adminWeb, "admin-web-dev-secret"));
-        var userManager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
+        var userManager = provider.GetRequiredService<UserService>();
         Assert.NotNull(await userManager.FindByNameAsync("admin@pandalabs.cc"));
     }
 
@@ -536,9 +536,7 @@ public class DbSeederTests
         services.AddDbContext<PandaAuthDbContext>(builder => builder
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .UseOpenIddict());
-        services.AddIdentityCore<PandaAuthUser>()
-            .AddRoles<PandaAuthRole>()
-            .AddEntityFrameworkStores<PandaAuthDbContext>();
+        services.AddUserStore();
         services.AddOpenIddict()
             .AddCore(builder => builder.UseEntityFrameworkCore().UseDbContext<PandaAuthDbContext>());
         return services.BuildServiceProvider();

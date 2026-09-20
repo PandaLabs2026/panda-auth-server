@@ -1,5 +1,5 @@
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,22 +19,22 @@ namespace PandaAuth.Tests;
 /// 依赖一律从根容器解析：普通 ServiceProvider 不校验作用域，且同一实例贯穿整个用例，
 /// 便于直接读取写入的审计记录。
 /// </summary>
-internal static class TestIdentityHost
+internal static class TestUserStoreHost
 {
     internal static ServiceProvider Create(
-        AuthOptions? options = null, IPasswordHasher<PandaAuthUser>? passwordHasher = null)
+        AuthOptions? options = null, IPasswordHasher? passwordHasher = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
+        services.AddControllersWithViews();
+        services.AddDataProtection().UseEphemeralDataProtectionProvider();
         services.AddHttpContextAccessor();
         services.AddSingleton(Options.Create(options ?? new AuthOptions()));
+        var databaseName = Guid.NewGuid().ToString("N");
         services.AddDbContext<PandaAuthDbContext>(builder => builder
-            .UseInMemoryDatabase(Guid.NewGuid().ToString("N")));
+            .UseInMemoryDatabase(databaseName));
         services.AddAuthentication();
-        services.AddIdentityCore<PandaAuthUser>()
-            .AddRoles<PandaAuthRole>()
-            .AddEntityFrameworkStores<PandaAuthDbContext>()
-            .AddSignInManager();
+        services.AddUserStore();
         services.AddMemoryCache();
         services.AddSingleton<LoginRateLimiter>();
         services.AddScoped<LoginAuditWriter>();
@@ -54,23 +54,23 @@ internal static class TestIdentityHost
     /// 直接命中 !ModelState.IsValid 而提前返回（真实 MVC 每条请求新建控制器）。
     /// </summary>
     internal static AccountController CreateAccountController(
-        ServiceProvider provider, IPasswordHasher<PandaAuthUser> passwordHasher)
+        ServiceProvider provider, IPasswordHasher passwordHasher)
         => new(
-            provider.GetRequiredService<UserManager<PandaAuthUser>>(),
-            provider.GetRequiredService<SignInManager<PandaAuthUser>>(),
+            provider.GetRequiredService<UserService>(),
+            provider.GetRequiredService<LoginSessionService>(),
             provider.GetRequiredService<LoginRateLimiter>(),
             provider.GetRequiredService<LoginAuditWriter>(),
             passwordHasher,
             provider.GetRequiredService<DummyPasswordHash>())
         {
-            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { RequestServices = provider } },
         };
 
     internal static AuthorizationController CreateAuthorizationController(ServiceProvider provider)
         => new(
-            provider.GetRequiredService<UserManager<PandaAuthUser>>(),
-            provider.GetRequiredService<SignInManager<PandaAuthUser>>())
+            provider.GetRequiredService<UserService>(),
+            provider.GetRequiredService<LoginSessionService>())
         {
-            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { RequestServices = provider } },
         };
 }

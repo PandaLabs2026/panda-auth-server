@@ -50,8 +50,8 @@ public class AuthorizationUserinfoTests
 
     private static async Task<Dictionary<string, object?>> InvokeUserinfoAsync(string[] roles, string[] scopes)
     {
-        using var provider = TestIdentityHost.Create();
-        var controller = TestIdentityHost.CreateAuthorizationController(provider);
+        using var provider = TestUserStoreHost.Create();
+        var controller = TestUserStoreHost.CreateAuthorizationController(provider);
         controller.ControllerContext.HttpContext.RequestServices = BuildAuthenticationServices(
             CreateAccessTokenPrincipal(roles, scopes));
 

@@ -1,4 +1,3 @@
-using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -27,8 +26,8 @@ public class AccountLoginTimingTests
     public async Task UnknownUser_StillVerifiesPasswordOnceAgainstDummyHash()
     {
         var hasher = new RecordingPasswordHasher();
-        using var provider = TestIdentityHost.Create(passwordHasher: hasher);
-        var controller = TestIdentityHost.CreateAccountController(provider, hasher);
+        using var provider = TestUserStoreHost.Create(passwordHasher: hasher);
+        var controller = TestUserStoreHost.CreateAccountController(provider, hasher);
         var model = UnknownUser();
 
         var result = await controller.Login(model, CancellationToken.None);
@@ -50,8 +49,8 @@ public class AccountLoginTimingTests
     public async Task UnknownUser_IsAuditedAsUserNotFound()
     {
         var hasher = new RecordingPasswordHasher();
-        using var provider = TestIdentityHost.Create(passwordHasher: hasher);
-        var controller = TestIdentityHost.CreateAccountController(provider, hasher);
+        using var provider = TestUserStoreHost.Create(passwordHasher: hasher);
+        var controller = TestUserStoreHost.CreateAccountController(provider, hasher);
         var model = UnknownUser();
 
         await controller.Login(model, CancellationToken.None);
@@ -68,12 +67,12 @@ public class AccountLoginTimingTests
     {
         // 冻结分支与「用户不存在」分支保持同一代价：文案已明示冻结，但耗时不应再额外区分路径。
         var hasher = new RecordingPasswordHasher();
-        using var provider = TestIdentityHost.Create(passwordHasher: hasher);
-        var userManager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
-        var frozen = new PandaAuthUser { UserName = "frozen-user", Status = UserStatus.Frozen };
+        using var provider = TestUserStoreHost.Create(passwordHasher: hasher);
+        var userManager = provider.GetRequiredService<UserService>();
+        var frozen = new PandaUser { UserName = "frozen-user", Status = UserStatus.Frozen };
         Assert.True((await userManager.CreateAsync(frozen, "Sup3r$ecret-Password")).Succeeded);
 
-        var controller = TestIdentityHost.CreateAccountController(provider, hasher);
+        var controller = TestUserStoreHost.CreateAccountController(provider, hasher);
         var model = UnknownUser("frozen-user");
 
         var result = await controller.Login(model, CancellationToken.None);
@@ -95,12 +94,12 @@ public class AccountLoginTimingTests
     {
         // dummy 哈希若每次现算，未知用户名会变成「一次哈希 + 一次校验」，比真实用户更慢。
         var hasher = new RecordingPasswordHasher();
-        using var provider = TestIdentityHost.Create(passwordHasher: hasher);
+        using var provider = TestUserStoreHost.Create(passwordHasher: hasher);
 
         // 每次登录新建控制器（等价于 MVC 的每请求一实例）。
-        await TestIdentityHost.CreateAccountController(provider, hasher)
+        await TestUserStoreHost.CreateAccountController(provider, hasher)
             .Login(UnknownUser(), CancellationToken.None);
-        await TestIdentityHost.CreateAccountController(provider, hasher)
+        await TestUserStoreHost.CreateAccountController(provider, hasher)
             .Login(UnknownUser("another-ghost"), CancellationToken.None);
 
         Assert.Equal(2, hasher.VerifyCalls);
@@ -108,7 +107,7 @@ public class AccountLoginTimingTests
     }
 
     /// <summary>记录调用次数的 hasher 替身；哈希转发给真实 Argon2 实现，保证被校验的是一份真实哈希。</summary>
-    private sealed class RecordingPasswordHasher : IPasswordHasher<PandaAuthUser>
+    private sealed class RecordingPasswordHasher : IPasswordHasher
     {
         private readonly Argon2idPasswordHasher _inner = new();
 
@@ -120,19 +119,19 @@ public class AccountLoginTimingTests
 
         public string? LastProvidedPassword { get; private set; }
 
-        public string HashPassword(PandaAuthUser user, string password)
+        public string Hash(string password)
         {
             HashCalls++;
-            return _inner.HashPassword(user, password);
+            return _inner.Hash(password);
         }
 
-        public PasswordVerificationResult VerifyHashedPassword(
-            PandaAuthUser user, string? hashedPassword, string providedPassword)
+        public PasswordVerificationOutcome Verify(
+            string? hashedPassword, string providedPassword)
         {
             VerifyCalls++;
             LastHashedPassword = hashedPassword;
             LastProvidedPassword = providedPassword;
-            return _inner.VerifyHashedPassword(user, hashedPassword, providedPassword);
+            return _inner.Verify(hashedPassword, providedPassword);
         }
     }
 }

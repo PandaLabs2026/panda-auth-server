@@ -1,4 +1,3 @@
-using Microsoft.AspNetCore.Identity;
 using Xunit;
 using System.Text;
 using PandaAuth.Server.Domain;
@@ -13,34 +12,34 @@ public class Argon2idPasswordHasherTests
     [Fact]
     public void Hash_ThenVerify_CorrectPassword_Succeeds()
     {
-        var hash = _hasher.HashPassword(new PandaAuthUser(), "Sup3r$ecret-Password");
-        var result = _hasher.VerifyHashedPassword(new PandaAuthUser(), hash, "Sup3r$ecret-Password");
+        var hash = _hasher.Hash("Sup3r$ecret-Password");
+        var result = _hasher.Verify(hash, "Sup3r$ecret-Password");
 
-        Assert.Equal(PasswordVerificationResult.Success, result);
+        Assert.Equal(PasswordVerificationOutcome.Success, result);
     }
 
     [Fact]
     public void Verify_WrongPassword_Fails()
     {
-        var hash = _hasher.HashPassword(new PandaAuthUser(), "Sup3r$ecret-Password");
+        var hash = _hasher.Hash("Sup3r$ecret-Password");
 
-        Assert.Equal(PasswordVerificationResult.Failed,
-            _hasher.VerifyHashedPassword(new PandaAuthUser(), hash, "wrong-password"));
+        Assert.Equal(PasswordVerificationOutcome.Failed,
+            _hasher.Verify(hash, "wrong-password"));
     }
 
     [Fact]
     public void Verify_MalformedHash_Fails()
     {
-        var result = _hasher.VerifyHashedPassword(new PandaAuthUser(), "not-a-phc-string", "whatever");
+        var result = _hasher.Verify("not-a-phc-string", "whatever");
 
-        Assert.Equal(PasswordVerificationResult.Failed, result);
+        Assert.Equal(PasswordVerificationOutcome.Failed, result);
     }
 
     [Fact]
     public void Hash_SamePassword_Twice_ProducesDifferentSalts()
     {
-        var first = _hasher.HashPassword(new PandaAuthUser(), "same-password");
-        var second = _hasher.HashPassword(new PandaAuthUser(), "same-password");
+        var first = _hasher.Hash("same-password");
+        var second = _hasher.Hash("same-password");
 
         Assert.NotEqual(first, second);
     }
@@ -48,7 +47,7 @@ public class Argon2idPasswordHasherTests
     [Fact]
     public void Hash_UsesPhcArgon2idFormat()
     {
-        var hash = _hasher.HashPassword(new PandaAuthUser(), "whatever");
+        var hash = _hasher.Hash("whatever");
 
         Assert.StartsWith(
             $"$argon2id$v=19$m={Argon2idPasswordHasher.MemorySizeKib},t={Argon2idPasswordHasher.Iterations},p={Argon2idPasswordHasher.Parallelism}$",
@@ -63,8 +62,8 @@ public class Argon2idPasswordHasherTests
         var legacyHash = Argon2idPasswordHasher.Format(
             salt, Argon2idPasswordHasher.Compute("legacy-password", salt, 8192, 1, 1), 8192, 1, 1);
 
-        var result = _hasher.VerifyHashedPassword(new PandaAuthUser(), legacyHash, "legacy-password");
+        var result = _hasher.Verify(legacyHash, "legacy-password");
 
-        Assert.Equal(PasswordVerificationResult.SuccessRehashNeeded, result);
+        Assert.Equal(PasswordVerificationOutcome.SuccessRehashNeeded, result);
     }
 }

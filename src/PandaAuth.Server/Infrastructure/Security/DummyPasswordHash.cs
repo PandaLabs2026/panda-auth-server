@@ -1,4 +1,3 @@
-using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
 using PandaAuth.Server.Domain;
 
@@ -12,7 +11,7 @@ namespace PandaAuth.Server.Infrastructure.Security;
 /// <remarks>
 /// 该哈希惰性计算一次并常驻缓存：若每次尝试现算，未知用户名会变成「一次哈希 + 一次校验」，
 /// 反而比真实用户更慢，侧信道依旧存在。
-/// 持有者必须是单例，而 <see cref="IPasswordHasher{TUser}"/> 注册为 scoped，
+/// 持有者必须是单例，而 <see cref="IPasswordHasher"/> 注册为 scoped，
 /// 故此处只缓存哈希字符串，校验仍由调用方用自己作用域内的 hasher 执行；
 /// 首次计算也通过 <see cref="IServiceScopeFactory"/> 取 DI 中注册的 hasher，
 /// 保证替换哈希实现（算法或参数变化）时 dummy 哈希与真实哈希保持同一口径。
@@ -29,8 +28,8 @@ public sealed class DummyPasswordHash
         _hash = new Lazy<string>(() =>
         {
             using var scope = scopeFactory.CreateScope();
-            var hasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher<PandaAuthUser>>();
-            return hasher.HashPassword(new PandaAuthUser(), SourcePassword);
+            var hasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
+            return hasher.Hash(SourcePassword);
         }, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 

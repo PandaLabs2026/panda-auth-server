@@ -1,7 +1,6 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Routing;
@@ -39,16 +38,13 @@ public class CredentialControllerTests
         public Task SendAsync(string email, string subject, string htmlBody, CancellationToken ct) => Task.CompletedTask;
     }
 
-    private static async Task<(CredentialController Controller, ServiceProvider Provider, StubEmailSender Sender, StubTokenRevoker Revoker, UserManager<PandaAuthUser> Users)> CreateAsync()
+    private static async Task<(CredentialController Controller, ServiceProvider Provider, StubEmailSender Sender, StubTokenRevoker Revoker, UserService Users)> CreateAsync()
     {
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddMvcCore();
         services.AddDbContext<PandaAuthDbContext>(builder => builder.UseInMemoryDatabase(Guid.NewGuid().ToString("N")));
-        services.AddIdentityCore<PandaAuthUser>()
-            .AddRoles<PandaAuthRole>()
-            .AddEntityFrameworkStores<PandaAuthDbContext>()
-            .AddSignInManager();
+        services.AddUserStore();
         services.AddMemoryCache();
         services.AddAuthentication();
         services.AddSingleton<LoginRateLimiter>();
@@ -60,10 +56,10 @@ public class CredentialControllerTests
         services.AddScoped<OtpService>();
         var provider = services.BuildServiceProvider();
 
-        var users = provider.GetRequiredService<UserManager<PandaAuthUser>>();
+        var users = provider.GetRequiredService<UserService>();
         var controller = new CredentialController(
             users,
-            provider.GetRequiredService<SignInManager<PandaAuthUser>>(),
+            provider.GetRequiredService<LoginSessionService>(),
             provider.GetRequiredService<LoginRateLimiter>(),
             provider.GetRequiredService<OtpService>(),
             provider.GetRequiredService<IEmailSender>(),
@@ -79,9 +75,9 @@ public class CredentialControllerTests
         return (controller, provider, (StubEmailSender)provider.GetRequiredService<IEmailSender>(), revoker, users);
     }
 
-    private static async Task<PandaAuthUser> SeedUserAsync(UserManager<PandaAuthUser> users, string email, UserStatus status = UserStatus.Active)
+    private static async Task<PandaUser> SeedUserAsync(UserService users, string email, UserStatus status = UserStatus.Active)
     {
-        var user = new PandaAuthUser { UserName = email, Email = email, Status = status };
+        var user = new PandaUser { UserName = email, Email = email, Status = status };
         await users.CreateAsync(user, "Passw0rd!1234");
         return user;
     }

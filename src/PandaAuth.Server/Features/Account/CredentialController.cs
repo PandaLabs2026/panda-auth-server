@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Tokens;
@@ -15,8 +14,8 @@ namespace PandaAuth.Server.Features.Account;
 /// </summary>
 [Route("~/account")]
 public sealed class CredentialController(
-    UserManager<PandaAuthUser> userManager,
-    SignInManager<PandaAuthUser> signInManager,
+    UserService userManager,
+    LoginSessionService signInManager,
     LoginRateLimiter loginRateLimiter,
     OtpService otpService,
     IEmailSender emailSender,
@@ -165,6 +164,9 @@ public sealed class CredentialController(
             return View(model);
         }
 
+        // CheckPasswordSignInAsync can retry after a concurrency conflict. From this point on
+        // every mutation must use its reloaded entity, not the pre-check instance.
+        user = check.User!;
         var (changed, error) = await ReplacePasswordAsync(user, model.NewPassword);
         if (!changed)
         {
@@ -174,7 +176,7 @@ public sealed class CredentialController(
 
         await userManager.UpdateSecurityStampAsync(user);
         await tokenRevoker.RevokeUserTokensAsync(user.Id, cancellationToken: cancellationToken);
-        await signInManager.SignOutAsync();
+        await signInManager.SignOutAsync(HttpContext);
         logger.LogInformation("用户自助修改密码 userId={UserId}（已吊销全部令牌并登出）", user.Id);
 
         TempData["Notice"] = "密码已修改，请使用新密码重新登录。";
@@ -187,22 +189,11 @@ public sealed class CredentialController(
     /// 安全戳一并回滚：AddPasswordAsync 内部已轮换，不还原会让一次失败的改密
     /// 仍然踹掉目标既有 Cookie 会话（与管理端重置同一口径）。
     /// </summary>
-    private async Task<(bool Changed, string? Error)> ReplacePasswordAsync(PandaAuthUser user, string newPassword)
+    private async Task<(bool Changed, string? Error)> ReplacePasswordAsync(PandaUser user, string newPassword)
     {
-        var originalHash = user.PasswordHash;
-        var originalStamp = user.SecurityStamp;
-        var remove = await userManager.RemovePasswordAsync(user);
-        if (!remove.Succeeded)
-        {
-            return (false, "密码重置失败，请稍后再试。");
-        }
-
-        var add = await userManager.AddPasswordAsync(user, newPassword);
+        var add = await userManager.ReplacePasswordAsync(user, newPassword);
         if (!add.Succeeded)
         {
-            user.PasswordHash = originalHash;
-            user.SecurityStamp = originalStamp;
-            await userManager.UpdateAsync(user);
             return (false, string.Join("；", add.Errors.Select(error => error.Description)));
         }
 

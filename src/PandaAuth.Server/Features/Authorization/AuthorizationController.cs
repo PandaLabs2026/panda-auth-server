@@ -3,7 +3,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Identity;
+using PandaAuth.Server.Infrastructure.Security;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
@@ -16,8 +16,8 @@ namespace PandaAuth.Server.Features.Authorization;
 
 [Route("~/connect")]
 public sealed class AuthorizationController(
-    UserManager<PandaAuthUser> userManager,
-    SignInManager<PandaAuthUser> signInManager) : Controller
+    UserService userManager,
+    LoginSessionService signInManager) : Controller
 {
     [HttpGet("authorize")]
     [Authorize]
@@ -26,18 +26,18 @@ public sealed class AuthorizationController(
         var request = HttpContext.GetOpenIddictServerRequest()
             ?? throw new InvalidOperationException("无法解析 OIDC 授权请求。");
 
-        var authResult = await HttpContext.AuthenticateAsync(IdentityConstants.ApplicationScheme);
+        var authResult = await HttpContext.AuthenticateAsync(LoginSessionService.Scheme);
         if (authResult is not { Succeeded: true })
         {
             return Challenge(
                 new AuthenticationProperties { RedirectUri = Request.Path + Request.QueryString },
-                IdentityConstants.ApplicationScheme);
+                LoginSessionService.Scheme);
         }
 
         var user = await userManager.GetUserAsync(authResult.Principal!);
         if (user is null || user.Status != UserStatus.Active)
         {
-            await signInManager.SignOutAsync();
+            await signInManager.SignOutAsync(HttpContext);
             return Forbid(new AuthenticationProperties(new Dictionary<string, string?>
             {
                 [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.InvalidGrant,
@@ -154,14 +154,14 @@ public sealed class AuthorizationController(
         // 尽力注销本地登录 Cookie；OpenIddict 负责校验 post_logout_redirect_uri 并完成协议层登出。
         if (User.Identity?.IsAuthenticated == true)
         {
-            await signInManager.SignOutAsync();
+            await signInManager.SignOutAsync(HttpContext);
         }
 
         return SignOut(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
     }
 
     // internal 而非 private：签发给 AT 的声明集合属对外契约（角色受 roles scope 约束），需要可测。
-    internal async Task<ClaimsPrincipal> CreatePrincipalAsync(PandaAuthUser user, ImmutableArray<string> scopes)
+    internal async Task<ClaimsPrincipal> CreatePrincipalAsync(PandaUser user, ImmutableArray<string> scopes)
     {
         var identity = new ClaimsIdentity(
             TokenValidationParameters.DefaultAuthenticationType, Claims.Name, Claims.Role);

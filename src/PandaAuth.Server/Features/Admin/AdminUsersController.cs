@@ -1,6 +1,5 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using OpenIddict.Validation.AspNetCore;
@@ -19,8 +18,8 @@ namespace PandaAuth.Server.Features.Admin;
 [Route("~/admin-api/users")]
 [Authorize(AuthenticationSchemes = OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme, Policy = AdminApiAuthorization.PolicyName)]
 public sealed class AdminUsersController(
-    UserManager<PandaAuthUser> userManager,
-    RoleManager<PandaAuthRole> roleManager,
+    UserService userManager,
+    RoleService roleManager,
     ITokenRevoker tokenRevoker,
     AdminAuditWriter audit,
     ILogger<AdminUsersController> logger) : Controller
@@ -85,7 +84,7 @@ public sealed class AdminUsersController(
         var generated = string.IsNullOrEmpty(request.Password);
         var password = generated ? AdminPasswordGenerator.Generate() : request.Password!;
 
-        var user = new PandaAuthUser
+        var user = new PandaUser
         {
             UserName = request.UserName.Trim(),
             Email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim(),
@@ -109,13 +108,13 @@ public sealed class AdminUsersController(
         if (request.GrantAdminRole)
         {
             // 预检角色存在：AddToRoleAsync 对缺失角色抛 InvalidOperationException 而非返回失败结果。
-            if (!await roleManager.RoleExistsAsync(PandaAuthUser.AdminRole))
+            if (!await roleManager.RoleExistsAsync(PandaUser.AdminRole))
             {
                 roleGrantError = "admin 角色不存在（种子未执行？）";
             }
             else
             {
-                var grant = await userManager.AddToRoleAsync(user, PandaAuthUser.AdminRole);
+                var grant = await userManager.AddToRoleAsync(user, PandaUser.AdminRole);
                 if (!grant.Succeeded)
                 {
                     roleGrantError = string.Join("; ", grant.Errors.Select(error => error.Description));
@@ -255,21 +254,9 @@ public sealed class AdminUsersController(
         // 不回滚旧哈希会把账号锁死在「无密码」状态（谁也登不进，包括管理员重置）。
         // 安全戳同理：AddPasswordAsync 内部已轮换并持久化，失败路径一并还原——
         // 否则一次「没发生的」重置也会把目标的既有 Cookie 会话全部踹下线。
-        var originalHash = user.PasswordHash;
-        var originalStamp = user.SecurityStamp;
-        var remove = await userManager.RemovePasswordAsync(user);
-        if (!remove.Succeeded)
-        {
-            return Problem(statusCode: StatusCodes.Status500InternalServerError, title: "移除旧密码失败",
-                detail: string.Join("; ", remove.Errors.Select(error => error.Description)));
-        }
-
-        var add = await userManager.AddPasswordAsync(user, password);
+        var add = await userManager.ReplacePasswordAsync(user, password);
         if (!add.Succeeded)
         {
-            user.PasswordHash = originalHash;
-            user.SecurityStamp = originalStamp;
-            await userManager.UpdateAsync(user);
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "新密码不合规",
                 detail: string.Join("; ", add.Errors.Select(error => error.Description)));
         }
@@ -332,7 +319,7 @@ public sealed class AdminUsersController(
         // 但令牌一过期/一刷新即 403，解铃还须另一个管理员——与自冻结同一口径。
         var actorId = User.FindFirst(Claims.Subject)?.Value;
         if (string.Equals(user.Id, actorId, StringComparison.Ordinal)
-            && !targetRoles.Contains(PandaAuthUser.AdminRole, StringComparer.OrdinalIgnoreCase))
+            && !targetRoles.Contains(PandaUser.AdminRole, StringComparer.OrdinalIgnoreCase))
         {
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "不能移除自己的管理员角色",
                 detail: "移除后你的下一次令牌刷新将被拒绝，且无法再进入管理台。请由另一位管理员操作。");
@@ -526,8 +513,7 @@ public sealed class AdminUsersController(
     }
 
     /// <summary>
-    /// 重置两步验证：关闭 2FA 并吊销令牌。幂等：未启用时不产生审计。
-    /// 允许 self：当前 2FA 未在登录强制，关闭后仍可用密码登录，无死锁向径。
+    /// 重置两步验证：本批不保留旧凭据；管理员明确解除 MFA 阻断并吊销令牌。
     /// </summary>
     [HttpPost("{id}/reset-2fa")]
     public async Task<IActionResult> ResetTwoFactor(string id, CancellationToken cancellationToken)
@@ -548,25 +534,9 @@ public sealed class AdminUsersController(
             return Ok(await DetailOf(user));
         }
 
-        user.UpdatedAt = DateTimeOffset.UtcNow;
-        var disable = await userManager.SetTwoFactorEnabledAsync(user, false);
-        if (!disable.Succeeded)
-        {
-            return Problem(statusCode: StatusCodes.Status500InternalServerError, title: "关闭两步验证失败",
-                detail: string.Join("; ", disable.Errors.Select(error => error.Description)));
-        }
-
+        user.TwoFactorEnabled = false;
         await userManager.UpdateSecurityStampAsync(user);
         await tokenRevoker.RevokeUserTokensAsync(user.Id, cancellationToken: cancellationToken);
-        await audit.RecordAsync(
-            AdminAuditing.Entry(User!, AdminAuditAction.UserResetTwoFactor, "user", user.Id,
-                new { userName = user.UserName },
-                HttpContext.Connection.RemoteIpAddress?.ToString()),
-            cancellationToken);
-        logger.LogInformation(
-            "管理员 {Actor} 重置了用户 {UserId}（{UserName}）的两步验证。",
-            User.FindFirst(Claims.Subject)?.Value, user.Id, user.UserName);
-
         return Ok(await DetailOf(user));
     }
 
@@ -635,13 +605,13 @@ public sealed class AdminUsersController(
     /// 否则一次解冻误点就能「复活」账号，绕过注销端点的逐字确认门禁。
     /// Deactivate 端点刻意不经此守卫：它自己依赖「已注销 → 幂等返回」语义。
     /// </summary>
-    private IActionResult? DeletedGuard(PandaAuthUser user)
+    private IActionResult? DeletedGuard(PandaUser user)
         => user.Status == UserStatus.Deleted
             ? Problem(statusCode: StatusCodes.Status400BadRequest, title: "账号已注销",
                 detail: "注销为终态，不可再变更；恢复须直接操作数据库。")
             : null;
 
-    private async Task<AdminUserDetail> DetailOf(PandaAuthUser user)
+    private async Task<AdminUserDetail> DetailOf(PandaUser user)
     {
         var roles = await userManager.GetRolesAsync(user);
         return new AdminUserDetail(
@@ -650,6 +620,6 @@ public sealed class AdminUsersController(
             user.RegisterChannel, user.Region, user.CreatedAt, user.UpdatedAt);
     }
 
-    private static AdminUserSummary SummaryOf(PandaAuthUser user)
+    private static AdminUserSummary SummaryOf(PandaUser user)
         => new(user.Id, user.UserName!, user.Email, user.Nickname, user.Status, user.CreatedAt);
 }

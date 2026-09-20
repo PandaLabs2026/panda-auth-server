@@ -1,12 +1,14 @@
-using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using PandaAuth.Server.Domain;
 
 namespace PandaAuth.Server.Infrastructure.Persistence;
 
 public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
-    : IdentityDbContext<PandaAuthUser, PandaAuthRole, string>(options)
+    : DbContext(options)
 {
+    public DbSet<PandaUser> Users => Set<PandaUser>();
+    public DbSet<PandaRole> Roles => Set<PandaRole>();
+    public DbSet<PandaUserRole> UserRoles => Set<PandaUserRole>();
     public DbSet<LoginLog> LoginLogs => Set<LoginLog>();
 
     public DbSet<AdminAuditLog> AdminAuditLogs => Set<AdminAuditLog>();
@@ -18,6 +20,35 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
+
+        builder.Entity<PandaUser>(entity =>
+        {
+            entity.ToTable("panda_users");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.UserName).HasMaxLength(256);
+            entity.Property(x => x.NormalizedUserName).HasMaxLength(256);
+            entity.Property(x => x.Email).HasMaxLength(256);
+            entity.Property(x => x.NormalizedEmail).HasMaxLength(256);
+            entity.Property(x => x.ConcurrencyStamp).IsConcurrencyToken();
+            entity.HasIndex(x => x.NormalizedUserName).IsUnique();
+            entity.HasIndex(x => x.NormalizedEmail).IsUnique();
+        });
+        builder.Entity<PandaRole>(entity =>
+        {
+            entity.ToTable("panda_roles");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Name).HasMaxLength(256);
+            entity.Property(x => x.NormalizedName).HasMaxLength(256);
+            entity.Property(x => x.ConcurrencyStamp).IsConcurrencyToken();
+            entity.HasIndex(x => x.NormalizedName).IsUnique();
+        });
+        builder.Entity<PandaUserRole>(entity =>
+        {
+            entity.ToTable("panda_user_roles");
+            entity.HasKey(x => new { x.UserId, x.RoleId });
+            entity.HasOne<PandaUser>().WithMany().HasForeignKey(x => x.UserId);
+            entity.HasOne<PandaRole>().WithMany().HasForeignKey(x => x.RoleId);
+        });
 
         builder.Entity<LoginLog>(entity =>
         {
