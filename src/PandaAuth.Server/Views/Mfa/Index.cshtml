@@ -1,0 +1,16 @@
+@model PandaAuth.Server.Features.Account.MfaViewModel
+@{
+    ViewData["Title"] = "管理员安全验证";
+}
+
+<div id="mfa" data-options-url="/account/mfa/enrollment/options" data-enroll-url="/account/mfa/enrollment/complete" data-assertion-options-url="/account/mfa/assertion/options" data-assertion-url="/account/mfa/assertion/complete">
+    @Html.AntiForgeryToken()
+    <p class="footnote">已配置 @Model.ActivePasskeyCount 个 Passkey。设备会要求生物识别或 PIN。</p>
+    <div id="mfa-message" class="notice" hidden></div>
+    <button type="button" id="enroll-passkey">添加 Passkey</button>
+    @if (Model.ActivePasskeyCount > 0)
+    {
+        <button type="button" id="assert-passkey">验证 Passkey</button>
+    }
+</div>
+<script src="/account/mfa.js" defer></script>
