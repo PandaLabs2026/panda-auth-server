@@ -10,6 +10,7 @@ using OpenIddict.Abstractions;
 using OpenIddict.Server.AspNetCore;
 using PandaAuth.Shared;
 using PandaAuth.Server.Domain;
+using PandaAuth.Server.Infrastructure.Security.Mfa;
 using static OpenIddict.Abstractions.OpenIddictConstants;
 
 namespace PandaAuth.Server.Features.Authorization;
@@ -45,7 +46,7 @@ public sealed class AuthorizationController(
             }), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
         }
 
-        var principal = await CreatePrincipalAsync(user, request.GetScopes());
+        var principal = await CreatePrincipalAsync(user, request.GetScopes(), authResult.Principal);
 
         // P0：内部生态客户端 ConsentType=Implicit，自动同意；交互式授权确认页属 Phase 1。
         return SignIn(principal, OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
@@ -87,7 +88,7 @@ public sealed class AuthorizationController(
             return InvalidGrant("账号不存在或已被冻结。");
         }
 
-        var principal = await CreatePrincipalAsync(user, authResult.Principal!.GetScopes());
+        var principal = await CreatePrincipalAsync(user, authResult.Principal!.GetScopes(), authResult.Principal);
         return SignIn(principal, OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
     }
 
@@ -161,13 +162,21 @@ public sealed class AuthorizationController(
     }
 
     // internal 而非 private：签发给 AT 的声明集合属对外契约（角色受 roles scope 约束），需要可测。
-    internal async Task<ClaimsPrincipal> CreatePrincipalAsync(PandaUser user, ImmutableArray<string> scopes)
+    internal async Task<ClaimsPrincipal> CreatePrincipalAsync(PandaUser user, ImmutableArray<string> scopes, ClaimsPrincipal? mfaSource = null)
     {
         var identity = new ClaimsIdentity(
             TokenValidationParameters.DefaultAuthenticationType, Claims.Name, Claims.Role);
 
         identity.AddClaim(new Claim(Claims.Subject, user.Id));
         identity.AddClaim(new Claim(Claims.Name, user.UserName ?? user.Id));
+
+        // MFA 事实只从已验签的 IDP Cookie 或 OpenIddict 票据继承，绝不读取客户端参数。
+        if (mfaSource?.FindFirst(MfaClaimTypes.Method)?.Value is { Length: > 0 } method &&
+            mfaSource.FindFirst(MfaClaimTypes.VerifiedAt)?.Value is { Length: > 0 } verifiedAt)
+        {
+            identity.AddClaim(new Claim(MfaClaimTypes.Method, method));
+            identity.AddClaim(new Claim(MfaClaimTypes.VerifiedAt, verifiedAt));
+        }
 
         if (scopes.Contains(Scopes.Profile))
         {

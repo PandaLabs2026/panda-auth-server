@@ -151,7 +151,9 @@ openIddict.AddServer(options =>
 // Admin API 角色门禁：按 claim 短名（"role"）断言而非 Roles=——后者走 IsInRole，
 // 依赖 identity 的 RoleClaimType 映射（validation 方案默认是 ASP.NET 长名 URI），会静默 403。
 builder.Services.AddAuthorization(options => options.AddPolicy(AdminApiAuthorization.PolicyName, policy =>
-    policy.RequireClaim(OpenIddict.Abstractions.OpenIddictConstants.Claims.Role, PandaAuthRoles.Admin)));
+    policy.RequireClaim(OpenIddict.Abstractions.OpenIddictConstants.Claims.Role, PandaAuthRoles.Admin)
+        .RequireAssertion(context => RecentMfaRequirement.HasValidMfa(
+            context.User, DateTimeOffset.UtcNow, TimeSpan.FromHours(8)))));
 
 // 登录限流器条目承载在内存缓存上并按 TTL 回收（见 LoginRateLimiter）。
 builder.Services.AddMemoryCache();
