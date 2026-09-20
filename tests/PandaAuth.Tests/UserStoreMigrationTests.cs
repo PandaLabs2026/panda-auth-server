@@ -43,6 +43,36 @@ public class UserStoreMigrationTests
     }
 
     [PostgresFact]
+    public async Task MfaCredentialId_IsUniqueAfterMigration()
+    {
+        await using var fixture = await TestDatabase.CreateAsync();
+        await using var db = fixture.Context();
+        await db.Database.MigrateAsync();
+
+        db.Users.AddRange(
+            new PandaUser { Id = "mfa-user-1", UserName = "mfa-user-1", NormalizedUserName = "MFA-USER-1" },
+            new PandaUser { Id = "mfa-user-2", UserName = "mfa-user-2", NormalizedUserName = "MFA-USER-2" });
+        await db.SaveChangesAsync();
+
+        db.WebAuthnCredentials.Add(new MfaWebAuthnCredential
+        {
+            UserId = "mfa-user-1",
+            CredentialId = [1, 2, 3],
+            PublicKeyCose = [4, 5, 6],
+        });
+        await db.SaveChangesAsync();
+
+        db.WebAuthnCredentials.Add(new MfaWebAuthnCredential
+        {
+            UserId = "mfa-user-2",
+            CredentialId = [1, 2, 3],
+            PublicKeyCose = [7, 8, 9],
+        });
+
+        await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
+    }
+
+    [PostgresFact]
     public async Task MigrationPreservesAccountsMembershipsAndOpenIddictSubjects_WithoutDualWrites()
     {
         await using var fixture = await TestDatabase.CreateAsync();

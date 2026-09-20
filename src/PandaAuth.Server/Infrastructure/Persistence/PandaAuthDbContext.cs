@@ -17,6 +17,12 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
 
     public DbSet<SigningKeyRecord> SigningKeys => Set<SigningKeyRecord>();
 
+    public DbSet<MfaWebAuthnCredential> WebAuthnCredentials => Set<MfaWebAuthnCredential>();
+
+    public DbSet<MfaTotpFactor> TotpFactors => Set<MfaTotpFactor>();
+
+    public DbSet<MfaRecoveryEvent> MfaRecoveryEvents => Set<MfaRecoveryEvent>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
@@ -82,6 +88,45 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
         {
             entity.ToTable("signing_keys");
             entity.HasKey(x => x.KeyId);
+        });
+
+        builder.Entity<MfaWebAuthnCredential>(entity =>
+        {
+            entity.ToTable("panda_webauthn_credentials");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.CredentialId).IsRequired();
+            entity.Property(x => x.PublicKeyCose).IsRequired();
+            entity.Property(x => x.Aaguid).HasMaxLength(36);
+            entity.Property(x => x.FriendlyName).HasMaxLength(80);
+            entity.HasIndex(x => x.CredentialId).IsUnique();
+            entity.HasIndex(x => new { x.UserId, x.RevokedAt });
+            entity.HasOne<PandaUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<MfaTotpFactor>(entity =>
+        {
+            entity.ToTable("panda_totp_factors");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.KeyVersion).HasMaxLength(32);
+            entity.Property(x => x.Nonce).IsRequired();
+            entity.Property(x => x.Ciphertext).IsRequired();
+            entity.Property(x => x.Tag).IsRequired();
+            entity.Property(x => x.ConcurrencyStamp).IsConcurrencyToken();
+            entity.HasIndex(x => x.UserId).IsUnique().HasFilter("\"RevokedAt\" IS NULL");
+            entity.HasOne<PandaUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<MfaRecoveryEvent>(entity =>
+        {
+            entity.ToTable("panda_mfa_recovery_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Reason).HasMaxLength(500);
+            entity.Property(x => x.AuthenticationMethod).HasMaxLength(32);
+            entity.Property(x => x.RequestId).HasMaxLength(128);
+            entity.HasIndex(x => new { x.ActorUserId, x.CreatedAt });
+            entity.HasIndex(x => new { x.TargetUserId, x.CreatedAt });
+            entity.HasOne<PandaUser>().WithMany().HasForeignKey(x => x.ActorUserId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<PandaUser>().WithMany().HasForeignKey(x => x.TargetUserId).OnDelete(DeleteBehavior.Restrict);
         });
     }
 }
