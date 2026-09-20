@@ -29,6 +29,8 @@ public class MfaControllerTests
             users,
             new WebAuthnCeremonyService(new Fido2(WebAuthnRelyingParty.Create("https://auth.example.test")),
                 provider.GetRequiredService<PandaAuthDbContext>(), new MfaChallengeStore(provider.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>(), TimeProvider.System)),
+            new TotpFactorService(provider.GetRequiredService<PandaAuthDbContext>(),
+                new TotpSecretProtector(Convert.FromBase64String("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="), "v1"), TimeProvider.System),
             provider.GetRequiredService<LoginSessionService>(),
             provider.GetRequiredService<PandaAuthDbContext>(),
             provider.GetRequiredService<ILoggerFactory>().CreateLogger<MfaController>())

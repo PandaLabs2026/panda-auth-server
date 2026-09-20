@@ -53,4 +53,19 @@
       show('Passkey 验证成功。');
     } catch (error) { show(error.message); }
   });
+  let totpFactorId;
+  document.getElementById('begin-totp')?.addEventListener('click', async () => {
+    try {
+      const enrollment = await post(root.dataset.totpOptionsUrl);
+      totpFactorId = enrollment.factorId;
+      document.getElementById('totp-secret').textContent = enrollment.secret;
+      document.getElementById('totp-setup').hidden = false;
+    } catch (error) { show(error.message); }
+  });
+  document.getElementById('confirm-totp')?.addEventListener('click', async () => {
+    try {
+      await post(root.dataset.totpConfirmUrl, { factorId: totpFactorId, code: document.getElementById('totp-code').value });
+      show('TOTP 备用验证已确认。');
+    } catch (error) { show(error.message); }
+  });
 })();

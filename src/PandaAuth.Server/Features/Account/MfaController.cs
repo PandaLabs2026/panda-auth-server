@@ -14,6 +14,7 @@ namespace PandaAuth.Server.Features.Account;
 public sealed class MfaController(
     UserService users,
     WebAuthnCeremonyService ceremonies,
+    TotpFactorService totpFactors,
     LoginSessionService sessions,
     PandaAuthDbContext db,
     ILogger<MfaController> logger) : Controller
@@ -24,7 +25,8 @@ public sealed class MfaController(
         var user = await AdminAsync();
         if (user is null) return Forbid();
         var count = await db.WebAuthnCredentials.CountAsync(item => item.UserId == user.Id && item.RevokedAt == null, cancellationToken);
-        return View(new MfaViewModel { ActivePasskeyCount = count });
+        var hasTotp = await db.TotpFactors.AnyAsync(item => item.UserId == user.Id && item.RevokedAt == null && item.ConfirmedAt != null, cancellationToken);
+        return View(new MfaViewModel { ActivePasskeyCount = count, HasTotp = hasTotp });
     }
 
     [HttpPost("enrollment/options")]
@@ -90,6 +92,33 @@ public sealed class MfaController(
             logger.LogWarning(exception, "Passkey assertion rejected adminId={UserId}", user.Id);
             return BadRequest(new { error = "Passkey 验证未完成，请重试。" });
         }
+    }
+
+    [HttpPost("totp/options")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> BeginTotp(CancellationToken cancellationToken)
+    {
+        var user = await AdminAsync();
+        if (user is null) return Forbid();
+        try
+        {
+            var enrollment = await totpFactors.BeginEnrollmentAsync(user.Id, cancellationToken);
+            return Ok(new { factorId = enrollment.FactorId, secret = enrollment.Secret, provisioningUri = enrollment.ProvisioningUri });
+        }
+        catch (InvalidOperationException exception) { return BadRequest(new { error = exception.Message }); }
+    }
+
+    [HttpPost("totp/confirm")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ConfirmTotp([FromBody] ConfirmTotpRequest request, CancellationToken cancellationToken)
+    {
+        var user = await AdminAsync();
+        if (user is null) return Forbid();
+        if (!await totpFactors.ConfirmAsync(user.Id, request.FactorId, request.Code, cancellationToken))
+            return BadRequest(new { error = "验证码错误或已过期。" });
+        await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.Totp);
+        logger.LogInformation("TOTP confirmed adminId={UserId}", user.Id);
+        return Ok(new { status = "ok" });
     }
 
     private async Task<PandaUser?> AdminAsync()
