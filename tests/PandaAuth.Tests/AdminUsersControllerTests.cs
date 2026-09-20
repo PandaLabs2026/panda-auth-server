@@ -215,6 +215,8 @@ public class AdminUsersControllerTests
             new Claim(Claims.Subject, user.Id),
             new Claim(Claims.Name, "self-freeze"),
             new Claim(Claims.Role, PandaAuthRoles.Admin),
+            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.WebAuthn),
+            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
         ], "TestBearer", Claims.Name, Claims.Role));
 
         var problem = Assert.IsType<ObjectResult>(
@@ -240,6 +242,8 @@ public class AdminUsersControllerTests
             new Claim(Claims.Subject, user.Id),
             new Claim(Claims.Name, "self-reset"),
             new Claim(Claims.Role, PandaAuthRoles.Admin),
+            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.WebAuthn),
+            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
         ], "TestBearer", Claims.Name, Claims.Role));
 
         var problem = Assert.IsType<ObjectResult>(
@@ -292,6 +296,8 @@ public class AdminUsersControllerTests
             new Claim(Claims.Subject, userId),
             new Claim(Claims.Name, userName),
             new Claim(Claims.Role, PandaAuthRoles.Admin),
+            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.WebAuthn),
+            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
         ], "TestBearer", Claims.Name, Claims.Role));
 
     private static async Task EnsureAdminRoleAsync(ServiceProvider provider)
