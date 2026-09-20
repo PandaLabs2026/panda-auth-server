@@ -174,6 +174,44 @@ public class CredentialControllerTests
     }
 
     [Fact]
+    public async Task ChangePassword_LocalReturnUrl_IsPreservedForCancelNavigation()
+    {
+        var (controller, _, _, _, _) = await CreateAsync();
+
+        var result = controller.ChangePassword("/admin");
+
+        var view = Assert.IsType<ViewResult>(result);
+        var model = Assert.IsType<ChangePasswordViewModel>(view.Model);
+        Assert.Equal("/admin", model.ReturnUrl);
+    }
+
+    [Fact]
+    public async Task ChangePassword_ExternalReturnUrl_UsesRootForCancelNavigation()
+    {
+        var (controller, _, _, _, _) = await CreateAsync();
+
+        var result = controller.ChangePassword("https://attacker.example/admin");
+
+        var view = Assert.IsType<ViewResult>(result);
+        var model = Assert.IsType<ChangePasswordViewModel>(view.Model);
+        Assert.Equal("/", model.ReturnUrl);
+    }
+
+    [Fact]
+    public async Task ChangePassword_InvalidSubmission_PreservesLocalReturnUrlForCancelNavigation()
+    {
+        var (controller, _, _, _, _) = await CreateAsync();
+        controller.ModelState.AddModelError(nameof(ChangePasswordViewModel.CurrentPassword), "required");
+
+        var result = await controller.ChangePassword(
+            new ChangePasswordViewModel { ReturnUrl = "/admin" }, CancellationToken.None);
+
+        var view = Assert.IsType<ViewResult>(result);
+        var model = Assert.IsType<ChangePasswordViewModel>(view.Model);
+        Assert.Equal("/admin", model.ReturnUrl);
+    }
+
+    [Fact]
     public async Task ResetPassword_WrongCode_Rejected_NothingChanges()
     {
         var (controller, _, sender, revoker, users) = await CreateAsync();

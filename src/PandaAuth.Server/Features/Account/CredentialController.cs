@@ -136,9 +136,9 @@ public sealed class CredentialController(
     /// <summary>自助改密（已登录，IDP Cookie）：旧密码验证 + 新密码；成功后吊销全部令牌并登出。</summary>
     [Authorize]
     [HttpGet("change-password")]
-    public IActionResult ChangePassword()
+    public IActionResult ChangePassword(string? returnUrl = null)
     {
-        return View(new ChangePasswordViewModel());
+        return View(new ChangePasswordViewModel { ReturnUrl = NormalizeLocalReturnUrl(returnUrl) });
     }
 
     [Authorize]
@@ -146,6 +146,13 @@ public sealed class CredentialController(
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> ChangePassword(ChangePasswordViewModel model, CancellationToken cancellationToken)
     {
+        model = new ChangePasswordViewModel
+        {
+            CurrentPassword = model.CurrentPassword,
+            NewPassword = model.NewPassword,
+            ReturnUrl = NormalizeLocalReturnUrl(model.ReturnUrl),
+        };
+
         if (!ModelState.IsValid)
         {
             return View(model);
@@ -205,4 +212,12 @@ public sealed class CredentialController(
         ModelState.AddModelError(string.Empty, message);
         return View();
     }
+
+    private static string NormalizeLocalReturnUrl(string? returnUrl)
+        => !string.IsNullOrWhiteSpace(returnUrl)
+            && returnUrl.StartsWith('/')
+            && !returnUrl.StartsWith("//")
+            && !returnUrl.StartsWith("/\\")
+            ? returnUrl
+            : "/";
 }

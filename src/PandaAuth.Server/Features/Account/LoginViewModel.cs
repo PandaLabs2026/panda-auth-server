@@ -53,4 +53,7 @@ public sealed class ChangePasswordViewModel
     [Required(ErrorMessage = "请输入新密码。")]
     [DataType(DataType.Password)]
     public string NewPassword { get; init; } = string.Empty;
+
+    [HiddenInput]
+    public string ReturnUrl { get; init; } = "/";
 }
