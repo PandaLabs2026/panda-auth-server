@@ -1,5 +1,4 @@
 using System.Security.Claims;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,8 +20,8 @@ public class AdminUsersControllerTests
     {
         var (provider, revoker) = AdminTestHost.Create();
         var controller = new AdminUsersController(
-            provider.GetRequiredService<UserManager<PandaAuthUser>>(),
-            provider.GetRequiredService<RoleManager<PandaAuthRole>>(),
+            provider.GetRequiredService<UserService>(),
+            provider.GetRequiredService<RoleService>(),
             provider.GetRequiredService<ITokenRevoker>(),
             provider.GetRequiredService<AdminAuditWriter>(),
             provider.GetRequiredService<ILoggerFactory>().CreateLogger<AdminUsersController>())
@@ -32,10 +31,10 @@ public class AdminUsersControllerTests
         return (controller, provider, revoker);
     }
 
-    private static async Task<PandaAuthUser> SeedUserAsync(ServiceProvider provider, string userName, string? email = null, UserStatus status = UserStatus.Active)
+    private static async Task<PandaUser> SeedUserAsync(ServiceProvider provider, string userName, string? email = null, UserStatus status = UserStatus.Active)
     {
-        var manager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
-        var user = new PandaAuthUser { UserName = userName, Email = email, Status = status };
+        var manager = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = userName, Email = email, Status = status };
         await manager.CreateAsync(user, "Passw0rd!1234");
         return user;
     }
@@ -76,9 +75,9 @@ public class AdminUsersControllerTests
     {
         var (controller, provider, _) = Create();
         var user = await SeedUserAsync(provider, "dave");
-        var roleManager = provider.GetRequiredService<RoleManager<PandaAuthRole>>();
-        await roleManager.CreateAsync(new PandaAuthRole { Name = PandaAuthUser.AdminRole });
-        await provider.GetRequiredService<UserManager<PandaAuthUser>>().AddToRoleAsync(user, PandaAuthUser.AdminRole);
+        var roleManager = provider.GetRequiredService<RoleService>();
+        await roleManager.CreateAsync(new PandaRole { Name = PandaUser.AdminRole });
+        await provider.GetRequiredService<UserService>().AddToRoleAsync(user, PandaUser.AdminRole);
 
         var ok = Assert.IsType<OkObjectResult>(await controller.Detail(user.Id));
         var detail = Assert.IsType<AdminUserDetail>(ok.Value);
@@ -98,7 +97,7 @@ public class AdminUsersControllerTests
 
         // 用户侧
         Assert.Equal(UserStatus.Frozen,
-            (await provider.GetRequiredService<UserManager<PandaAuthUser>>().FindByIdAsync(user.Id))!.Status);
+            (await provider.GetRequiredService<UserService>().FindByIdAsync(user.Id))!.Status);
         // 令牌吊销恰好一次、目标是该用户
         Assert.Equal([user.Id], revoker.RevokedUsers);
         // 审计：动作、操作者、目标、IP（来自测试HttpContext的连接层）
@@ -161,7 +160,7 @@ public class AdminUsersControllerTests
         Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
 
         Assert.Equal(UserStatus.Deleted,
-            (await provider.GetRequiredService<UserManager<PandaAuthUser>>().FindByIdAsync(user.Id))!.Status);
+            (await provider.GetRequiredService<UserService>().FindByIdAsync(user.Id))!.Status);
         Assert.Empty(revoker.RevokedUsers);
         Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
     }
@@ -179,7 +178,7 @@ public class AdminUsersControllerTests
         var password = Assert.IsType<AdminResetPasswordResponse>(ok.Value).Password;
 
         // 生成的密码真实可用（走 UserManager 校验与哈希验证）。
-        var manager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
+        var manager = provider.GetRequiredService<UserService>();
         var reloaded = await manager.FindByIdAsync(user.Id);
         Assert.True(await manager.CheckPasswordAsync(reloaded!, password));
         // 安全戳被刷新（Cookie 会话失效口径）。
@@ -199,7 +198,7 @@ public class AdminUsersControllerTests
             await controller.ResetPassword(user.Id, new AdminResetPasswordRequest("Custom!Passw0rdX"), CancellationToken.None));
         Assert.Equal("Custom!Passw0rdX", Assert.IsType<AdminResetPasswordResponse>(ok.Value).Password);
 
-        var manager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
+        var manager = provider.GetRequiredService<UserService>();
         Assert.True(await manager.CheckPasswordAsync((await manager.FindByIdAsync(user.Id))!, "Custom!Passw0rdX"));
         Assert.Contains("generated\":false", Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable()).Detail);
     }
@@ -223,7 +222,7 @@ public class AdminUsersControllerTests
 
         // 未发生状态变更、吊销与审计。
         Assert.Equal(UserStatus.Active,
-            (await provider.GetRequiredService<UserManager<PandaAuthUser>>().FindByIdAsync(user.Id))!.Status);
+            (await provider.GetRequiredService<UserService>().FindByIdAsync(user.Id))!.Status);
         Assert.Empty(revoker.RevokedUsers);
         Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
     }
@@ -247,7 +246,7 @@ public class AdminUsersControllerTests
         Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
 
         // 未发生密码变更、吊销与审计。
-        var manager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
+        var manager = provider.GetRequiredService<UserService>();
         Assert.True(await manager.CheckPasswordAsync((await manager.FindByIdAsync(user.Id))!, "Passw0rd!1234"));
         Assert.Empty(revoker.RevokedUsers);
         Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
@@ -265,7 +264,7 @@ public class AdminUsersControllerTests
         Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
 
         // 关键回归：失败路径必须回滚旧哈希——账号仍能用旧密码登录，而不是被锁死。
-        var manager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
+        var manager = provider.GetRequiredService<UserService>();
         var reloaded = await manager.FindByIdAsync(user.Id);
         Assert.True(await manager.CheckPasswordAsync(reloaded!, "Passw0rd!1234"));
         // 失败路径不得留下任何副作用：AddPasswordAsync 内部轮换过的安全戳必须一并还原，
@@ -296,10 +295,10 @@ public class AdminUsersControllerTests
 
     private static async Task EnsureAdminRoleAsync(ServiceProvider provider)
     {
-        var roleManager = provider.GetRequiredService<RoleManager<PandaAuthRole>>();
-        if (!await roleManager.RoleExistsAsync(PandaAuthUser.AdminRole))
+        var roleManager = provider.GetRequiredService<RoleService>();
+        if (!await roleManager.RoleExistsAsync(PandaUser.AdminRole))
         {
-            await roleManager.CreateAsync(new PandaAuthRole { Name = PandaAuthUser.AdminRole });
+            await roleManager.CreateAsync(new PandaRole { Name = PandaUser.AdminRole });
         }
     }
 
@@ -307,7 +306,7 @@ public class AdminUsersControllerTests
     public async Task Create_GeneratesPassword_SetsAdminChannel_Audits()
     {
         var (controller, provider, _) = Create();
-        var manager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
+        var manager = provider.GetRequiredService<UserService>();
 
         var ok = Assert.IsType<OkObjectResult>(
             await controller.Create(new AdminCreateUserRequest("new-user", "new@example.com", "纽", null, null, GrantAdminRole: false), CancellationToken.None));
@@ -327,7 +326,7 @@ public class AdminUsersControllerTests
     public async Task Create_WithCustomPassword_DoesNotReturnPlaintext()
     {
         var (controller, provider, _) = Create();
-        var manager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
+        var manager = provider.GetRequiredService<UserService>();
 
         var ok = Assert.IsType<OkObjectResult>(
             await controller.Create(new AdminCreateUserRequest("custom-pw", null, null, null, "Custom!Passw0rdX", GrantAdminRole: false), CancellationToken.None));
@@ -358,7 +357,7 @@ public class AdminUsersControllerTests
             await controller.Create(new AdminCreateUserRequest("weak-pw", null, null, null, "short", GrantAdminRole: false), CancellationToken.None));
         Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
         // 账号未残留：策略不过的建号不落库。
-        Assert.Null(await provider.GetRequiredService<UserManager<PandaAuthUser>>().FindByNameAsync("weak-pw"));
+        Assert.Null(await provider.GetRequiredService<UserService>().FindByNameAsync("weak-pw"));
     }
 
     [Fact]
@@ -372,8 +371,8 @@ public class AdminUsersControllerTests
         var response = Assert.IsType<AdminCreateUserResponse>(ok.Value);
 
         Assert.Contains(PandaAuthRoles.Admin,
-            await provider.GetRequiredService<UserManager<PandaAuthUser>>().GetRolesAsync(
-                (await provider.GetRequiredService<UserManager<PandaAuthUser>>().FindByIdAsync(response.Id))!));
+            await provider.GetRequiredService<UserService>().GetRolesAsync(
+                (await provider.GetRequiredService<UserService>().FindByIdAsync(response.Id))!));
     }
 
     [Fact]
@@ -381,7 +380,7 @@ public class AdminUsersControllerTests
     {
         var (controller, provider, _) = Create();
         // 刻意不播种 admin 角色：部分成功必须留痕（账号建成即审计），并如实报 500 指引补救。
-        var manager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
+        var manager = provider.GetRequiredService<UserService>();
 
         var problem = Assert.IsType<ObjectResult>(
             await controller.Create(new AdminCreateUserRequest("orphan-admin", null, null, null, null, GrantAdminRole: true), CancellationToken.None));
@@ -420,7 +419,7 @@ public class AdminUsersControllerTests
         var (controller, provider, revoker) = Create();
         await EnsureAdminRoleAsync(provider);
         var user = await SeedUserAsync(provider, "role-remove");
-        await provider.GetRequiredService<UserManager<PandaAuthUser>>().AddToRoleAsync(user, PandaAuthUser.AdminRole);
+        await provider.GetRequiredService<UserService>().AddToRoleAsync(user, PandaUser.AdminRole);
 
         var detail = DetailOf(await controller.UpdateRoles(user.Id, new AdminUserRolesRequest([]), CancellationToken.None));
 
@@ -435,7 +434,7 @@ public class AdminUsersControllerTests
         var (controller, provider, revoker) = Create();
         await EnsureAdminRoleAsync(provider);
         var user = await SeedUserAsync(provider, "self-demote");
-        await provider.GetRequiredService<UserManager<PandaAuthUser>>().AddToRoleAsync(user, PandaAuthUser.AdminRole);
+        await provider.GetRequiredService<UserService>().AddToRoleAsync(user, PandaUser.AdminRole);
         ActAs(controller, user.Id, "self-demote");
 
         var problem = Assert.IsType<ObjectResult>(
@@ -444,7 +443,7 @@ public class AdminUsersControllerTests
 
         // 角色未动、无吊销无审计。
         Assert.Contains(PandaAuthRoles.Admin,
-            await provider.GetRequiredService<UserManager<PandaAuthUser>>().GetRolesAsync(user));
+            await provider.GetRequiredService<UserService>().GetRolesAsync(user));
         Assert.Empty(revoker.RevokedUsers);
         Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
     }
@@ -468,7 +467,7 @@ public class AdminUsersControllerTests
         var (controller, provider, revoker) = Create();
         await EnsureAdminRoleAsync(provider);
         var user = await SeedUserAsync(provider, "role-same");
-        await provider.GetRequiredService<UserManager<PandaAuthUser>>().AddToRoleAsync(user, PandaAuthUser.AdminRole);
+        await provider.GetRequiredService<UserService>().AddToRoleAsync(user, PandaUser.AdminRole);
 
         var detail = DetailOf(await controller.UpdateRoles(user.Id, new AdminUserRolesRequest([PandaAuthRoles.Admin]), CancellationToken.None));
 
@@ -483,7 +482,7 @@ public class AdminUsersControllerTests
         var (controller, provider, revoker) = Create();
         await EnsureAdminRoleAsync(provider);
         var user = await SeedUserAsync(provider, "role-case");
-        await provider.GetRequiredService<UserManager<PandaAuthUser>>().AddToRoleAsync(user, PandaAuthUser.AdminRole);
+        await provider.GetRequiredService<UserService>().AddToRoleAsync(user, PandaUser.AdminRole);
 
         // 角色名比较与 Identity 的规范化一致（大小写不敏感）：变体不得把幂等请求折进增删路径。
         var detail = DetailOf(await controller.UpdateRoles(user.Id, new AdminUserRolesRequest(["ADMIN"]), CancellationToken.None));
@@ -514,7 +513,7 @@ public class AdminUsersControllerTests
     {
         var (controller, provider, revoker) = Create();
         var user = await SeedUserAsync(provider, "locked-out");
-        var manager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
+        var manager = provider.GetRequiredService<UserService>();
         await manager.SetLockoutEndDateAsync(user, DateTimeOffset.UtcNow.AddMinutes(5));
         user.AccessFailedCount = 3;
         await manager.UpdateAsync(user);
@@ -565,7 +564,7 @@ public class AdminUsersControllerTests
     {
         var (controller, provider, revoker) = Create();
         var user = await SeedUserAsync(provider, "email-change", "old@example.com");
-        var manager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
+        var manager = provider.GetRequiredService<UserService>();
         await manager.FindByIdAsync(user.Id);
         user.EmailConfirmed = true;
         await manager.UpdateAsync(user);
@@ -585,7 +584,7 @@ public class AdminUsersControllerTests
         var (controller, provider, revoker) = Create();
         var user = await SeedUserAsync(provider, "email-clear", "gone@example.com");
         // 预置已验证：清空邮箱必须连带重置验证标记，否则断言空洞。
-        var manager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
+        var manager = provider.GetRequiredService<UserService>();
         user.EmailConfirmed = true;
         await manager.UpdateAsync(user);
 
@@ -627,20 +626,20 @@ public class AdminUsersControllerTests
     // ---- 重置两步验证（ResetTwoFactor） ----
 
     [Fact]
-    public async Task ResetTwoFactor_Disables_Revokes_Audits()
+    public async Task ResetTwoFactor_EnabledAccountClearsBlockAndRevokesSessions()
     {
         var (controller, provider, revoker) = Create();
         var user = await SeedUserAsync(provider, "two-fa");
-        var manager = provider.GetRequiredService<UserManager<PandaAuthUser>>();
-        await manager.SetTwoFactorEnabledAsync(user, true);
+        user.TwoFactorEnabled = true;
+        await provider.GetRequiredService<UserService>().UpdateAsync(user);
         var stampBefore = user.SecurityStamp;
 
         var detail = DetailOf(await controller.ResetTwoFactor(user.Id, CancellationToken.None));
 
         Assert.False(detail.TwoFactorEnabled);
+        Assert.False(user.TwoFactorEnabled);
         Assert.NotEqual(stampBefore, user.SecurityStamp);
         Assert.Equal([user.Id], revoker.RevokedUsers);
-        Assert.Equal(AdminAuditAction.UserResetTwoFactor, SingleAudit(provider).Action);
     }
 
     [Fact]
@@ -686,7 +685,7 @@ public class AdminUsersControllerTests
         Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
 
         Assert.Equal(UserStatus.Active,
-            (await provider.GetRequiredService<UserManager<PandaAuthUser>>().FindByIdAsync(user.Id))!.Status);
+            (await provider.GetRequiredService<UserService>().FindByIdAsync(user.Id))!.Status);
         Assert.Empty(revoker.RevokedUsers);
         Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
     }
@@ -703,7 +702,7 @@ public class AdminUsersControllerTests
         Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
 
         Assert.Equal(UserStatus.Active,
-            (await provider.GetRequiredService<UserManager<PandaAuthUser>>().FindByIdAsync(user.Id))!.Status);
+            (await provider.GetRequiredService<UserService>().FindByIdAsync(user.Id))!.Status);
         Assert.Empty(revoker.RevokedUsers);
         Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
     }

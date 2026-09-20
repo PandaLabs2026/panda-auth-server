@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Identity;
+using PandaAuth.Server.Infrastructure.Security;
 using Microsoft.Extensions.Options;
 using OpenIddict.Abstractions;
 using PandaAuth.Server.Configuration;
@@ -19,13 +19,13 @@ public static class DbSeeder
             return;
         }
 
-        var roleManager = services.GetRequiredService<RoleManager<PandaAuthRole>>();
-        var userManager = services.GetRequiredService<UserManager<PandaAuthUser>>();
+        var roleManager = services.GetRequiredService<RoleService>();
+        var userManager = services.GetRequiredService<UserService>();
         var applications = services.GetRequiredService<IOpenIddictApplicationManager>();
 
-        if (!await roleManager.RoleExistsAsync(PandaAuthUser.AdminRole))
+        if (!await roleManager.RoleExistsAsync(PandaUser.AdminRole))
         {
-            var roleResult = await roleManager.CreateAsync(new PandaAuthRole { Name = PandaAuthUser.AdminRole });
+            var roleResult = await roleManager.CreateAsync(new PandaRole { Name = PandaUser.AdminRole });
             if (!roleResult.Succeeded)
             {
                 throw new InvalidOperationException(
@@ -38,7 +38,7 @@ public static class DbSeeder
             var admin = await userManager.FindByNameAsync(options.Seed.Admin.Email);
             if (admin is null)
             {
-                admin = new PandaAuthUser
+                admin = new PandaUser
                 {
                     UserName = options.Seed.Admin.Email,
                     Email = options.Seed.Admin.Email,
@@ -53,7 +53,7 @@ public static class DbSeeder
                         $"创建管理员账号失败：{string.Join("; ", userResult.Errors.Select(e => e.Description))}");
                 }
 
-                await userManager.AddToRoleAsync(admin, PandaAuthUser.AdminRole);
+                await userManager.AddToRoleAsync(admin, PandaUser.AdminRole);
             }
         }
 

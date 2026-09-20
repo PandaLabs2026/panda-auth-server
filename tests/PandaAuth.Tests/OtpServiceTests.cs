@@ -1,6 +1,5 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.AspNetCore.Identity;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Account;
 using PandaAuth.Server.Infrastructure.Persistence;

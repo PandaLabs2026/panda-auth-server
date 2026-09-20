@@ -3,7 +3,6 @@ using System.Reflection;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -34,9 +33,7 @@ internal static class AdminTestHost
         services.AddDbContext<PandaAuthDbContext>(builder => builder
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .UseOpenIddict());
-        services.AddIdentityCore<PandaAuthUser>()
-            .AddRoles<PandaAuthRole>()
-            .AddEntityFrameworkStores<PandaAuthDbContext>();
+        services.AddUserStore();
         services.AddOpenIddict()
             .AddCore(builder => builder.UseEntityFrameworkCore().UseDbContext<PandaAuthDbContext>());
         var revoker = new StubTokenRevoker();

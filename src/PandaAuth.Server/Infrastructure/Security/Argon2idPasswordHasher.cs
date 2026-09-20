@@ -1,8 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
 using Konscious.Security.Cryptography;
-using Microsoft.AspNetCore.Identity;
-using PandaAuth.Server.Domain;
 
 namespace PandaAuth.Server.Infrastructure.Security;
 
@@ -10,7 +8,21 @@ namespace PandaAuth.Server.Infrastructure.Security;
 /// Argon2id 密码哈希（PHC 字符串格式：$argon2id$v=19$m=...,t=...,p=1$&lt;salt&gt;$&lt;hash&gt;）。
 /// 参数采用 OWASP 基线：m=19456 KiB、t=2、p=1。
 /// </summary>
-public sealed class Argon2idPasswordHasher : IPasswordHasher<PandaAuthUser>
+public enum PasswordVerificationOutcome
+{
+    Failed,
+    Success,
+    SuccessRehashNeeded,
+}
+
+public interface IPasswordHasher
+{
+    string Hash(string password);
+
+    PasswordVerificationOutcome Verify(string? hashedPassword, string providedPassword);
+}
+
+public sealed class Argon2idPasswordHasher : IPasswordHasher
 {
     public const int MemorySizeKib = 19456;
     public const int Iterations = 2;
@@ -19,30 +31,30 @@ public sealed class Argon2idPasswordHasher : IPasswordHasher<PandaAuthUser>
     private const int SaltSizeBytes = 16;
     private const int HashSizeBytes = 32;
 
-    public string HashPassword(PandaAuthUser user, string password)
+    public string Hash(string password)
     {
         var salt = RandomNumberGenerator.GetBytes(SaltSizeBytes);
         var hash = Compute(password, salt, MemorySizeKib, Iterations, Parallelism);
         return Format(salt, hash, MemorySizeKib, Iterations, Parallelism);
     }
 
-    public PasswordVerificationResult VerifyHashedPassword(PandaAuthUser user, string? hashedPassword, string providedPassword)
+    public PasswordVerificationOutcome Verify(string? hashedPassword, string providedPassword)
     {
         if (string.IsNullOrEmpty(hashedPassword) || !TryParse(hashedPassword, out var parsed))
         {
-            return PasswordVerificationResult.Failed;
+            return PasswordVerificationOutcome.Failed;
         }
 
         var expected = Compute(providedPassword, parsed.Salt, parsed.MemorySizeKib, parsed.Iterations, parsed.Parallelism);
         if (!CryptographicOperations.FixedTimeEquals(expected, parsed.Hash))
         {
-            return PasswordVerificationResult.Failed;
+            return PasswordVerificationOutcome.Failed;
         }
 
-        // 参数低于当前基线时提示重哈希（下次登录成功后由 Identity 自动升级）。
+        // 参数低于当前基线时提示重哈希（下次登录成功后由 UserService 自动升级）。
         return parsed.MemorySizeKib < MemorySizeKib || parsed.Iterations < Iterations || parsed.Parallelism < Parallelism
-            ? PasswordVerificationResult.SuccessRehashNeeded
-            : PasswordVerificationResult.Success;
+            ? PasswordVerificationOutcome.SuccessRehashNeeded
+            : PasswordVerificationOutcome.Success;
     }
 
     internal static string Format(byte[] salt, byte[] hash, int memorySizeKib, int iterations, int parallelism)
