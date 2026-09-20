@@ -18,6 +18,8 @@ public sealed class AuthOptions
 
     public SeedOptions Seed { get; set; } = new();
 
+    public MfaOptions Mfa { get; set; } = new();
+
     /// <summary>DataProtection 密钥持久化目录；为空时使用临时密钥（仅限开发环境）。</summary>
     public string DataProtectionKeyPath { get; set; } = string.Empty;
 }

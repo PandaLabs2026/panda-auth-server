@@ -14,6 +14,7 @@ using PandaAuth.Server.Infrastructure.Messaging;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Features.Account;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Shared;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -29,6 +30,7 @@ builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOpt
 var authOptions = builder.Configuration.GetSection(AuthOptions.SectionName).Get<AuthOptions>() ?? new AuthOptions();
 // 签名密钥周期误配会让旧 Access Token 在旧密钥退役后静默验签失败，必须在读取密钥表之前失败关闭。
 authOptions.Keys.Validate();
+authOptions.Mfa.Validate(builder.Environment.IsProduction());
 
 builder.Services.AddDbContext<PandaAuthDbContext>(options =>
 {
@@ -152,6 +154,9 @@ builder.Services.AddAuthorization(options => options.AddPolicy(AdminApiAuthoriza
 
 // 登录限流器条目承载在内存缓存上并按 TTL 回收（见 LoginRateLimiter）。
 builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<MfaChallengeStore>();
+builder.Services.AddSingleton(serviceProvider => new TotpSecretProtector(
+    authOptions.Mfa.GetEncryptionKey(builder.Environment.IsProduction()), authOptions.Mfa.TotpKeyVersion));
 builder.Services.AddSingleton<LoginRateLimiter>();
 builder.Services.AddScoped<LoginAuditWriter>();
 builder.Services.AddScoped<AdminAuditWriter>();
