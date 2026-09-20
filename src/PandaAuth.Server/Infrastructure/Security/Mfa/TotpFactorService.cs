@@ -45,6 +45,17 @@ public sealed class TotpFactorService(PandaAuthDbContext db, TotpSecretProtector
         return true;
     }
 
+    public async Task<bool> VerifyAsync(string userId, string code, CancellationToken cancellationToken)
+    {
+        var factor = await db.TotpFactors.SingleOrDefaultAsync(item => item.UserId == userId && item.RevokedAt == null && item.ConfirmedAt != null, cancellationToken);
+        if (factor is null) return false;
+        var secret = protector.Unprotect(userId, factor.Id, new ProtectedTotpSecret(factor.KeyVersion, factor.Nonce, factor.Ciphertext, factor.Tag));
+        if (!TotpVerifier.TryVerify(secret, code, clock.GetUtcNow(), factor.LastAcceptedTimeStep, out var step)) return false;
+        factor.LastAcceptedTimeStep = step;
+        await db.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
     private static string Base32(byte[] bytes)
     {
         const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";

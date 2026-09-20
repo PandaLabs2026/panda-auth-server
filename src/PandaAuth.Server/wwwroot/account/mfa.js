@@ -68,4 +68,10 @@
       show('TOTP 备用验证已确认。');
     } catch (error) { show(error.message); }
   });
+  document.getElementById('assert-totp')?.addEventListener('click', async () => {
+    try {
+      await post(root.dataset.totpAssertUrl, { code: document.getElementById('totp-assert-code').value });
+      show('TOTP 验证成功。');
+    } catch (error) { show(error.message); }
+  });
 })();

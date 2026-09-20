@@ -121,6 +121,19 @@ public sealed class MfaController(
         return Ok(new { status = "ok" });
     }
 
+    [HttpPost("totp/assert")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> AssertTotp([FromBody] ConfirmTotpRequest request, CancellationToken cancellationToken)
+    {
+        var user = await AdminAsync();
+        if (user is null) return Forbid();
+        if (!await totpFactors.VerifyAsync(user.Id, request.Code, cancellationToken))
+            return BadRequest(new { error = "验证码错误、已过期或已被使用。" });
+        await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.Totp);
+        logger.LogInformation("TOTP assertion succeeded adminId={UserId}", user.Id);
+        return Ok(new { status = "ok" });
+    }
+
     private async Task<PandaUser?> AdminAsync()
     {
         var user = await users.GetUserAsync(User);

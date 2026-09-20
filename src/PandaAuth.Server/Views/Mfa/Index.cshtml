@@ -3,7 +3,7 @@
     ViewData["Title"] = "管理员安全验证";
 }
 
-<div id="mfa" data-options-url="/account/mfa/enrollment/options" data-enroll-url="/account/mfa/enrollment/complete" data-assertion-options-url="/account/mfa/assertion/options" data-assertion-url="/account/mfa/assertion/complete" data-totp-options-url="/account/mfa/totp/options" data-totp-confirm-url="/account/mfa/totp/confirm">
+<div id="mfa" data-options-url="/account/mfa/enrollment/options" data-enroll-url="/account/mfa/enrollment/complete" data-assertion-options-url="/account/mfa/assertion/options" data-assertion-url="/account/mfa/assertion/complete" data-totp-options-url="/account/mfa/totp/options" data-totp-confirm-url="/account/mfa/totp/confirm" data-totp-assert-url="/account/mfa/totp/assert">
     @Html.AntiForgeryToken()
     <p class="footnote">已配置 @Model.ActivePasskeyCount 个 Passkey。设备会要求生物识别或 PIN。</p>
     <div id="mfa-message" class="notice" hidden></div>
@@ -21,6 +21,12 @@
             <input id="totp-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" />
             <button type="button" id="confirm-totp">确认 TOTP</button>
         </div>
+    }
+    @if (Model.HasTotp)
+    {
+        <label for="totp-assert-code">使用 TOTP 备用验证</label>
+        <input id="totp-assert-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" />
+        <button type="button" id="assert-totp">验证 TOTP</button>
     }
 </div>
 <script src="/account/mfa.js" defer></script>
