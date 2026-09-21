@@ -36,6 +36,19 @@ public sealed class MfaService(
     public Task RequireEnrollmentAsync(string userId, ClaimsPrincipal principal, CancellationToken cancellationToken)
         => RequireEnrollmentPolicyAsync(userId, principal, cancellationToken);
 
+    public async Task<bool> ConfirmLegacyReconfigurationAsync(
+        string userId, Guid factorId, string code, CancellationToken cancellationToken)
+    {
+        var user = await users.FindByIdAsync(userId) ?? throw new MfaPolicyException("User not found.");
+        if (!user.TwoFactorEnabled) throw new MfaPolicyException("MFA reconfiguration is not required.");
+        if (!user.EmailConfirmed) throw new MfaPolicyException("Email confirmation is required.");
+        if (!await totpFactors.ConfirmAsync(userId, factorId, code, cancellationToken)) return false;
+        user.TwoFactorEnabled = false;
+        var result = await users.UpdateAsync(user);
+        if (!result.Succeeded) throw new MfaPolicyException("MFA reconfiguration could not be completed.");
+        return true;
+    }
+
     public async Task<bool> ConfirmEnrollmentAsync(
         string userId, ClaimsPrincipal principal, Guid factorId, string code, CancellationToken cancellationToken)
     {

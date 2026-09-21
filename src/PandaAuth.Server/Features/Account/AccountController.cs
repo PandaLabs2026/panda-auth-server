@@ -75,6 +75,11 @@ public sealed class AccountController(
             var result = await signInManager.CheckPasswordSignInAsync(user, model.Password, lockoutOnFailure: true);
             succeeded = result.Succeeded;
             signedInUser = result.User;
+            if (result.RequiresMfaReconfiguration && result.User is not null)
+            {
+                await signInManager.SignInForMfaReconfigurationAsync(HttpContext, result.User);
+                return LocalRedirect("/account/mfa/user/reconfigure");
+            }
             failureReason = succeeded ? null
                 : result.IsLockedOut ? "locked_out"
                 : result.IsNotAllowed ? "not_allowed"

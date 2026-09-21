@@ -20,6 +20,49 @@ public sealed class MfaController(
     ILogger<MfaController> logger,
     MfaService? mfa = null) : Controller
 {
+    [AllowAnonymous]
+    [HttpGet("user/reconfigure")]
+    public async Task<IActionResult> LegacyReconfigurationStatus(CancellationToken cancellationToken)
+    {
+        var user = await sessions.GetReconfigurationUserAsync(HttpContext);
+        if (user is null || mfa is null) return Forbid();
+        return Json(await mfa.GetStatusAsync(user.Id, cancellationToken));
+    }
+
+    [AllowAnonymous]
+    [HttpPost("user/reconfigure/totp/options")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> BeginLegacyTotpReconfiguration(CancellationToken cancellationToken)
+    {
+        var user = await sessions.GetReconfigurationUserAsync(HttpContext);
+        if (user is null) return Forbid();
+        if (!user.EmailConfirmed) return Forbid();
+        try
+        {
+            var enrollment = await totpFactors.BeginEnrollmentAsync(user.Id, cancellationToken, requirePasskey: false);
+            return Ok(new { factorId = enrollment.FactorId, secret = enrollment.Secret, provisioningUri = enrollment.ProvisioningUri });
+        }
+        catch (InvalidOperationException exception) { return BadRequest(new { error = exception.Message }); }
+    }
+
+    [AllowAnonymous]
+    [HttpPost("user/reconfigure/totp/confirm")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ConfirmLegacyTotpReconfiguration(
+        [FromBody] ConfirmTotpRequest request, CancellationToken cancellationToken)
+    {
+        var user = await sessions.GetReconfigurationUserAsync(HttpContext);
+        if (user is null || mfa is null) return Forbid();
+        try
+        {
+            if (!await mfa.ConfirmLegacyReconfigurationAsync(user.Id, request.FactorId, request.Code, cancellationToken))
+                return BadRequest(new { error = "验证码错误或已过期。" });
+            await sessions.SignOutReconfigurationAsync(HttpContext);
+            return Ok(new { status = "ok", reauthenticationRequired = true });
+        }
+        catch (MfaPolicyException exception) { return BadRequest(new { error = exception.Message }); }
+    }
+
     [HttpGet("user/status")]
     public async Task<IActionResult> UserStatus(CancellationToken cancellationToken)
     {

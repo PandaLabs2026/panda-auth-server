@@ -175,9 +175,10 @@ public sealed class UserService(PandaAuthDbContext db, IPasswordHasher hasher, T
         {
             var verification = hasher.Verify(user.PasswordHash, password);
             if (user.Status != UserStatus.Active) return new(false, IsNotAllowed: true);
-            if (user.TwoFactorEnabled) return new(false, IsNotAllowed: true);
             if (user.LockoutEnabled && user.LockoutEnd > clock.GetUtcNow()) return new(false, IsLockedOut: true);
             var success = verification != PasswordVerificationOutcome.Failed;
+            if (success && user.TwoFactorEnabled)
+                return new(false, IsNotAllowed: true, User: user, RequiresMfaReconfiguration: true);
             if (success)
             {
                 user.AccessFailedCount = 0;

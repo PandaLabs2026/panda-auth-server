@@ -81,6 +81,29 @@ public class LoginCookieTests
         Assert.True(long.TryParse(verification.Principal.FindFirst(MfaClaimTypes.VerifiedAt)!.Value, out _));
     }
 
+    [Fact]
+    public async Task LegacyMfaReconfiguration_UsesSeparateRestrictedCookieScheme()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "legacy-reconfigure", TwoFactorEnabled = true };
+        await users.CreateAsync(user, "Strong!Pass123");
+
+        using var scope = provider.CreateScope();
+        var context = Context(scope.ServiceProvider);
+        var sessions = scope.ServiceProvider.GetRequiredService<LoginSessionService>();
+        await sessions.SignInForMfaReconfigurationAsync(context, user);
+        var cookie = context.Response.Headers.SetCookie.Single()!.Split(';')[0];
+
+        using var verificationScope = provider.CreateScope();
+        var verificationContext = Context(verificationScope.ServiceProvider, cookie);
+        var ticket = await verificationContext.AuthenticateAsync(LoginSessionService.ReconfigurationScheme);
+        Assert.True(ticket.Succeeded);
+        Assert.False((await verificationContext.AuthenticateAsync(LoginSessionService.Scheme)).Succeeded);
+        Assert.Equal(user.Id, (await verificationScope.ServiceProvider.GetRequiredService<LoginSessionService>()
+            .GetReconfigurationUserAsync(verificationContext))!.Id);
+    }
+
     private static async Task<string> IssueAsync(ServiceProvider provider, PandaUser user)
     {
         using var scope = provider.CreateScope();

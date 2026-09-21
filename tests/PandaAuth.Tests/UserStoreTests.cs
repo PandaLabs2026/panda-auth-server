@@ -112,5 +112,6 @@ public class UserStoreTests
 
         Assert.False(login.Succeeded);
         Assert.True(login.IsNotAllowed);
+        Assert.True(login.RequiresMfaReconfiguration);
     }
 }

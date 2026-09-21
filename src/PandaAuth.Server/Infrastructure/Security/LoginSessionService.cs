@@ -16,11 +16,13 @@ public sealed record LoginOutcome(
     bool Succeeded,
     bool IsLockedOut = false,
     bool IsNotAllowed = false,
-    PandaUser? User = null);
+    PandaUser? User = null,
+    bool RequiresMfaReconfiguration = false);
 
 public sealed class LoginSessionService(UserService users, TimeProvider clock)
 {
     public const string Scheme = "PandaAuth.Login.v2";
+    public const string ReconfigurationScheme = "PandaAuth.MfaReconfiguration.v1";
     public const string StampClaim = "panda_security_stamp";
 
     public Task<LoginOutcome> CheckPasswordSignInAsync(PandaUser user, string password, bool lockoutOnFailure)
@@ -43,6 +45,33 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock)
     }
 
     public Task SignOutAsync(HttpContext context) => context.SignOutAsync(Scheme);
+
+    public async Task SignInForMfaReconfigurationAsync(HttpContext context, PandaUser user)
+    {
+        var current = await users.ReloadAsync(user.Id);
+        if (current is null || current.Status != UserStatus.Active || !current.TwoFactorEnabled)
+            throw new InvalidOperationException("MFA reconfiguration is not required.");
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim(ClaimTypes.NameIdentifier, current.Id),
+            new Claim(StampClaim, current.SecurityStamp ?? ""),
+        ], ReconfigurationScheme));
+        await context.SignInAsync(ReconfigurationScheme, principal,
+            new AuthenticationProperties { IsPersistent = false, AllowRefresh = false });
+    }
+
+    public async Task<PandaUser?> GetReconfigurationUserAsync(HttpContext context)
+    {
+        var ticket = await context.AuthenticateAsync(ReconfigurationScheme);
+        if (!ticket.Succeeded || ticket.Principal is null) return null;
+        var user = await users.GetUserAsync(ticket.Principal);
+        return user is not null && user.Status == UserStatus.Active && user.TwoFactorEnabled &&
+               user.SecurityStamp == ticket.Principal.FindFirstValue(StampClaim)
+            ? user
+            : null;
+    }
+
+    public Task SignOutReconfigurationAsync(HttpContext context) => context.SignOutAsync(ReconfigurationScheme);
 
     /// <summary>Rotates the current IDP cookie after a verified MFA ceremony without altering its subject or lifetime.</summary>
     public async Task MarkMfaAsync(HttpContext context, string method)
@@ -93,6 +122,14 @@ public static class UserStoreRegistration
             {
                 options.LoginPath = "/account/login";
                 options.Cookie.Name = LoginSessionService.Scheme;
+                options.Cookie.HttpOnly = true;
+                options.Cookie.SameSite = SameSiteMode.Lax;
+                options.Cookie.SecurePolicy = httpsRequired ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
+                options.Events.OnValidatePrincipal = LoginSessionService.ValidateCookieAsync;
+            })
+            .AddCookie(LoginSessionService.ReconfigurationScheme, options =>
+            {
+                options.Cookie.Name = LoginSessionService.ReconfigurationScheme;
                 options.Cookie.HttpOnly = true;
                 options.Cookie.SameSite = SameSiteMode.Lax;
                 options.Cookie.SecurePolicy = httpsRequired ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
