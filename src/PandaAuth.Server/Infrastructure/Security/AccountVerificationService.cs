@@ -95,16 +95,35 @@ public sealed class AccountVerificationService(
         if (verification is not null)
             return verification;
 
-        if (!await TryConsumeEmailVerificationAsync(candidate!, cancellationToken))
-            return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
+        var consumedAt = clock.GetUtcNow();
+        if (db.Database.IsRelational())
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+            if (!await TryConsumeEmailVerificationAsync(candidate!, consumedAt, cancellationToken))
+                return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
 
-        user = await users.FindByIdAsync(user.Id);
-        if (user is null || user.Status != UserStatus.Active)
-            return AccountVerificationResult.Fail(AccountVerificationError.AccountUnavailable);
-        user.EmailConfirmed = true;
-        var update = await users.UpdateAsync(user);
-        if (!update.Succeeded)
-            return MapAccountFailure(update, candidate!);
+            user = await users.FindByIdAsync(user.Id);
+            if (user is null || user.Status != UserStatus.Active)
+                return AccountVerificationResult.Fail(AccountVerificationError.AccountUnavailable);
+            user.EmailConfirmed = true;
+            var update = await users.UpdateAsync(user);
+            if (!update.Succeeded)
+                return MapAccountFailure(update, candidate!);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        else
+        {
+            if (!await TryConsumeEmailVerificationAsync(candidate!, consumedAt, cancellationToken))
+                return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
+
+            user = await users.FindByIdAsync(user.Id);
+            if (user is null || user.Status != UserStatus.Active)
+                return AccountVerificationResult.Fail(AccountVerificationError.AccountUnavailable);
+            user.EmailConfirmed = true;
+            var update = await users.UpdateAsync(user);
+            if (!update.Succeeded)
+                return MapAccountFailure(update, candidate!);
+        }
 
         return AccountVerificationResult.Success(new(
             AccountSecurityEvent.EmailConfirmed, user.Id, normalizedTarget, clock.GetUtcNow()));
@@ -157,18 +176,39 @@ public sealed class AccountVerificationService(
         if (verification is not null)
             return verification;
 
-        if (!await TryConsumeEmailVerificationAsync(candidate!, cancellationToken))
-            return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
+        var consumedAt = clock.GetUtcNow();
+        if (db.Database.IsRelational())
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+            if (!await TryConsumeEmailVerificationAsync(candidate!, consumedAt, cancellationToken))
+                return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
 
-        user = await users.FindByIdAsync(user.Id);
-        if (user is null || user.Status != UserStatus.Active || !user.EmailConfirmed)
-            return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
-        user.Email = newEmail.Trim();
-        user.EmailConfirmed = true;
-        user.SecurityStamp = Guid.NewGuid().ToString();
-        var update = await users.UpdateAsync(user);
-        if (!update.Succeeded)
-            return MapAccountFailure(update, candidate!);
+            user = await users.FindByIdAsync(user.Id);
+            if (user is null || user.Status != UserStatus.Active || !user.EmailConfirmed)
+                return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
+            user.Email = newEmail.Trim();
+            user.EmailConfirmed = true;
+            user.SecurityStamp = Guid.NewGuid().ToString();
+            var update = await users.UpdateAsync(user);
+            if (!update.Succeeded)
+                return MapAccountFailure(update, candidate!);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        else
+        {
+            if (!await TryConsumeEmailVerificationAsync(candidate!, consumedAt, cancellationToken))
+                return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
+
+            user = await users.FindByIdAsync(user.Id);
+            if (user is null || user.Status != UserStatus.Active || !user.EmailConfirmed)
+                return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
+            user.Email = newEmail.Trim();
+            user.EmailConfirmed = true;
+            user.SecurityStamp = Guid.NewGuid().ToString();
+            var update = await users.UpdateAsync(user);
+            if (!update.Succeeded)
+                return MapAccountFailure(update, candidate!);
+        }
 
         return AccountVerificationResult.Success(new(
             AccountSecurityEvent.EmailChanged, user.Id, normalizedTarget, clock.GetUtcNow()));
@@ -235,29 +275,59 @@ public sealed class AccountVerificationService(
         if (candidate!.SubjectId is null)
             return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
 
-        if (!await TryConsumePasswordResetAsync(candidate!, cancellationToken))
-            return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
+        var passwordValidation = UserService.ValidatePassword(newPassword);
+        if (!passwordValidation.Succeeded)
+            return MapAccountFailure(passwordValidation, candidate);
 
-        var user = await users.FindByIdAsync(candidate.SubjectId);
-        if (user is null || user.Status != UserStatus.Active || !user.EmailConfirmed ||
-            user.NormalizedEmail != normalizedTarget)
-            return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
+        var consumedAt = clock.GetUtcNow();
+        if (db.Database.IsRelational())
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+            if (!await TryConsumePasswordResetAsync(candidate, consumedAt, cancellationToken))
+                return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
 
-        // Two independently issued proofs can race. A successful reset consumes all outstanding
-        // proofs for the address in the same account update transaction.
-        var outstanding = await db.PasswordResetRequests
-            .Where(request => request.Purpose == PasswordResetPurpose.PasswordReset &&
-                              request.NormalizedTarget == normalizedTarget && request.ConsumedAt == null &&
-                              request.Id != candidate.Id)
-            .ToListAsync(cancellationToken);
-        foreach (var request in outstanding)
-            request.ConsumedAt = candidate.ConsumedAt;
-        var update = await users.ReplacePasswordAsync(user, newPassword);
-        if (!update.Succeeded)
-            return MapAccountFailure(update, candidate);
+            var user = await users.FindByIdAsync(candidate.SubjectId);
+            if (user is null || user.Status != UserStatus.Active || !user.EmailConfirmed ||
+                user.NormalizedEmail != normalizedTarget)
+                return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
+
+            // Two independently issued proofs can race. A successful reset consumes all outstanding
+            // proofs for the address before the account mutation commits.
+            await db.PasswordResetRequests
+                .Where(request => request.Purpose == PasswordResetPurpose.PasswordReset &&
+                                  request.NormalizedTarget == normalizedTarget && request.ConsumedAt == null &&
+                                  request.Id != candidate.Id)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(request => request.ConsumedAt, consumedAt), cancellationToken);
+            var update = await users.ReplacePasswordAsync(user, newPassword);
+            if (!update.Succeeded)
+                return MapAccountFailure(update, candidate);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        else
+        {
+            if (!await TryConsumePasswordResetAsync(candidate, consumedAt, cancellationToken))
+                return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
+
+            var user = await users.FindByIdAsync(candidate.SubjectId);
+            if (user is null || user.Status != UserStatus.Active || !user.EmailConfirmed ||
+                user.NormalizedEmail != normalizedTarget)
+                return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
+
+            var outstanding = await db.PasswordResetRequests
+                .Where(request => request.Purpose == PasswordResetPurpose.PasswordReset &&
+                                  request.NormalizedTarget == normalizedTarget && request.ConsumedAt == null &&
+                                  request.Id != candidate.Id)
+                .ToListAsync(cancellationToken);
+            foreach (var request in outstanding)
+                request.ConsumedAt = consumedAt;
+            var update = await users.ReplacePasswordAsync(user, newPassword);
+            if (!update.Succeeded)
+                return MapAccountFailure(update, candidate);
+        }
 
         return AccountVerificationResult.Success(new(
-            AccountSecurityEvent.PasswordReset, user.Id, normalizedTarget, clock.GetUtcNow()));
+            AccountSecurityEvent.PasswordReset, candidate.SubjectId, normalizedTarget, clock.GetUtcNow()));
     }
 
     private async Task<string> IssueEmailVerificationAsync(
@@ -329,6 +399,7 @@ public sealed class AccountVerificationService(
             return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
         }
 
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         var updated = await db.Database.ExecuteSqlInterpolatedAsync($"""
             UPDATE panda_email_verifications
             SET "Attempts" = "Attempts" + 1
@@ -337,6 +408,7 @@ public sealed class AccountVerificationService(
               AND "Attempts" < {MaxAttempts}
             """, cancellationToken);
         db.ChangeTracker.Clear();
+        await transaction.CommitAsync(cancellationToken);
         if (updated == 0)
             return AccountVerificationResult.Fail(AccountVerificationError.TooManyAttempts);
         return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
@@ -359,6 +431,7 @@ public sealed class AccountVerificationService(
             return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
         }
 
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         var updated = await db.Database.ExecuteSqlInterpolatedAsync($"""
             UPDATE panda_password_reset_requests
             SET "Attempts" = "Attempts" + 1
@@ -367,15 +440,15 @@ public sealed class AccountVerificationService(
               AND "Attempts" < {MaxAttempts}
             """, cancellationToken);
         db.ChangeTracker.Clear();
+        await transaction.CommitAsync(cancellationToken);
         if (updated == 0)
             return AccountVerificationResult.Fail(AccountVerificationError.TooManyAttempts);
         return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
     }
 
     private async Task<bool> TryConsumeEmailVerificationAsync(
-        EmailVerification candidate, CancellationToken cancellationToken)
+        EmailVerification candidate, DateTimeOffset consumedAt, CancellationToken cancellationToken)
     {
-        var consumedAt = clock.GetUtcNow();
         if (!db.Database.IsRelational())
         {
             candidate.ConsumedAt = consumedAt;
@@ -396,9 +469,8 @@ public sealed class AccountVerificationService(
     }
 
     private async Task<bool> TryConsumePasswordResetAsync(
-        PasswordResetRequest candidate, CancellationToken cancellationToken)
+        PasswordResetRequest candidate, DateTimeOffset consumedAt, CancellationToken cancellationToken)
     {
-        var consumedAt = clock.GetUtcNow();
         if (!db.Database.IsRelational())
         {
             candidate.ConsumedAt = consumedAt;

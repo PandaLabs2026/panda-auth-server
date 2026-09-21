@@ -1,4 +1,6 @@
+using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.DependencyInjection;
@@ -171,7 +173,8 @@ public class UserStoreMigrationTests
         await using var fixture = await TestDatabase.CreateAsync();
         await using var setup = fixture.Context();
         await setup.Database.MigrateAsync();
-        using var provider = fixture.Services(includeAccountVerification: true);
+        var proofReadBarrier = new PasswordResetReadBarrier(AccountVerificationService.MaxAttempts + 3);
+        using var provider = fixture.Services(includeAccountVerification: true, proofReadBarrier);
         var user = await CreateUserAsync(provider, "attempts@example.com");
         var proof = new PasswordResetRequest
         {
@@ -183,7 +186,6 @@ public class UserStoreMigrationTests
         };
         setup.PasswordResetRequests.Add(proof);
         await setup.SaveChangesAsync();
-        await DelayPasswordResetUpdatesAsync(setup);
 
         var scopes = Enumerable.Range(0, AccountVerificationService.MaxAttempts + 3)
             .Select(_ => provider.CreateAsyncScope())
@@ -202,6 +204,7 @@ public class UserStoreMigrationTests
                 await scope.DisposeAsync();
         }
 
+        Assert.Equal(AccountVerificationService.MaxAttempts + 3, proofReadBarrier.Reads);
         await using var verify = fixture.Context();
         var stored = await verify.PasswordResetRequests.SingleAsync(request => request.Id == proof.Id);
         Assert.Equal(AccountVerificationService.MaxAttempts, stored.Attempts);
@@ -214,7 +217,8 @@ public class UserStoreMigrationTests
         await using var fixture = await TestDatabase.CreateAsync();
         await using var setup = fixture.Context();
         await setup.Database.MigrateAsync();
-        using var provider = fixture.Services(includeAccountVerification: true);
+        var proofReadBarrier = new PasswordResetReadBarrier(2);
+        using var provider = fixture.Services(includeAccountVerification: true, proofReadBarrier);
         var user = await CreateUserAsync(provider, "consume@example.com");
         var proof = new PasswordResetRequest
         {
@@ -226,7 +230,6 @@ public class UserStoreMigrationTests
         };
         setup.PasswordResetRequests.Add(proof);
         await setup.SaveChangesAsync();
-        await DelayPasswordResetUpdatesAsync(setup);
 
         var passwords = new[] { "FirstStrong!Pass456", "SecondStrong!Pass789" };
         await using var firstScope = provider.CreateAsyncScope();
@@ -238,7 +241,9 @@ public class UserStoreMigrationTests
                 .ConsumePasswordResetAsync("consume@example.com", "correct-token", passwords[1]));
 
         var winner = Assert.Single(results.Select((result, index) => (result, index)), item => item.result.Succeeded);
-        Assert.Single(results, result => !result.Succeeded);
+        var loser = Assert.Single(results, result => !result.Succeeded);
+        Assert.Equal(AccountVerificationError.InvalidOrExpiredToken, loser.Error);
+        Assert.Equal(2, proofReadBarrier.Reads);
 
         await using var verify = fixture.Context();
         var storedProof = await verify.PasswordResetRequests.SingleAsync(request => request.Id == proof.Id);
@@ -248,6 +253,76 @@ public class UserStoreMigrationTests
             new Argon2idPasswordHasher().Verify(storedUser.PasswordHash, passwords[winner.index]));
         Assert.Equal(PasswordVerificationOutcome.Failed,
             new Argon2idPasswordHasher().Verify(storedUser.PasswordHash, passwords[1 - winner.index]));
+    }
+
+    [PostgresFact]
+    public async Task FailedEmailChangeMutation_RollsBackTokenClaim()
+    {
+        await using var fixture = await TestDatabase.CreateAsync();
+        await using var setup = fixture.Context();
+        await setup.Database.MigrateAsync();
+        using var provider = fixture.Services(includeAccountVerification: true);
+        var user = await CreateUserAsync(provider, "rollback-email@example.com");
+        var token = "rollback-email-token";
+        setup.EmailVerifications.Add(new EmailVerification
+        {
+            Purpose = AccountVerificationPurpose.EmailChange,
+            SubjectId = user.Id,
+            NormalizedTarget = "TAKEN-EMAIL@EXAMPLE.COM",
+            TokenHash = VerificationHasher.TokenHash(token),
+            CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(AccountVerificationService.TokenTtlMinutes),
+        });
+        await setup.SaveChangesAsync();
+        await CreateUserAsync(provider, "taken-email@example.com");
+
+        await using var scope = provider.CreateAsyncScope();
+        var service = scope.ServiceProvider.GetRequiredService<AccountVerificationService>();
+
+        var rejected = await service.ConsumeEmailChangeAsync(
+            user.Id, "taken-email@example.com", token);
+        Assert.Equal(AccountVerificationError.DuplicateEmail, rejected.Error);
+
+        await using (var remove = fixture.Context())
+        {
+            remove.Users.Remove(await remove.Users.SingleAsync(candidate => candidate.Email == "taken-email@example.com"));
+            await remove.SaveChangesAsync();
+        }
+
+        var retried = await service.ConsumeEmailChangeAsync(
+            user.Id, "taken-email@example.com", token);
+        Assert.True(retried.Succeeded);
+    }
+
+    [PostgresFact]
+    public async Task FailedPasswordResetMutation_RollsBackTokenClaim()
+    {
+        await using var fixture = await TestDatabase.CreateAsync();
+        await using var setup = fixture.Context();
+        await setup.Database.MigrateAsync();
+        using var provider = fixture.Services(includeAccountVerification: true);
+        var user = await CreateUserAsync(provider, "rollback-password@example.com");
+        var token = "rollback-password-token";
+        setup.PasswordResetRequests.Add(new PasswordResetRequest
+        {
+            SubjectId = user.Id,
+            NormalizedTarget = "ROLLBACK-PASSWORD@EXAMPLE.COM",
+            TokenHash = VerificationHasher.TokenHash(token),
+            CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(AccountVerificationService.TokenTtlMinutes),
+        });
+        await setup.SaveChangesAsync();
+
+        await using var scope = provider.CreateAsyncScope();
+        var service = scope.ServiceProvider.GetRequiredService<AccountVerificationService>();
+
+        var rejected = await service.ConsumePasswordResetAsync(
+            user.Email!, token, "weak");
+        Assert.Equal(AccountVerificationError.PasswordPolicy, rejected.Error);
+
+        var retried = await service.ConsumePasswordResetAsync(
+            user.Email!, token, "Recovered!Pass456");
+        Assert.True(retried.Succeeded);
     }
 
     private static async Task SeedLegacyAsync(PandaAuthDbContext db, string hash)
@@ -290,11 +365,18 @@ public class UserStoreMigrationTests
         }
         public PandaAuthDbContext Context() => new(new DbContextOptionsBuilder<PandaAuthDbContext>()
             .UseNpgsql(connectionString).UseOpenIddict().Options);
-        public ServiceProvider Services(bool includeAccountVerification = false)
+        public ServiceProvider Services(
+            bool includeAccountVerification = false,
+            DbCommandInterceptor? interceptor = null)
         {
             var services = new ServiceCollection();
             services.AddLogging();
-            services.AddDbContext<PandaAuthDbContext>(o => o.UseNpgsql(connectionString).UseOpenIddict());
+            services.AddDbContext<PandaAuthDbContext>(o =>
+            {
+                o.UseNpgsql(connectionString).UseOpenIddict();
+                if (interceptor is not null)
+                    o.AddInterceptors(interceptor);
+            });
             services.AddUserStore();
             if (includeAccountVerification)
             {
@@ -326,20 +408,26 @@ public class UserStoreMigrationTests
         return user;
     }
 
-    private static async Task DelayPasswordResetUpdatesAsync(PandaAuthDbContext db)
+    private sealed class PasswordResetReadBarrier(int participants) : DbCommandInterceptor
     {
-        await db.Database.ExecuteSqlRawAsync("""
-            CREATE OR REPLACE FUNCTION delay_password_reset_update() RETURNS trigger AS $$
-            BEGIN
-                PERFORM pg_sleep(0.1);
-                RETURN NEW;
-            END;
-            $$ LANGUAGE plpgsql;
-            """);
-        await db.Database.ExecuteSqlRawAsync("""
-            CREATE TRIGGER delay_password_reset_update
-            BEFORE UPDATE ON panda_password_reset_requests
-            FOR EACH ROW EXECUTE FUNCTION delay_password_reset_update();
-            """);
+        private readonly TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int reads;
+        public int Reads => Volatile.Read(ref reads);
+
+        public override async ValueTask<DbDataReader> ReaderExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            if (!command.CommandText.Contains("panda_password_reset_requests", StringComparison.Ordinal) ||
+                !command.CommandText.Contains("LIMIT 1", StringComparison.Ordinal))
+                return await base.ReaderExecutedAsync(command, eventData, result, cancellationToken);
+
+            if (Interlocked.Increment(ref reads) == participants)
+                release.TrySetResult();
+            await release.Task.WaitAsync(cancellationToken);
+            return await base.ReaderExecutedAsync(command, eventData, result, cancellationToken);
+        }
     }
 }
