@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using OpenIddict.EntityFrameworkCore.Models;
 using PandaAuth.Server.Domain;
+using PandaAuth.Server.Features.Tokens;
 using PandaAuth.Server.Infrastructure.Messaging;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
@@ -26,6 +27,33 @@ public sealed class PostgresFactAttribute : FactAttribute
 public class UserStoreMigrationTests
 {
     private const string PreviousMigration = "20260919162138_AddVerificationCodes";
+
+    [PostgresFact]
+    public async Task TokenRevocation_RecordsSecurityEventWithoutTokenContent()
+    {
+        await using var fixture = await TestDatabase.CreateAsync();
+        await using var db = fixture.Context();
+        await db.Database.MigrateAsync();
+        db.Set<OpenIddictEntityFrameworkCoreToken>().Add(new OpenIddictEntityFrameworkCoreToken
+        {
+            Id = "revocation-token",
+            Subject = "revocation-user",
+            Status = OpenIddict.Abstractions.OpenIddictConstants.Statuses.Valid,
+            Type = "refresh_token",
+        });
+        await db.SaveChangesAsync();
+
+        var events = new SecurityEventWriter(db, TimeProvider.System);
+        await new TokenRevocationService(db, events).RevokeUserTokensAsync("revocation-user");
+
+        db.ChangeTracker.Clear();
+        Assert.Equal(OpenIddict.Abstractions.OpenIddictConstants.Statuses.Revoked,
+            (await db.Set<OpenIddictEntityFrameworkCoreToken>().SingleAsync()).Status);
+        var securityEvent = Assert.Single(await db.SecurityEvents.ToListAsync());
+        Assert.Equal("user.tokens_revoked", securityEvent.EventType);
+        Assert.Equal("revocation-user", securityEvent.UserId);
+        Assert.DoesNotContain("revocation-token", securityEvent.Metadata ?? string.Empty);
+    }
 
     [Fact]
     public void ModelSnapshotMatchesRuntimeModel()

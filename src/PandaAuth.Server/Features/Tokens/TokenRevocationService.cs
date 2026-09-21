@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using OpenIddict.Abstractions;
 using OpenIddict.EntityFrameworkCore.Models;
 using PandaAuth.Server.Infrastructure.Persistence;
+using PandaAuth.Server.Infrastructure.Security;
 using static OpenIddict.Abstractions.OpenIddictConstants;
 
 namespace PandaAuth.Server.Features.Tokens;
@@ -19,7 +20,9 @@ public interface ITokenRevoker
     Task RevokeClientTokensAsync(string clientId, CancellationToken cancellationToken = default);
 }
 
-public sealed class TokenRevocationService(PandaAuthDbContext dbContext) : ITokenRevoker
+public sealed class TokenRevocationService(
+    PandaAuthDbContext dbContext,
+    SecurityEventWriter? securityEvents = null) : ITokenRevoker
 {
     public async Task RevokeUserTokensAsync(string userId, string? clientId = null, CancellationToken cancellationToken = default)
     {
@@ -35,6 +38,21 @@ public sealed class TokenRevocationService(PandaAuthDbContext dbContext) : IToke
         await query.ExecuteUpdateAsync(
             setters => setters.SetProperty(token => token.Status, Statuses.Revoked),
             cancellationToken);
+
+        if (securityEvents is not null)
+        {
+            await securityEvents.RecordAsync(new SecurityEventEntry(
+                "user.tokens_revoked",
+                userId,
+                null,
+                "user",
+                userId,
+                "system_token_revocation",
+                new { clientId },
+                null,
+                null,
+                null), cancellationToken);
+        }
     }
 
     public async Task RevokeClientTokensAsync(string clientId, CancellationToken cancellationToken = default)
@@ -44,5 +62,20 @@ public sealed class TokenRevocationService(PandaAuthDbContext dbContext) : IToke
             .ExecuteUpdateAsync(
                 setters => setters.SetProperty(token => token.Status, Statuses.Revoked),
                 cancellationToken);
+
+        if (securityEvents is not null)
+        {
+            await securityEvents.RecordAsync(new SecurityEventEntry(
+                "client.tokens_revoked",
+                null,
+                null,
+                "client",
+                clientId,
+                "system_token_revocation",
+                null,
+                null,
+                null,
+                null), cancellationToken);
+        }
     }
 }
