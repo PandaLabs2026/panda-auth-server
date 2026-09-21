@@ -1,6 +1,6 @@
 # PandaAuth.Server 部署与开发说明
 
-生产编排在[元仓部署指南](https://github.com/PandaLabs2026/panda-auth/blob/main/deploy/README.md)，本目录只保存 Server 专属脚本和迁移说明。
+生产编排不属于本公开产品仓；本目录只保存 Server 专属脚本和迁移说明。生产发布、Caddy 和宿主机探活必须由受控运维流程另行提供，不能从本文件推断社区用户拥有生产权限。
 
 > MVC 注册、迁移时 OpenIddict Core 注册、Seed.Enabled 语义和首次签名密钥装配已修复，并在临时 PostgreSQL 18 上验证空库迁移、运行账号启动、健康检查和登录视图。**生产数据库与首次发布已配置并执行**：2026-09-16 的一次性 `--migrate` 已在生产跑通（独立 migrator 角色迁移/播种，常驻服务用无 DDL 的运行角色启动），Seeder 据此 upsert 订正了存量 me-web 的回调/登出白名单。**仍需注意**：下面「数据库与权限」一节里 `signing_keys` 的权限收紧，要在**已迁移的生产库**上重跑一次本脚本才生效。
 
@@ -58,4 +58,4 @@ EF 工具版本在 [.config/dotnet-tools.json](../.config/dotnet-tools.json)。�
 
 ## 镜像
 
-Server 的 Dockerfile 需要工作区根上下文，以包含同级 Share；正式发布唯一通道为元仓 release.sh。其 dry-run 仍执行本地构建，不用于文档验证。镜像、数据库、Caddy 与探活按元仓指南协调，不通过手工 push 或 scp 绕过发布通道。
+Server 的 Dockerfile 需要工作区根上下文，以包含同级 Share；本文件不提供生产镜像发布入口。镜像、数据库、Caddy 与探活属于受控运维范围，不通过手工 push 或 scp 交付；社区用户只应使用本仓的本地构建和隔离数据库步骤。
