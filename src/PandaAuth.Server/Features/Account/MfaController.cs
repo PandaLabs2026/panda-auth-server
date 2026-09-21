@@ -35,6 +35,7 @@ public sealed class MfaController(
     {
         var user = await AdminAsync();
         if (user is null) return Forbid();
+        if (!user.EmailConfirmed) return Forbid();
         var ceremony = await ceremonies.BeginEnrollmentAsync(user, cancellationToken);
         return Json(new { ceremonyId = ceremony.Id, publicKey = ceremony.Options });
     }
@@ -45,6 +46,7 @@ public sealed class MfaController(
     {
         var user = await AdminAsync();
         if (user is null) return Forbid();
+        if (!user.EmailConfirmed) return Forbid();
         if (request.Response is null) return BadRequest(new { error = "缺少 Passkey 响应。" });
         try
         {
@@ -100,6 +102,7 @@ public sealed class MfaController(
     {
         var user = await AdminAsync();
         if (user is null) return Forbid();
+        if (!user.EmailConfirmed) return Forbid();
         try
         {
             var enrollment = await totpFactors.BeginEnrollmentAsync(user.Id, cancellationToken);
@@ -114,6 +117,7 @@ public sealed class MfaController(
     {
         var user = await AdminAsync();
         if (user is null) return Forbid();
+        if (!user.EmailConfirmed) return Forbid();
         if (!await totpFactors.ConfirmAsync(user.Id, request.FactorId, request.Code, cancellationToken))
             return BadRequest(new { error = "验证码错误或已过期。" });
         await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.Totp);

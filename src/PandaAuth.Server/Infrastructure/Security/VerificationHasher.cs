@@ -19,6 +19,10 @@ public static class VerificationHasher
     public static string CodeHash(string code)
         => Sha256Hex(code);
 
+    /// <summary>Hash for high-entropy one-time account verification and recovery tokens.</summary>
+    public static string TokenHash(string token)
+        => Sha256Hex(token);
+
     private static string Sha256Hex(string value)
     {
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(value));

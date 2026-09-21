@@ -15,6 +15,10 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
 
     public DbSet<VerificationCode> VerificationCodes => Set<VerificationCode>();
 
+    public DbSet<EmailVerification> EmailVerifications => Set<EmailVerification>();
+
+    public DbSet<PasswordResetRequest> PasswordResetRequests => Set<PasswordResetRequest>();
+
     public DbSet<SigningKeyRecord> SigningKeys => Set<SigningKeyRecord>();
 
     public DbSet<MfaWebAuthnCredential> WebAuthnCredentials => Set<MfaWebAuthnCredential>();
@@ -82,6 +86,38 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
             entity.HasIndex(x => new { x.EmailHash, x.CreatedAt });
             // 保留清理按 ExpiresAt 谓词分批删除，同 login_logs 的理由需要单列索引。
             entity.HasIndex(x => x.ExpiresAt);
+        });
+
+        builder.Entity<EmailVerification>(entity =>
+        {
+            entity.ToTable("panda_email_verifications");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Purpose).HasConversion<string>().HasMaxLength(32);
+            entity.Property(x => x.SubjectId).HasMaxLength(450);
+            entity.Property(x => x.NormalizedTarget).HasMaxLength(256);
+            entity.Property(x => x.TokenHash).HasMaxLength(64);
+            entity.Property(x => x.ConsumedAt).IsConcurrencyToken();
+            entity.Property(x => x.Attempts).IsConcurrencyToken();
+            entity.HasIndex(x => x.TokenHash).IsUnique();
+            entity.HasIndex(x => x.ExpiresAt);
+            entity.HasIndex(x => new { x.SubjectId, x.Purpose, x.NormalizedTarget, x.CreatedAt });
+            entity.HasOne<PandaUser>().WithMany().HasForeignKey(x => x.SubjectId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<PasswordResetRequest>(entity =>
+        {
+            entity.ToTable("panda_password_reset_requests");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Purpose).HasConversion<string>().HasMaxLength(32);
+            entity.Property(x => x.SubjectId).HasMaxLength(450);
+            entity.Property(x => x.NormalizedTarget).HasMaxLength(256);
+            entity.Property(x => x.TokenHash).HasMaxLength(64);
+            entity.Property(x => x.ConsumedAt).IsConcurrencyToken();
+            entity.Property(x => x.Attempts).IsConcurrencyToken();
+            entity.HasIndex(x => x.TokenHash).IsUnique();
+            entity.HasIndex(x => x.ExpiresAt);
+            entity.HasIndex(x => new { x.NormalizedTarget, x.Purpose, x.CreatedAt });
+            entity.HasOne<PandaUser>().WithMany().HasForeignKey(x => x.SubjectId).OnDelete(DeleteBehavior.SetNull);
         });
 
         builder.Entity<SigningKeyRecord>(entity =>

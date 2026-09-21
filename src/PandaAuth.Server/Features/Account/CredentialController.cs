@@ -9,7 +9,7 @@ using PandaAuth.Server.Infrastructure.Security;
 namespace PandaAuth.Server.Features.Account;
 
 /// <summary>
-/// 自助凭据管理（server 0.4 第一批）：忘记密码（邮箱验证码重置）与已登录改密。
+/// 自助凭据管理：邮箱确认、更换邮箱、密码恢复与已登录改密。
 /// 与登录共用 ~/account 前缀、限流器与审计风格；三条匿名/认证路径全部有防枚举与频控。
 /// </summary>
 [Route("~/account")]
@@ -17,16 +17,16 @@ public sealed class CredentialController(
     UserService userManager,
     LoginSessionService signInManager,
     LoginRateLimiter loginRateLimiter,
-    OtpService otpService,
+    AccountVerificationService verification,
     IEmailSender emailSender,
     ITokenRevoker tokenRevoker,
     ILogger<CredentialController> logger) : Controller
 {
-    /// <summary>忘记密码：输入邮箱请求验证码。防枚举——存在与否都走同一签发路径、回同一句话。</summary>
+    /// <summary>忘记密码：存在与否都走同一签发路径、回同一句话。</summary>
     [HttpGet("forgot-password")]
     public IActionResult ForgotPassword(string? returnUrl = null)
     {
-        return View(new ForgotPasswordViewModel { ReturnUrl = returnUrl });
+        return View(new ForgotPasswordViewModel { ReturnUrl = NormalizeLocalReturnUrl(returnUrl) });
     }
 
     [HttpPost("forgot-password")]
@@ -39,38 +39,24 @@ public sealed class CredentialController(
         }
 
         var email = model.Email.Trim();
+        var returnUrl = NormalizeLocalReturnUrl(model.ReturnUrl);
         using var ipLease = loginRateLimiter.AttemptByIp(HttpContext.Connection.RemoteIpAddress?.ToString());
         if (!ipLease.IsAcquired)
         {
             // 限流命中与成功发出同形（同一跳转、同一提示），不暴露差异。
             TempData["ResetEmail"] = email;
-            TempData["ReturnUrl"] = model.ReturnUrl;
-            TempData["Info"] = "如果该邮箱存在已注册账号，验证码已发送，请查收（5 分钟内有效）。";
+            TempData["ReturnUrl"] = returnUrl;
+            TempData["Info"] = RecoveryMessage;
             return RedirectToAction(nameof(ResetPassword));
         }
 
-        try
-        {
-            // 无论账号是否存在都先签发（计数 + 写库路径完全一致，消除时序侧信道）；
-            // 仅对真实存在的 Active 账号真正发送。验证码明文只经过内存与发送调用，不落任何日志。
-            var code = await otpService.IssueAsync(email, cancellationToken);
-            var user = await userManager.FindByEmailAsync(email);
-            if (user is not null && user.Status == UserStatus.Active)
-            {
-                await emailSender.SendVerificationCodeAsync(email, code, cancellationToken);
-                logger.LogInformation("忘记密码验证码已发送 userId={UserId}", user.Id);
-            }
-        }
-        catch (OtpRateLimitedException)
-        {
-            // 吞掉差异：频控命中与成功发出对调用方完全同形。
-        }
+        await verification.BeginPasswordResetAsync(email, cancellationToken);
 
-        // 中性完成后直接带邮箱进重置页——验证码输入框在那里（PRG：刷新/回退不重复发信）。
+        // 中性完成后直接带邮箱进重置页（PRG：刷新/回退不重复发信）。
         // ReturnUrl（发起方授权上下文）随 TempData 与表单隐藏字段双层携带，重置完成后回原发起方。
         TempData["ResetEmail"] = email;
-        TempData["ReturnUrl"] = model.ReturnUrl;
-        TempData["Info"] = "如果该邮箱存在已注册账号，验证码已发送，请查收（5 分钟内有效）。";
+        TempData["ReturnUrl"] = returnUrl;
+        TempData["Info"] = RecoveryMessage;
         return RedirectToAction(nameof(ResetPassword));
     }
 
@@ -83,7 +69,7 @@ public sealed class CredentialController(
             ViewData["Info"] = info;
         }
 
-        return View(new ResetPasswordViewModel { Email = email, ReturnUrl = TempData["ReturnUrl"] as string });
+        return View(new ResetPasswordViewModel { Email = email, ReturnUrl = NormalizeLocalReturnUrl(TempData["ReturnUrl"] as string) });
     }
 
     [HttpPost("reset-password")]
@@ -102,35 +88,111 @@ public sealed class CredentialController(
             return ViewWithError("尝试过于频繁，请稍后再试。");
         }
 
-        // 先校验验证码（含 5 败锁定与双频控），再找账号——验证码对不存在的邮箱也签发过（防枚举），
-        // 但只有真实账号发出的码才会到达用户邮箱。
-        var outcome = await otpService.VerifyAsync(email, model.Code, cancellationToken);
-        if (outcome != OtpVerifyOutcome.Success)
+        var outcome = await verification.ConsumePasswordResetAsync(
+            email, model.Token, model.NewPassword, cancellationToken);
+        if (!outcome.Succeeded)
         {
-            return ViewWithError(outcome == OtpVerifyOutcome.Locked
-                ? "验证失败次数过多，请 15 分钟后再试。"
-                : "验证码错误或已过期。");
+            return ViewWithError(outcome.Error == AccountVerificationError.PasswordPolicy
+                ? "新密码不合规。"
+                : "令牌错误、已使用或已过期。");
         }
 
-        var user = await userManager.FindByEmailAsync(email);
-        if (user is null || user.Status != UserStatus.Active)
-        {
-            // 验证码正确但账号不可用（不存在/冻结/注销）：不暴露具体状态。
-            return ViewWithError("验证码错误或已过期。");
-        }
-
-        var (changed, error) = await ReplacePasswordAsync(user, model.NewPassword);
-        if (!changed)
-        {
-            return ViewWithError(error ?? "新密码不合规。");
-        }
-
-        await userManager.UpdateSecurityStampAsync(user);
-        await tokenRevoker.RevokeUserTokensAsync(user.Id, cancellationToken: cancellationToken);
-        logger.LogInformation("用户通过邮箱验证码自助重置密码 userId={UserId}", user.Id);
+        await tokenRevoker.RevokeUserTokensAsync(outcome.SecurityEvent!.SubjectId, cancellationToken: cancellationToken);
+        logger.LogInformation("用户通过邮箱恢复重置密码 userId={UserId}", outcome.SecurityEvent.SubjectId);
 
         TempData["Notice"] = "密码已重置，请使用新密码登录。";
-        return RedirectToAction("Login", "Account", new { returnUrl = model.ReturnUrl });
+        return RedirectToAction("Login", "Account", new { returnUrl = NormalizeLocalReturnUrl(model.ReturnUrl) });
+    }
+
+    private const string RecoveryMessage = "如果该邮箱存在可恢复的账号，恢复令牌已发送，请查收（20 分钟内有效）。";
+
+    [Authorize]
+    [HttpGet("confirm-email")]
+    public IActionResult ConfirmEmail() => View(new ConfirmEmailViewModel());
+
+    [Authorize]
+    [HttpPost("send-email-confirmation")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SendEmailConfirmation(CancellationToken cancellationToken)
+    {
+        var user = await userManager.GetUserAsync(User);
+        if (user is null) return Challenge();
+        await verification.BeginEmailConfirmationAsync(user.Id, cancellationToken);
+        TempData["Info"] = "如果账号邮箱尚未确认，确认令牌已发送。";
+        return RedirectToAction(nameof(ConfirmEmail));
+    }
+
+    [Authorize]
+    [HttpPost("confirm-email")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ConfirmEmail(ConfirmEmailViewModel model, CancellationToken cancellationToken)
+    {
+        if (!ModelState.IsValid) return View(model);
+        var user = await userManager.GetUserAsync(User);
+        if (user is null) return Challenge();
+        var result = await verification.ConsumeEmailConfirmationAsync(user.Id, model.Token, cancellationToken);
+        if (!result.Succeeded) return ViewWithError("令牌错误、已使用或已过期。");
+        TempData["Notice"] = "邮箱已确认。";
+        return RedirectToAction("Login", "Account");
+    }
+
+    [Authorize]
+    [HttpGet("change-email")]
+    public IActionResult ChangeEmail(string? returnUrl = null)
+        => View(new ChangeEmailViewModel { ReturnUrl = NormalizeLocalReturnUrl(returnUrl) });
+
+    [Authorize]
+    [HttpPost("change-email")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ChangeEmail(ChangeEmailViewModel model, CancellationToken cancellationToken)
+    {
+        if (!ModelState.IsValid) return View(model);
+        var user = await userManager.GetUserAsync(User);
+        if (user is null) return Challenge();
+        if (!user.EmailConfirmed) return ViewWithError("请先确认当前邮箱。");
+        var check = await signInManager.CheckPasswordSignInAsync(user, model.CurrentPassword, lockoutOnFailure: true);
+        if (!check.Succeeded) return ViewWithError("当前密码不正确。");
+        var outcome = await verification.BeginEmailChangeAsync(check.User!.Id, model.NewEmail, cancellationToken);
+        if (!outcome.Succeeded) return ViewWithError("无法变更邮箱，请检查目标地址。");
+        TempData["PendingEmail"] = model.NewEmail;
+        TempData["ReturnUrl"] = NormalizeLocalReturnUrl(model.ReturnUrl);
+        return RedirectToAction(nameof(ConfirmEmailChange));
+    }
+
+    [Authorize]
+    [HttpGet("confirm-email-change")]
+    public IActionResult ConfirmEmailChange()
+        => View(new ConfirmEmailChangeViewModel
+        {
+            NewEmail = TempData["PendingEmail"] as string ?? string.Empty,
+            ReturnUrl = NormalizeLocalReturnUrl(TempData["ReturnUrl"] as string),
+        });
+
+    [Authorize]
+    [HttpPost("confirm-email-change")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ConfirmEmailChange(
+        ConfirmEmailChangeViewModel model, CancellationToken cancellationToken)
+    {
+        if (!ModelState.IsValid) return View(model);
+        var user = await userManager.GetUserAsync(User);
+        if (user is null) return Challenge();
+        var oldEmail = user.Email;
+        var outcome = await verification.ConsumeEmailChangeAsync(
+            user.Id, model.NewEmail, model.Token, cancellationToken);
+        if (!outcome.Succeeded) return ViewWithError("令牌错误、已使用或已过期。");
+        await tokenRevoker.RevokeUserTokensAsync(user.Id, cancellationToken: cancellationToken);
+        await signInManager.SignOutAsync(HttpContext);
+        if (!string.IsNullOrWhiteSpace(oldEmail))
+        {
+            var notice = EmailTemplates.EmailChangeNotice();
+            try { await emailSender.SendAsync(oldEmail, notice.Subject, notice.Html, cancellationToken); }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                logger.LogError(exception, "旧邮箱变更通知发送失败 userId={UserId}", user.Id);
+            }
+        }
+        return Redirect(NormalizeLocalReturnUrl(model.ReturnUrl));
     }
 
     /// <summary>自助改密（已登录，IDP Cookie）：旧密码验证 + 新密码；成功后吊销全部令牌并登出。</summary>
@@ -174,6 +236,7 @@ public sealed class CredentialController(
         // CheckPasswordSignInAsync can retry after a concurrency conflict. From this point on
         // every mutation must use its reloaded entity, not the pre-check instance.
         user = check.User!;
+        if (!user.EmailConfirmed) return ViewWithError("请先确认当前邮箱。");
         var (changed, error) = await ReplacePasswordAsync(user, model.NewPassword);
         if (!changed)
         {

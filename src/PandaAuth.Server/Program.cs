@@ -192,6 +192,7 @@ else
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<OtpService>();
+builder.Services.AddScoped<AccountVerificationService>();
 // login_logs / admin_audit_logs 保留策略：后台按天删除超期审计记录（Auth:Audit:RetentionDays，默认 90 天）。
 builder.Services.AddHostedService<LoginLogRetentionService>();
 builder.Services.AddHealthChecks();

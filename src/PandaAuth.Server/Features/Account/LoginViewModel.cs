@@ -33,8 +33,8 @@ public sealed class ResetPasswordViewModel
     [EmailAddress(ErrorMessage = "邮箱格式不正确。")]
     public string Email { get; init; } = string.Empty;
 
-    [Required(ErrorMessage = "请输入验证码。")]
-    public string Code { get; init; } = string.Empty;
+    [Required(ErrorMessage = "请输入邮件中的一次性令牌。")]
+    public string Token { get; init; } = string.Empty;
 
     [Required(ErrorMessage = "请输入新密码。")]
     [DataType(DataType.Password)]
@@ -56,4 +56,37 @@ public sealed class ChangePasswordViewModel
 
     [HiddenInput]
     public string ReturnUrl { get; init; } = "/";
+}
+
+public sealed class ConfirmEmailViewModel
+{
+    [Required]
+    public string Token { get; init; } = string.Empty;
+}
+
+public sealed class ChangeEmailViewModel
+{
+    [Required]
+    [EmailAddress]
+    public string NewEmail { get; init; } = string.Empty;
+
+    [Required]
+    [DataType(DataType.Password)]
+    public string CurrentPassword { get; init; } = string.Empty;
+
+    [HiddenInput]
+    public string? ReturnUrl { get; init; }
+}
+
+public sealed class ConfirmEmailChangeViewModel
+{
+    [Required]
+    [EmailAddress]
+    public string NewEmail { get; init; } = string.Empty;
+
+    [Required]
+    public string Token { get; init; } = string.Empty;
+
+    [HiddenInput]
+    public string? ReturnUrl { get; init; }
 }

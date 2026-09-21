@@ -17,6 +17,7 @@ namespace PandaAuth.Server.Features.Admin;
 /// 密钥轮换用 <c>UpdateAsync(application, secret)</c>——那是唯一会重新哈希的路径。
 /// </summary>
 [Route("~/admin-api/clients")]
+[RequireConfirmedEmail]
 [Authorize(AuthenticationSchemes = OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme, Policy = AdminApiAuthorization.PolicyName)]
 public sealed class AdminClientsController(
     PandaAuthDbContext dbContext,

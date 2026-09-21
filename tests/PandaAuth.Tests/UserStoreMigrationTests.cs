@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using OpenIddict.EntityFrameworkCore.Models;
 using PandaAuth.Server.Domain;
+using PandaAuth.Server.Infrastructure.Messaging;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
 using Xunit;
@@ -164,6 +165,91 @@ public class UserStoreMigrationTests
         await Assert.ThrowsAsync<DbUpdateException>(() => setup.SaveChangesAsync());
     }
 
+    [PostgresFact]
+    public async Task ConcurrentInvalidPasswordResetAttempts_AreAtomicAndCapped()
+    {
+        await using var fixture = await TestDatabase.CreateAsync();
+        await using var setup = fixture.Context();
+        await setup.Database.MigrateAsync();
+        using var provider = fixture.Services(includeAccountVerification: true);
+        var user = await CreateUserAsync(provider, "attempts@example.com");
+        var proof = new PasswordResetRequest
+        {
+            SubjectId = user.Id,
+            NormalizedTarget = "ATTEMPTS@EXAMPLE.COM",
+            TokenHash = VerificationHasher.TokenHash("correct-token"),
+            CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(AccountVerificationService.TokenTtlMinutes),
+        };
+        setup.PasswordResetRequests.Add(proof);
+        await setup.SaveChangesAsync();
+        await DelayPasswordResetUpdatesAsync(setup);
+
+        var scopes = Enumerable.Range(0, AccountVerificationService.MaxAttempts + 3)
+            .Select(_ => provider.CreateAsyncScope())
+            .ToArray();
+        try
+        {
+            var results = await Task.WhenAll(scopes.Select(scope =>
+                scope.ServiceProvider.GetRequiredService<AccountVerificationService>()
+                    .ConsumePasswordResetAsync("attempts@example.com", "wrong-token", "NewStrong!Pass456")));
+
+            Assert.All(results, result => Assert.False(result.Succeeded));
+        }
+        finally
+        {
+            foreach (var scope in scopes)
+                await scope.DisposeAsync();
+        }
+
+        await using var verify = fixture.Context();
+        var stored = await verify.PasswordResetRequests.SingleAsync(request => request.Id == proof.Id);
+        Assert.Equal(AccountVerificationService.MaxAttempts, stored.Attempts);
+        Assert.Null(stored.ConsumedAt);
+    }
+
+    [PostgresFact]
+    public async Task ConcurrentValidPasswordReset_ClaimsProofBeforeOneAccountMutation()
+    {
+        await using var fixture = await TestDatabase.CreateAsync();
+        await using var setup = fixture.Context();
+        await setup.Database.MigrateAsync();
+        using var provider = fixture.Services(includeAccountVerification: true);
+        var user = await CreateUserAsync(provider, "consume@example.com");
+        var proof = new PasswordResetRequest
+        {
+            SubjectId = user.Id,
+            NormalizedTarget = "CONSUME@EXAMPLE.COM",
+            TokenHash = VerificationHasher.TokenHash("correct-token"),
+            CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(AccountVerificationService.TokenTtlMinutes),
+        };
+        setup.PasswordResetRequests.Add(proof);
+        await setup.SaveChangesAsync();
+        await DelayPasswordResetUpdatesAsync(setup);
+
+        var passwords = new[] { "FirstStrong!Pass456", "SecondStrong!Pass789" };
+        await using var firstScope = provider.CreateAsyncScope();
+        await using var secondScope = provider.CreateAsyncScope();
+        var results = await Task.WhenAll(
+            firstScope.ServiceProvider.GetRequiredService<AccountVerificationService>()
+                .ConsumePasswordResetAsync("consume@example.com", "correct-token", passwords[0]),
+            secondScope.ServiceProvider.GetRequiredService<AccountVerificationService>()
+                .ConsumePasswordResetAsync("consume@example.com", "correct-token", passwords[1]));
+
+        var winner = Assert.Single(results.Select((result, index) => (result, index)), item => item.result.Succeeded);
+        Assert.Single(results, result => !result.Succeeded);
+
+        await using var verify = fixture.Context();
+        var storedProof = await verify.PasswordResetRequests.SingleAsync(request => request.Id == proof.Id);
+        var storedUser = await verify.Users.SingleAsync(candidate => candidate.Id == user.Id);
+        Assert.NotNull(storedProof.ConsumedAt);
+        Assert.Equal(PasswordVerificationOutcome.Success,
+            new Argon2idPasswordHasher().Verify(storedUser.PasswordHash, passwords[winner.index]));
+        Assert.Equal(PasswordVerificationOutcome.Failed,
+            new Argon2idPasswordHasher().Verify(storedUser.PasswordHash, passwords[1 - winner.index]));
+    }
+
     private static async Task SeedLegacyAsync(PandaAuthDbContext db, string hash)
     {
         await db.Database.ExecuteSqlInterpolatedAsync($"""
@@ -204,12 +290,17 @@ public class UserStoreMigrationTests
         }
         public PandaAuthDbContext Context() => new(new DbContextOptionsBuilder<PandaAuthDbContext>()
             .UseNpgsql(connectionString).UseOpenIddict().Options);
-        public ServiceProvider Services()
+        public ServiceProvider Services(bool includeAccountVerification = false)
         {
             var services = new ServiceCollection();
             services.AddLogging();
             services.AddDbContext<PandaAuthDbContext>(o => o.UseNpgsql(connectionString).UseOpenIddict());
             services.AddUserStore();
+            if (includeAccountVerification)
+            {
+                services.AddSingleton<IEmailSender, NullEmailSender>();
+                services.AddScoped<AccountVerificationService>();
+            }
             return services.BuildServiceProvider();
         }
         public async ValueTask DisposeAsync()
@@ -217,5 +308,38 @@ public class UserStoreMigrationTests
             await using var db = Context();
             await db.Database.EnsureDeletedAsync();
         }
+    }
+
+    private sealed class NullEmailSender : IEmailSender
+    {
+        public Task SendVerificationCodeAsync(string email, string code, CancellationToken ct) => Task.CompletedTask;
+
+        public Task SendAsync(string email, string subject, string htmlBody, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private static async Task<PandaUser> CreateUserAsync(IServiceProvider provider, string email)
+    {
+        await using var scope = provider.CreateAsyncScope();
+        var user = new PandaUser { UserName = email, Email = email, EmailConfirmed = true };
+        Assert.True((await scope.ServiceProvider.GetRequiredService<UserService>()
+            .CreateAsync(user, "Strong!Pass123")).Succeeded);
+        return user;
+    }
+
+    private static async Task DelayPasswordResetUpdatesAsync(PandaAuthDbContext db)
+    {
+        await db.Database.ExecuteSqlRawAsync("""
+            CREATE OR REPLACE FUNCTION delay_password_reset_update() RETURNS trigger AS $$
+            BEGIN
+                PERFORM pg_sleep(0.1);
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+            """);
+        await db.Database.ExecuteSqlRawAsync("""
+            CREATE TRIGGER delay_password_reset_update
+            BEFORE UPDATE ON panda_password_reset_requests
+            FOR EACH ROW EXECUTE FUNCTION delay_password_reset_update();
+            """);
     }
 }

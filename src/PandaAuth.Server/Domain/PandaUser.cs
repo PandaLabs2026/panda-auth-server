@@ -11,6 +11,7 @@ public sealed class PandaUser
     public string? NormalizedUserName { get; set; }
     public string? Email { get; set; }
     public string? NormalizedEmail { get; set; }
+    // Migrated users may still sign in while false. Sensitive account workflows gate on it.
     public bool EmailConfirmed { get; set; }
     public string? PasswordHash { get; set; }
     // Credential material is deliberately not migrated. A preserved true value blocks

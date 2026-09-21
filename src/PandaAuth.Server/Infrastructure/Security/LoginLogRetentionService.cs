@@ -52,9 +52,11 @@ public sealed class LoginLogRetentionService(
                 var removed = await PurgeAsync(dbContext, cutoff, BatchSize, stoppingToken);
                 var removedAdmin = await PurgeAdminAuditAsync(dbContext, cutoff, BatchSize, stoppingToken);
                 var removedCodes = await PurgeVerificationCodesAsync(dbContext, stoppingToken);
+                var removedAccountTokens = await PurgeAccountVerificationTokensAsync(
+                    dbContext, DateTimeOffset.UtcNow, stoppingToken);
                 logger.LogInformation(
-                    "审计日志清理完成：login_logs 删除 {Removed} 行、admin_audit_logs 删除 {RemovedAdmin} 行、verification_codes 清理 {RemovedCodes} 行，截止点 {Cutoff:O}。",
-                    removed, removedAdmin, removedCodes, cutoff);
+                    "审计日志清理完成：login_logs 删除 {Removed} 行、admin_audit_logs 删除 {RemovedAdmin} 行、verification_codes 清理 {RemovedCodes} 行、账号验证令牌清理 {RemovedAccountTokens} 行，截止点 {Cutoff:O}。",
+                    removed, removedAdmin, removedCodes, removedAccountTokens, cutoff);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -171,5 +173,40 @@ public sealed class LoginLogRetentionService(
                 return removed;
             }
         }
+    }
+
+    /// <summary>Keep consumed and expired account proofs for 24 hours, then remove them in batches.</summary>
+    internal static async Task<int> PurgeAccountVerificationTokensAsync(
+        PandaAuthDbContext dbContext, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var cutoff = now.AddHours(-24);
+        var removed = 0;
+        while (true)
+        {
+            var expired = await dbContext.EmailVerifications
+                .Where(token => token.ExpiresAt < cutoff)
+                .OrderBy(token => token.Id)
+                .Take(BatchSize)
+                .ToListAsync(cancellationToken);
+            if (expired.Count == 0) break;
+            dbContext.EmailVerifications.RemoveRange(expired);
+            await dbContext.SaveChangesAsync(cancellationToken);
+            removed += expired.Count;
+        }
+
+        while (true)
+        {
+            var expired = await dbContext.PasswordResetRequests
+                .Where(token => token.ExpiresAt < cutoff)
+                .OrderBy(token => token.Id)
+                .Take(BatchSize)
+                .ToListAsync(cancellationToken);
+            if (expired.Count == 0) break;
+            dbContext.PasswordResetRequests.RemoveRange(expired);
+            await dbContext.SaveChangesAsync(cancellationToken);
+            removed += expired.Count;
+        }
+
+        return removed;
     }
 }

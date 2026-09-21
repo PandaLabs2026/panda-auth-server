@@ -17,6 +17,37 @@ namespace PandaAuth.Tests;
 public class MfaControllerTests
 {
     [Fact]
+    public async Task Enrollment_UnconfirmedAdministrator_IsForbiddenBeforeCreatingSecretsOrCeremonies()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var users = provider.GetRequiredService<UserService>();
+        var roles = provider.GetRequiredService<RoleService>();
+        Assert.True((await roles.CreateAsync(new PandaRole { Name = PandaUser.AdminRole })).Succeeded);
+        var user = new PandaUser { UserName = "unconfirmed-admin", Email = "admin@example.com" };
+        Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
+        Assert.True((await users.AddToRoleAsync(user, PandaUser.AdminRole)).Succeeded);
+        var context = new DefaultHttpContext { RequestServices = provider };
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(ClaimTypes.NameIdentifier, user.Id)], LoginSessionService.Scheme));
+        var controller = new MfaController(
+            users,
+            new WebAuthnCeremonyService(new Fido2(WebAuthnRelyingParty.Create("https://auth.example.test")),
+                provider.GetRequiredService<PandaAuthDbContext>(),
+                new MfaChallengeStore(provider.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>(), TimeProvider.System)),
+            new TotpFactorService(provider.GetRequiredService<PandaAuthDbContext>(),
+                new TotpSecretProtector(Convert.FromBase64String("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="), "v1"), TimeProvider.System),
+            provider.GetRequiredService<LoginSessionService>(),
+            provider.GetRequiredService<PandaAuthDbContext>(),
+            provider.GetRequiredService<ILoggerFactory>().CreateLogger<MfaController>())
+        {
+            ControllerContext = new ControllerContext { HttpContext = context },
+        };
+
+        Assert.IsType<ForbidResult>(await controller.EnrollmentOptions(CancellationToken.None));
+        Assert.IsType<ForbidResult>(await controller.BeginTotp(CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Index_NonAdministrator_IsForbiddenBeforeAnyPasskeyCeremony()
     {
         using var provider = TestUserStoreHost.Create();

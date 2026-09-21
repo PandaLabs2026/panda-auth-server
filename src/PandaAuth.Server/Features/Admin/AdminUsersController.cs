@@ -18,6 +18,7 @@ namespace PandaAuth.Server.Features.Admin;
 /// 冻结/重置/角色变更/注销都联动批量吊销：令牌即时失效是 G06 的生效边界要求。
 /// </summary>
 [Route("~/admin-api/users")]
+[RequireConfirmedEmail]
 [Authorize(AuthenticationSchemes = OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme, Policy = AdminApiAuthorization.PolicyName)]
 public sealed class AdminUsersController(
     UserService userManager,
