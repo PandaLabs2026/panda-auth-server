@@ -20,6 +20,7 @@ public sealed class CredentialController(
     AccountVerificationService verification,
     IEmailSender emailSender,
     ITokenRevoker tokenRevoker,
+    SecurityEventWriter securityEvents,
     ILogger<CredentialController> logger) : Controller
 {
     /// <summary>忘记密码：存在与否都走同一签发路径、回同一句话。</summary>
@@ -98,6 +99,17 @@ public sealed class CredentialController(
         }
 
         await tokenRevoker.RevokeUserTokensAsync(outcome.SecurityEvent!.SubjectId, cancellationToken: cancellationToken);
+        await securityEvents.RecordAsync(new SecurityEventEntry(
+            EventType: "user.password_reset",
+            UserId: outcome.SecurityEvent.SubjectId,
+            ActorUserId: null,
+            TargetType: "user",
+            TargetId: outcome.SecurityEvent.SubjectId,
+            AuthenticationMethod: "email_token",
+            Metadata: new { source = "forgot_password" },
+            IpAddress: HttpContext.Connection.RemoteIpAddress?.ToString(),
+            UserAgent: Request.Headers.UserAgent.ToString(),
+            CorrelationId: HttpContext.TraceIdentifier), cancellationToken);
         logger.LogInformation("用户通过邮箱恢复重置密码 userId={UserId}", outcome.SecurityEvent.SubjectId);
 
         TempData["Notice"] = "密码已重置，请使用新密码登录。";

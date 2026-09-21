@@ -65,6 +65,7 @@ public class CredentialControllerTests
         services.AddSingleton<ITokenRevoker>(revoker);
         services.AddScoped<OtpService>();
         services.AddScoped<AccountVerificationService>();
+        services.AddScoped<SecurityEventWriter>();
         var provider = services.BuildServiceProvider();
 
         var users = provider.GetRequiredService<UserService>();
@@ -75,6 +76,7 @@ public class CredentialControllerTests
             provider.GetRequiredService<AccountVerificationService>(),
             provider.GetRequiredService<IEmailSender>(),
             provider.GetRequiredService<ITokenRevoker>(),
+            provider.GetRequiredService<SecurityEventWriter>(),
             provider.GetRequiredService<ILoggerFactory>().CreateLogger<CredentialController>())
         {
             ControllerContext = new ControllerContext(new ActionContext(
@@ -146,7 +148,7 @@ public class CredentialControllerTests
     [Fact]
     public async Task ResetPassword_CorrectCode_SwapsPassword_RevokesTokens_RefreshesStamp()
     {
-        var (controller, _, sender, revoker, users) = await CreateAsync();
+        var (controller, provider, sender, revoker, users) = await CreateAsync();
         var user = await SeedUserAsync(users, "reset@example.com");
         await controller.ForgotPassword(new ForgotPasswordViewModel { Email = "reset@example.com" }, CancellationToken.None);
         var token = sender.TakeToken();
@@ -166,6 +168,9 @@ public class CredentialControllerTests
         Assert.True(await users.CheckPasswordAsync(reloaded!, "NewPass!2026x"));
         Assert.Equal([user.Id], revoker.RevokedUsers);
         Assert.NotEqual(stampBefore, reloaded!.SecurityStamp);
+        var securityEvent = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents);
+        Assert.Equal("user.password_reset", securityEvent.EventType);
+        Assert.Equal(user.Id, securityEvent.UserId);
     }
 
     [Fact]
