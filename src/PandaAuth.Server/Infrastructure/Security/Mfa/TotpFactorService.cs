@@ -10,10 +10,11 @@ public sealed record TotpEnrollment(Guid FactorId, string Secret, string Provisi
 /// <summary>Creates and confirms the encrypted TOTP fallback factor after a Passkey already exists.</summary>
 public sealed class TotpFactorService(PandaAuthDbContext db, TotpSecretProtector protector, TimeProvider clock)
 {
-    public async Task<TotpEnrollment> BeginEnrollmentAsync(string userId, CancellationToken cancellationToken)
+    public async Task<TotpEnrollment> BeginEnrollmentAsync(
+        string userId, CancellationToken cancellationToken, bool requirePasskey = true)
     {
         var hasPasskey = await db.WebAuthnCredentials.AnyAsync(item => item.UserId == userId && item.RevokedAt == null, cancellationToken);
-        if (!hasPasskey) throw new InvalidOperationException("启用 TOTP 前必须已有有效 Passkey。");
+        if (requirePasskey && !hasPasskey) throw new InvalidOperationException("启用 TOTP 前必须已有有效 Passkey。");
         if (await db.TotpFactors.AnyAsync(item => item.UserId == userId && item.RevokedAt == null, cancellationToken))
             throw new InvalidOperationException("此账号已有未撤销的 TOTP 因子。");
 

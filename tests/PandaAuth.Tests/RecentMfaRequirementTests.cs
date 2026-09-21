@@ -31,6 +31,16 @@ public class RecentMfaRequirementTests
     }
 
     [Fact]
+    public void RecoveryCode_IsAnMfaMethodButNotRecentWebAuthn()
+    {
+        var now = DateTimeOffset.Parse("2026-09-20T12:00:00Z");
+        var principal = Principal(MfaClaimTypes.RecoveryCode, now);
+
+        Assert.True(RecentMfaRequirement.HasValidMfa(principal, now, TimeSpan.FromMinutes(5)));
+        Assert.False(RecentMfaRequirement.HasRecentWebAuthn(principal, now, TimeSpan.FromMinutes(5)));
+    }
+
+    [Fact]
     public void UsedTotpTimeStep_CannotBeAcceptedAgain()
     {
         var secret = System.Text.Encoding.ASCII.GetBytes("12345678901234567890");

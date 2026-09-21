@@ -47,7 +47,7 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock)
     /// <summary>Rotates the current IDP cookie after a verified MFA ceremony without altering its subject or lifetime.</summary>
     public async Task MarkMfaAsync(HttpContext context, string method)
     {
-        if (method is not (MfaClaimTypes.WebAuthn or MfaClaimTypes.Totp))
+        if (method is not (MfaClaimTypes.WebAuthn or MfaClaimTypes.Totp or MfaClaimTypes.RecoveryCode))
         {
             throw new ArgumentOutOfRangeException(nameof(method));
         }

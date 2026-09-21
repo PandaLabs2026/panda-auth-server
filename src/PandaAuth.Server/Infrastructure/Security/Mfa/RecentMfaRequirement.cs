@@ -6,7 +6,7 @@ namespace PandaAuth.Server.Infrastructure.Security.Mfa;
 public static class RecentMfaRequirement
 {
     public static bool HasValidMfa(ClaimsPrincipal principal, DateTimeOffset now, TimeSpan maximumAge)
-        => HasMethod(principal, MfaClaimTypes.WebAuthn, MfaClaimTypes.Totp) && IsWithinAge(principal, now, maximumAge);
+        => HasMethod(principal, MfaClaimTypes.WebAuthn, MfaClaimTypes.Totp, MfaClaimTypes.RecoveryCode) && IsWithinAge(principal, now, maximumAge);
 
     public static bool HasRecentWebAuthn(ClaimsPrincipal principal, DateTimeOffset now, TimeSpan maximumAge)
         => HasMethod(principal, MfaClaimTypes.WebAuthn) && IsWithinAge(principal, now, maximumAge);

@@ -60,6 +60,22 @@ public sealed class MfaServiceTests
     }
 
     [Fact]
+    public async Task OrdinaryUser_CanBeginTotpEnrollmentWithoutExistingPasskey()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "totp-member", Email = "totp@example.com", EmailConfirmed = true };
+        Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
+        var service = CreateService(provider);
+
+        var enrollment = await service.BeginEnrollmentAsync(
+            user.Id, Principal(user.Id, recentMethod: MfaClaimTypes.Totp), MfaFactorType.Totp, CancellationToken.None);
+
+        Assert.NotEqual(Guid.Empty, enrollment.FactorId);
+        Assert.StartsWith("otpauth://totp/", enrollment.ProvisioningUri);
+    }
+
+    [Fact]
     public async Task RevokeFactor_DoesNotAllowRemovingTheLastActiveFactor()
     {
         using var provider = TestUserStoreHost.Create();
