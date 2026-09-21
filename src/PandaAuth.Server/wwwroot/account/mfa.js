@@ -31,8 +31,8 @@
     id: credential.id, rawId: encode(credential.rawId), type: credential.type,
     response: (() => {
       const response = credential.response;
-      const encoded = { clientDataJSON: encode(response.clientDataJSON) };
-      if (response.attestationObject) encoded.attestationObject = encode(response.attestationObject);
+      const encoded = { clientDataJson: encode(response.clientDataJSON) };
+      if (response.attestationObject) encoded.AttestationObject = encode(response.attestationObject);
       if (response.authenticatorData) encoded.authenticatorData = encode(response.authenticatorData);
       if (response.signature) encoded.signature = encode(response.signature);
       if (response.userHandle) encoded.userHandle = encode(response.userHandle);

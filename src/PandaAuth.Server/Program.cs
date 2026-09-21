@@ -1,5 +1,6 @@
 using System.Net;
 using Fido2NetLib;
+using Fido2NetLib.Serialization;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -25,7 +26,9 @@ var connectionStringName = isMigrateCommand ? "Migration" : "Default";
 var connectionString = builder.Configuration.GetConnectionString(connectionStringName)
     ?? throw new InvalidOperationException($"缺少连接字符串 ConnectionStrings:{connectionStringName}。");
 
-builder.Services.AddControllersWithViews();
+builder.Services.AddControllersWithViews()
+    .AddJsonOptions(options =>
+        options.JsonSerializerOptions.TypeInfoResolverChain.Insert(0, FidoModelSerializerContext.Default));
 
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
 var authOptions = builder.Configuration.GetSection(AuthOptions.SectionName).Get<AuthOptions>() ?? new AuthOptions();
