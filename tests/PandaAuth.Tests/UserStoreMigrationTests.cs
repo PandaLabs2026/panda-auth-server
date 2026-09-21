@@ -8,6 +8,7 @@ using Npgsql;
 using OpenIddict.EntityFrameworkCore.Models;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Tokens;
+using PandaAuth.Server.Configuration;
 using PandaAuth.Server.Infrastructure.Messaging;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
@@ -53,6 +54,35 @@ public class UserStoreMigrationTests
         Assert.Equal("user.tokens_revoked", securityEvent.EventType);
         Assert.Equal("revocation-user", securityEvent.UserId);
         Assert.DoesNotContain("revocation-token", securityEvent.Metadata ?? string.Empty);
+    }
+
+    [PostgresFact]
+    public async Task SigningKeys_GenerateReuseRotateAndRetireExpiredKeys()
+    {
+        await using var fixture = await TestDatabase.CreateAsync();
+        await using var db = fixture.Context();
+        await db.Database.MigrateAsync();
+        var options = new SigningKeyOptions { RotationIntervalDays = 1, ValidityDays = 3 };
+
+        var first = await SigningKeyStore.LoadOrCreateAsync(fixture.ConnectionString, options);
+        var firstSigningId = Assert.Single(first, item => item.Record.Use == KeyUse.Signing).Record.KeyId;
+        Assert.Single(first, item => item.Record.Use == KeyUse.Encryption);
+
+        var restarted = await SigningKeyStore.LoadOrCreateAsync(fixture.ConnectionString, options);
+        Assert.Equal(firstSigningId,
+            Assert.Single(restarted, item => item.Record.Use == KeyUse.Signing).Record.KeyId);
+
+        var old = await db.SigningKeys.SingleAsync(item => item.KeyId == firstSigningId);
+        old.NotBefore = DateTimeOffset.UtcNow.AddDays(-2);
+        old.NotAfter = DateTimeOffset.UtcNow.AddDays(-1);
+        await db.SaveChangesAsync();
+
+        var rotated = await SigningKeyStore.LoadOrCreateAsync(fixture.ConnectionString, options);
+        var activeSigning = Assert.Single(rotated, item => item.Record.Use == KeyUse.Signing);
+        Assert.NotEqual(firstSigningId, activeSigning.Record.KeyId);
+        db.ChangeTracker.Clear();
+        Assert.True((await db.SigningKeys.SingleAsync(item => item.KeyId == firstSigningId)).Retired);
+        Assert.False((await db.SigningKeys.SingleAsync(item => item.KeyId == activeSigning.Record.KeyId)).Retired);
     }
 
     [Fact]
@@ -393,6 +423,8 @@ public class UserStoreMigrationTests
 
     private sealed class TestDatabase(string connectionString) : IAsyncDisposable
     {
+        public string ConnectionString => connectionString;
+
         public static async Task<TestDatabase> CreateAsync()
         {
             var admin = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("PANDA_AUTH_TEST_POSTGRES"));
