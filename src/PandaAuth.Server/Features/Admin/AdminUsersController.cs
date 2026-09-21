@@ -72,13 +72,15 @@ public sealed class AdminUsersController(
 
     /// <summary>
     /// 建号：密码缺省时服务端生成合规随机密码（明文仅本次响应返回一次）。
-    /// 无 self-guard——建的是别人的号，不存在把自己锁在门外的路径。
+    /// 需要八小时内任一 MFA；建的是别人的号，不存在把自己锁在门外的路径。
     /// </summary>
     [HttpPost]
     public async Task<IActionResult> Create(
         [FromBody] AdminCreateUserRequest? request,
         CancellationToken cancellationToken)
     {
+        if (!AdminApiAuthorization.HasValidMfa(User)) return Forbid();
+
         if (request is null || string.IsNullOrWhiteSpace(request.UserName))
         {
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "用户名不能为空",
@@ -231,6 +233,8 @@ public sealed class AdminUsersController(
         [FromBody] AdminResetPasswordRequest? request,
         CancellationToken cancellationToken)
     {
+        if (!AdminApiAuthorization.HasValidMfa(User)) return Forbid();
+
         var user = await userManager.FindByIdAsync(id);
         if (user is null)
         {
@@ -400,6 +404,8 @@ public sealed class AdminUsersController(
     [HttpPost("{id}/unlock")]
     public async Task<IActionResult> Unlock(string id, CancellationToken cancellationToken)
     {
+        if (!AdminApiAuthorization.HasValidMfa(User)) return Forbid();
+
         var user = await userManager.FindByIdAsync(id);
         if (user is null)
         {
@@ -456,6 +462,8 @@ public sealed class AdminUsersController(
         [FromBody] AdminUserProfileRequest? request,
         CancellationToken cancellationToken)
     {
+        if (!AdminApiAuthorization.HasValidMfa(User)) return Forbid();
+
         if (request is null)
         {
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "无效的资料变更",

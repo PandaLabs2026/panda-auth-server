@@ -205,6 +205,33 @@ public class AdminUsersControllerTests
     }
 
     [Fact]
+    public async Task ResetPassword_WithoutMfa_IsForbiddenBeforeMutation()
+    {
+        var (controller, provider, revoker) = Create();
+        var user = await SeedUserAsync(provider, "reset-without-mfa");
+        controller.ControllerContext.HttpContext.User = AdminTestHost.AdminPrincipalWithoutMfa();
+
+        var result = await controller.ResetPassword(user.Id, null, CancellationToken.None);
+
+        Assert.IsType<ForbidResult>(result);
+        Assert.Empty(revoker.RevokedUsers);
+    }
+
+    [Fact]
+    public async Task Create_WithoutMfa_IsForbiddenBeforeMutation()
+    {
+        var (controller, provider, _) = Create();
+        controller.ControllerContext.HttpContext.User = AdminTestHost.AdminPrincipalWithoutMfa();
+
+        var result = await controller.Create(
+            new AdminCreateUserRequest("create-without-mfa", null, null, null, null, GrantAdminRole: false),
+            CancellationToken.None);
+
+        Assert.IsType<ForbidResult>(result);
+        Assert.Null(await provider.GetRequiredService<UserService>().FindByNameAsync("create-without-mfa"));
+    }
+
+    [Fact]
     public async Task SetStatus_ByTheAccountOwnerIsRejected()
     {
         var (controller, provider, revoker) = Create();

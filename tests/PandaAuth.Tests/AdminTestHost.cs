@@ -54,6 +54,14 @@ internal static class AdminTestHost
             new Claim(MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
         ], "TestBearer", Claims.Name, Claims.Role));
 
+    public static ClaimsPrincipal AdminPrincipalWithoutMfa()
+        => new(new ClaimsIdentity(
+        [
+            new Claim(Claims.Subject, "actor-1"),
+            new Claim(Claims.Name, "admin"),
+            new Claim(Claims.Role, PandaAuthRoles.Admin),
+        ], "TestBearer", Claims.Name, Claims.Role));
+
     public static DefaultHttpContext HttpContext(IServiceProvider provider)
         => new()
         {
