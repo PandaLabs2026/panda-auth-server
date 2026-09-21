@@ -27,6 +27,8 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
 
     public DbSet<MfaRecoveryEvent> MfaRecoveryEvents => Set<MfaRecoveryEvent>();
 
+    public DbSet<MfaRecoveryCode> MfaRecoveryCodes => Set<MfaRecoveryCode>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
@@ -163,6 +165,17 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
             entity.HasIndex(x => new { x.TargetUserId, x.CreatedAt });
             entity.HasOne<PandaUser>().WithMany().HasForeignKey(x => x.ActorUserId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<PandaUser>().WithMany().HasForeignKey(x => x.TargetUserId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<MfaRecoveryCode>(entity =>
+        {
+            entity.ToTable("panda_mfa_recovery_codes");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.UserId).HasMaxLength(450).IsRequired();
+            entity.Property(x => x.CodeHash).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.Salt).HasMaxLength(64).IsRequired();
+            entity.HasIndex(x => new { x.UserId, x.ConsumedAt });
+            entity.HasOne<PandaUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }
