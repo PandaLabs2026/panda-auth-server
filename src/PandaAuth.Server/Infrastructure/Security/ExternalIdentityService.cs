@@ -80,6 +80,26 @@ public sealed class ExternalIdentityService(
         => db.ExternalIdentities.SingleOrDefaultAsync(item => item.Provider == NormalizeProvider(provider) &&
             item.ProviderSubject == providerSubject && item.UnlinkedAt == null, cancellationToken);
 
+    /// <summary>
+    /// Records a successful provider authentication without emitting a security event
+    /// for every login. Provider adapters call this only after validating the provider
+    /// assertion and resolving the active link.
+    /// </summary>
+    public async Task<ExternalIdentity?> MarkUsedAsync(
+        string provider,
+        string providerSubject,
+        CancellationToken cancellationToken = default)
+    {
+        var identity = await FindActiveAsync(provider, providerSubject, cancellationToken);
+        if (identity is null) return null;
+
+        var now = clock.GetUtcNow();
+        identity.LastUsedAt = now;
+        identity.UpdatedAt = now;
+        await db.SaveChangesAsync(cancellationToken);
+        return identity;
+    }
+
     public async Task<ExternalIdentityResult> UnbindAsync(
         string userId, long identityId, CancellationToken cancellationToken = default)
     {

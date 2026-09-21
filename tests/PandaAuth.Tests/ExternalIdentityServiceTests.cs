@@ -89,6 +89,24 @@ public sealed class ExternalIdentityServiceTests
         Assert.Equal(user.Id, securityEvent.UserId);
     }
 
+    [Fact]
+    public async Task MarkUsedAsync_UpdatesOnlyTheActiveProviderSubject()
+    {
+        using var provider = CreateProvider();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "external-used" };
+        Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
+        var service = provider.GetRequiredService<ExternalIdentityService>();
+        var linked = await service.BindAsync(user.Id, "WeChat", "subject-used", null, null);
+
+        var marked = await service.MarkUsedAsync("wechat", "subject-used");
+
+        Assert.NotNull(marked);
+        Assert.Equal(linked.Identity!.Id, marked!.Id);
+        Assert.NotNull(marked.LastUsedAt);
+        Assert.Equal(marked.UpdatedAt, marked.LastUsedAt);
+    }
+
     private static ServiceProvider CreateProvider()
     {
         var services = new ServiceCollection();
