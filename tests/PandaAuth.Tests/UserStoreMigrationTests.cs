@@ -302,6 +302,12 @@ public class UserStoreMigrationTests
         await setup.Database.MigrateAsync();
         using var provider = fixture.Services(includeAccountVerification: true);
         var user = await CreateUserAsync(provider, "rollback-password@example.com");
+        await using (var unconfirm = fixture.Context())
+        {
+            var storedUser = await unconfirm.Users.SingleAsync(candidate => candidate.Id == user.Id);
+            storedUser.EmailConfirmed = false;
+            await unconfirm.SaveChangesAsync();
+        }
         var token = "rollback-password-token";
         setup.PasswordResetRequests.Add(new PasswordResetRequest
         {
@@ -313,14 +319,23 @@ public class UserStoreMigrationTests
         });
         await setup.SaveChangesAsync();
 
-        await using var scope = provider.CreateAsyncScope();
-        var service = scope.ServiceProvider.GetRequiredService<AccountVerificationService>();
+        await using var firstScope = provider.CreateAsyncScope();
+        var firstService = firstScope.ServiceProvider.GetRequiredService<AccountVerificationService>();
 
-        var rejected = await service.ConsumePasswordResetAsync(
-            user.Email!, token, "weak");
-        Assert.Equal(AccountVerificationError.PasswordPolicy, rejected.Error);
+        var rejected = await firstService.ConsumePasswordResetAsync(
+            user.Email!, token, "Recovered!Pass456");
+        Assert.Equal(AccountVerificationError.InvalidOrExpiredToken, rejected.Error);
 
-        var retried = await service.ConsumePasswordResetAsync(
+        await using (var confirm = fixture.Context())
+        {
+            var storedUser = await confirm.Users.SingleAsync(candidate => candidate.Id == user.Id);
+            storedUser.EmailConfirmed = true;
+            await confirm.SaveChangesAsync();
+        }
+
+        await using var secondScope = provider.CreateAsyncScope();
+        var secondService = secondScope.ServiceProvider.GetRequiredService<AccountVerificationService>();
+        var retried = await secondService.ConsumePasswordResetAsync(
             user.Email!, token, "Recovered!Pass456");
         Assert.True(retried.Succeeded);
     }
