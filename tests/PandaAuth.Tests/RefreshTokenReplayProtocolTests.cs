@@ -71,6 +71,7 @@ public sealed class RefreshTokenReplayProtocolTests
         Assert.Equal(HttpStatusCode.OK, exchanged.StatusCode);
         var tokenJson = await exchanged.Content.ReadFromJsonAsync<TokenResponse>();
         Assert.NotNull(tokenJson?.RefreshToken);
+        Assert.NotNull(tokenJson?.AccessToken);
 
         using var refreshForm = new FormUrlEncodedContent(new Dictionary<string, string>
         {
@@ -80,6 +81,25 @@ public sealed class RefreshTokenReplayProtocolTests
         });
         var refreshed = await client.PostAsync("/connect/token", refreshForm);
         Assert.Equal(HttpStatusCode.OK, refreshed.StatusCode);
+        var refreshedJson = await refreshed.Content.ReadFromJsonAsync<TokenResponse>();
+        Assert.NotNull(refreshedJson?.RefreshToken);
+
+        using var revokeForm = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["client_id"] = "replay-client",
+            ["token"] = refreshedJson!.RefreshToken!,
+            ["token_type_hint"] = "refresh_token",
+        });
+        var revoked = await client.PostAsync("/connect/revoke", revokeForm);
+        Assert.Equal(HttpStatusCode.OK, revoked.StatusCode);
+
+        // Current validation is local and does not enable token-entry validation:
+        // revoking a refresh token must not be documented as revoking an already-issued AT.
+        using var userinfo = new HttpRequestMessage(HttpMethod.Get, "/connect/userinfo");
+        userinfo.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer", tokenJson.AccessToken);
+        var userinfoResponse = await client.SendAsync(userinfo);
+        Assert.Equal(HttpStatusCode.OK, userinfoResponse.StatusCode);
 
         // The explicit policy permits only a short concurrent retry window.
         await Task.Delay(TimeSpan.FromSeconds(6));
@@ -128,6 +148,7 @@ public sealed class RefreshTokenReplayProtocolTests
         => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
     private sealed record TokenResponse(
+        [property: System.Text.Json.Serialization.JsonPropertyName("access_token")] string? AccessToken,
         [property: System.Text.Json.Serialization.JsonPropertyName("refresh_token")] string? RefreshToken);
 
     private sealed class ProtocolFactory(string connectionString) : WebApplicationFactory<Program>
@@ -201,6 +222,7 @@ public sealed class RefreshTokenReplayProtocolTests
                 {
                     OpenIddictConstants.Permissions.Endpoints.Authorization,
                     OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.Endpoints.Revocation,
                     OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
                     OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
                     OpenIddictConstants.Permissions.ResponseTypes.Code,
