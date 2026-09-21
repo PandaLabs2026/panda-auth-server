@@ -78,6 +78,93 @@ public sealed class MfaController(
         }
     }
 
+    [HttpPost("user/passkey/assertion/options")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> BeginUserPasskeyAssertion(CancellationToken cancellationToken)
+    {
+        var user = await CurrentAsync();
+        if (user is null) return Forbid();
+        try
+        {
+            var ceremony = await ceremonies.BeginAssertionAsync(user, cancellationToken);
+            return Json(new { ceremonyId = ceremony.Id, publicKey = ceremony.Options });
+        }
+        catch (InvalidOperationException) { return BadRequest(new { error = "此账号尚未配置可用的 Passkey。" }); }
+    }
+
+    [HttpPost("user/passkey/assertion/complete")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> CompleteUserPasskeyAssertion(
+        [FromBody] CompletePasskeyAssertionRequest request, CancellationToken cancellationToken)
+    {
+        var user = await CurrentAsync();
+        if (user is null) return Forbid();
+        if (request.Response is null) return BadRequest(new { error = "缺少 Passkey 响应。" });
+        try
+        {
+            await ceremonies.CompleteAssertionAsync(user, request.CeremonyId, request.Response, cancellationToken);
+            await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.WebAuthn);
+            return Ok(new { status = "ok" });
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or Fido2NetLib.Fido2VerificationException)
+        {
+            return BadRequest(new { error = "Passkey 验证未完成，请重试。" });
+        }
+    }
+
+    [HttpPost("user/totp/options")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> BeginUserTotp(CancellationToken cancellationToken)
+    {
+        var user = await CurrentAsync();
+        if (user is null || mfa is null) return Forbid();
+        try
+        {
+            var enrollment = await mfa.BeginEnrollmentAsync(user.Id, User, MfaFactorType.Totp, cancellationToken);
+            return Ok(new { factorId = enrollment.FactorId, secret = enrollment.Secret, provisioningUri = enrollment.ProvisioningUri });
+        }
+        catch (MfaPolicyException) { return Forbid(); }
+        catch (InvalidOperationException exception) { return BadRequest(new { error = exception.Message }); }
+    }
+
+    [HttpPost("user/totp/confirm")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ConfirmUserTotp([FromBody] ConfirmTotpRequest request, CancellationToken cancellationToken)
+    {
+        var user = await CurrentAsync();
+        if (user is null || mfa is null) return Forbid();
+        if (!await mfa.ConfirmEnrollmentAsync(user.Id, request.FactorId, request.Code, cancellationToken))
+            return BadRequest(new { error = "验证码错误或已过期。" });
+        await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.Totp);
+        return Ok(new { status = "ok" });
+    }
+
+    [HttpPost("user/totp/assert")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> AssertUserTotp([FromBody] ConfirmTotpRequest request, CancellationToken cancellationToken)
+    {
+        var user = await CurrentAsync();
+        if (user is null || mfa is null) return Forbid();
+        if (!await mfa.VerifyAsync(user.Id, request.Code, cancellationToken))
+            return BadRequest(new { error = "验证码错误、已过期或已被使用。" });
+        await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.Totp);
+        return Ok(new { status = "ok" });
+    }
+
+    [HttpPost("user/factors/revoke")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> RevokeUserFactor([FromBody] RevokeMfaFactorRequest request, CancellationToken cancellationToken)
+    {
+        var user = await CurrentAsync();
+        if (user is null || mfa is null) return Forbid();
+        try
+        {
+            await mfa.RevokeFactorAsync(user.Id, request.FactorId, User, cancellationToken);
+            return Ok(new { status = "ok" });
+        }
+        catch (MfaPolicyException exception) { return BadRequest(new { error = exception.Message }); }
+    }
+
     [HttpPost("user/recovery-codes/consume")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> ConsumeUserRecoveryCode([FromBody] ConsumeRecoveryCodeRequest request, CancellationToken cancellationToken)

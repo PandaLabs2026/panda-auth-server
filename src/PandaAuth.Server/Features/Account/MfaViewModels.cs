@@ -7,3 +7,4 @@ public sealed class CompletePasskeyEnrollmentRequest { public Guid CeremonyId { 
 public sealed class CompletePasskeyAssertionRequest { public Guid CeremonyId { get; init; } public AuthenticatorAssertionRawResponse? Response { get; init; } }
 public sealed class ConfirmTotpRequest { public Guid FactorId { get; init; } public string Code { get; init; } = string.Empty; }
 public sealed class ConsumeRecoveryCodeRequest { public string Code { get; init; } = string.Empty; }
+public sealed class RevokeMfaFactorRequest { public Guid FactorId { get; init; } }

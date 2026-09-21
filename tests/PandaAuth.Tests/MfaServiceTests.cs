@@ -93,6 +93,25 @@ public sealed class MfaServiceTests
     }
 
     [Fact]
+    public async Task RevokeFactor_AllowsRemovingOneOfTwoActiveFactors()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "two-factors", Email = "two-factors@example.com", EmailConfirmed = true };
+        Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
+        var db = provider.GetRequiredService<PandaAuthDbContext>();
+        db.TotpFactors.Add(new MfaTotpFactor { UserId = user.Id, Id = Guid.NewGuid(), ConfirmedAt = DateTimeOffset.UtcNow });
+        var passkey = new MfaWebAuthnCredential { UserId = user.Id, Id = Guid.NewGuid(), CredentialId = [1], PublicKeyCose = [2] };
+        db.WebAuthnCredentials.Add(passkey);
+        await db.SaveChangesAsync();
+        var service = CreateService(provider);
+
+        await service.RevokeFactorAsync(user.Id, passkey.Id, Principal(user.Id, recentMethod: MfaClaimTypes.Totp), CancellationToken.None);
+
+        Assert.NotNull((await db.WebAuthnCredentials.SingleAsync(x => x.Id == passkey.Id)).RevokedAt);
+    }
+
+    [Fact]
     public async Task LegacyTwoFactorWithoutActiveFactor_RequiresReconfiguration()
     {
         using var provider = TestUserStoreHost.Create();

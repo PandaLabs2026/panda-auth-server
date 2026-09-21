@@ -107,6 +107,16 @@ public sealed class MfaService(
             await db.SaveChangesAsync(cancellationToken);
             return;
         }
+        var passkey = await db.WebAuthnCredentials.SingleOrDefaultAsync(x => x.Id == factorId && x.UserId == userId && x.RevokedAt == null, cancellationToken);
+        if (passkey is not null)
+        {
+            if (activeTotp + activeWebAuthn <= 1)
+                throw new MfaPolicyException("Cannot remove the last active factor.");
+            passkey.RevokedAt = clock.GetUtcNow();
+            passkey.UpdatedAt = clock.GetUtcNow();
+            await db.SaveChangesAsync(cancellationToken);
+            return;
+        }
         throw new MfaPolicyException("Factor not found.");
     }
 
