@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Data;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
@@ -36,8 +37,19 @@ public sealed class MfaService(
         => RequireEnrollmentPolicyAsync(userId, principal, cancellationToken);
 
     public async Task<bool> ConfirmEnrollmentAsync(
-        string userId, Guid factorId, string code, CancellationToken cancellationToken)
-        => await totpFactors.ConfirmAsync(userId, factorId, code, cancellationToken);
+        string userId, ClaimsPrincipal principal, Guid factorId, string code, CancellationToken cancellationToken)
+    {
+        await RequireEnrollmentPolicyAsync(userId, principal, cancellationToken);
+        var confirmed = await totpFactors.ConfirmAsync(userId, factorId, code, cancellationToken);
+        if (!confirmed) return false;
+        var user = await users.FindByIdAsync(userId);
+        if (user is not null && user.TwoFactorEnabled)
+        {
+            user.TwoFactorEnabled = false;
+            await users.UpdateAsync(user);
+        }
+        return true;
+    }
 
     public Task<bool> VerifyAsync(string userId, string code, CancellationToken cancellationToken)
         => totpFactors.VerifyAsync(userId, code, cancellationToken);
@@ -96,6 +108,9 @@ public sealed class MfaService(
     public async Task RevokeFactorAsync(string userId, Guid factorId, ClaimsPrincipal principal, CancellationToken cancellationToken)
     {
         await RequireRecentAuthenticationAsync(userId, principal, cancellationToken);
+        await using var transaction = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
+            : null;
         var totp = await db.TotpFactors.SingleOrDefaultAsync(x => x.Id == factorId && x.UserId == userId && x.RevokedAt == null, cancellationToken);
         var activeTotp = await db.TotpFactors.CountAsync(x => x.UserId == userId && x.RevokedAt == null && x.ConfirmedAt != null, cancellationToken);
         var activeWebAuthn = await db.WebAuthnCredentials.CountAsync(x => x.UserId == userId && x.RevokedAt == null, cancellationToken);
@@ -105,6 +120,7 @@ public sealed class MfaService(
                 throw new MfaPolicyException("Cannot remove the last active factor.");
             totp.RevokedAt = clock.GetUtcNow();
             await db.SaveChangesAsync(cancellationToken);
+            if (transaction is not null) await transaction.CommitAsync(cancellationToken);
             return;
         }
         var passkey = await db.WebAuthnCredentials.SingleOrDefaultAsync(x => x.Id == factorId && x.UserId == userId && x.RevokedAt == null, cancellationToken);
@@ -115,6 +131,7 @@ public sealed class MfaService(
             passkey.RevokedAt = clock.GetUtcNow();
             passkey.UpdatedAt = clock.GetUtcNow();
             await db.SaveChangesAsync(cancellationToken);
+            if (transaction is not null) await transaction.CommitAsync(cancellationToken);
             return;
         }
         throw new MfaPolicyException("Factor not found.");

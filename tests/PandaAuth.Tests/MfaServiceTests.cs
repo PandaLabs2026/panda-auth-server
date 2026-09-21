@@ -76,6 +76,19 @@ public sealed class MfaServiceTests
     }
 
     [Fact]
+    public async Task ConfirmEnrollment_StillRequiresConfirmedEmailAndRecentMfa()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "confirm-gated", Email = "confirm-gated@example.com", EmailConfirmed = false };
+        Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
+        var service = CreateService(provider);
+
+        await Assert.ThrowsAsync<MfaPolicyException>(() => service.ConfirmEnrollmentAsync(
+            user.Id, Principal(user.Id), Guid.NewGuid(), "000000", CancellationToken.None));
+    }
+
+    [Fact]
     public async Task RevokeFactor_DoesNotAllowRemovingTheLastActiveFactor()
     {
         using var provider = TestUserStoreHost.Create();

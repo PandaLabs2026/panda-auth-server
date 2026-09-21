@@ -15,7 +15,12 @@ public sealed class TotpFactorService(PandaAuthDbContext db, TotpSecretProtector
     {
         var hasPasskey = await db.WebAuthnCredentials.AnyAsync(item => item.UserId == userId && item.RevokedAt == null, cancellationToken);
         if (requirePasskey && !hasPasskey) throw new InvalidOperationException("启用 TOTP 前必须已有有效 Passkey。");
-        if (await db.TotpFactors.AnyAsync(item => item.UserId == userId && item.RevokedAt == null, cancellationToken))
+        var pending = await db.TotpFactors
+            .Where(item => item.UserId == userId && item.RevokedAt == null && item.ConfirmedAt == null)
+            .ToListAsync(cancellationToken);
+        foreach (var pendingFactor in pending)
+            pendingFactor.RevokedAt = clock.GetUtcNow();
+        if (await db.TotpFactors.AnyAsync(item => item.UserId == userId && item.RevokedAt == null && item.ConfirmedAt != null, cancellationToken))
             throw new InvalidOperationException("此账号已有未撤销的 TOTP 因子。");
 
         var factor = new MfaTotpFactor { Id = Guid.NewGuid(), UserId = userId, CreatedAt = clock.GetUtcNow() };

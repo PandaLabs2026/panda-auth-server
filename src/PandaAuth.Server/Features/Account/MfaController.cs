@@ -133,7 +133,7 @@ public sealed class MfaController(
     {
         var user = await CurrentAsync();
         if (user is null || mfa is null) return Forbid();
-        if (!await mfa.ConfirmEnrollmentAsync(user.Id, request.FactorId, request.Code, cancellationToken))
+        if (!await mfa.ConfirmEnrollmentAsync(user.Id, User, request.FactorId, request.Code, cancellationToken))
             return BadRequest(new { error = "验证码错误或已过期。" });
         await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.Totp);
         return Ok(new { status = "ok" });

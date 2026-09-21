@@ -34,6 +34,22 @@ public class TotpFactorServiceTests
         Assert.Null(factor.ConfirmedAt);
     }
 
+    [Fact]
+    public async Task BeginEnrollment_ReplacesAbandonedPendingFactor()
+    {
+        await using var db = Database();
+        db.TotpFactors.Add(new MfaTotpFactor { UserId = "member-1", Id = Guid.NewGuid() });
+        await db.SaveChangesAsync();
+        var service = Service(db);
+
+        var enrollment = await service.BeginEnrollmentAsync("member-1", CancellationToken.None, requirePasskey: false);
+
+        var factors = await db.TotpFactors.Where(x => x.UserId == "member-1").ToListAsync();
+        Assert.Equal(2, factors.Count);
+        Assert.Contains(factors, factor => factor.Id == enrollment.FactorId && factor.RevokedAt is null);
+        Assert.Contains(factors, factor => factor.RevokedAt is not null);
+    }
+
     private static PandaAuthDbContext Database() => new(new DbContextOptionsBuilder<PandaAuthDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
 
