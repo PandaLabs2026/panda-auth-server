@@ -24,6 +24,7 @@ public class AdminUsersControllerTests
             provider.GetRequiredService<RoleService>(),
             provider.GetRequiredService<ITokenRevoker>(),
             provider.GetRequiredService<AdminAuditWriter>(),
+            provider.GetRequiredService<SecurityEventWriter>(),
             provider.GetRequiredService<PandaAuthDbContext>(),
             provider.GetRequiredService<ILoggerFactory>().CreateLogger<AdminUsersController>())
         {
@@ -110,6 +111,9 @@ public class AdminUsersControllerTests
         Assert.Equal("203.0.113.10", entry.IpAddress);
         Assert.Contains("Active", entry.Detail);
         Assert.Contains("Frozen", entry.Detail);
+        var securityEvent = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents);
+        Assert.Equal("user.status_changed", securityEvent.EventType);
+        Assert.Equal(user.Id, securityEvent.UserId);
     }
 
     [Fact]

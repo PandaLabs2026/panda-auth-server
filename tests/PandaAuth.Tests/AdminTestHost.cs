@@ -40,6 +40,7 @@ internal static class AdminTestHost
         var revoker = new StubTokenRevoker();
         services.AddSingleton<ITokenRevoker>(revoker);
         services.AddScoped<AdminAuditWriter>();
+        services.AddScoped<SecurityEventWriter>();
         return (services.BuildServiceProvider(), revoker);
     }
 

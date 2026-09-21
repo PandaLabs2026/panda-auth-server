@@ -25,6 +25,7 @@ public sealed class AdminUsersController(
     RoleService roleManager,
     ITokenRevoker tokenRevoker,
     AdminAuditWriter audit,
+    SecurityEventWriter securityEvents,
     PandaAuthDbContext db,
     ILogger<AdminUsersController> logger) : Controller
 {
@@ -139,6 +140,9 @@ public sealed class AdminUsersController(
                 },
                 HttpContext.Connection.RemoteIpAddress?.ToString()),
             cancellationToken);
+        await securityEvents.RecordAsync(SecurityEventEntryFor(
+            "user.created", user.Id,
+            new { generatedPassword = generated, grantAdminRole = request.GrantAdminRole && roleGrantError is null }), cancellationToken);
         logger.LogInformation(
             "管理员 {Actor} 创建了用户 {UserId}（{UserName}）。",
             User.FindFirst(Claims.Subject)?.Value, user.Id, user.UserName);
@@ -216,6 +220,9 @@ public sealed class AdminUsersController(
                 new { userName = user.UserName, from = previous.ToString(), to = request.Status.ToString() },
                 HttpContext.Connection.RemoteIpAddress?.ToString()),
             cancellationToken);
+        await securityEvents.RecordAsync(SecurityEventEntryFor(
+            "user.status_changed", user.Id,
+            new { from = previous.ToString(), to = request.Status.ToString() }), cancellationToken);
         logger.LogInformation(
             "管理员 {Actor} 将用户 {UserId}（{UserName}）状态由 {Previous} 变更为 {Status}。",
             User.FindFirst(Claims.Subject)?.Value, user.Id, user.UserName, previous, request.Status);
@@ -276,6 +283,8 @@ public sealed class AdminUsersController(
             AdminAuditing.Entry(User!, AdminAuditAction.UserResetPassword, "user", user.Id,
                 new { userName = user.UserName, generated }, HttpContext.Connection.RemoteIpAddress?.ToString()),
             cancellationToken);
+        await securityEvents.RecordAsync(SecurityEventEntryFor(
+            "user.password_reset", user.Id, new { generated }), cancellationToken);
         logger.LogInformation(
             "管理员 {Actor} 重置了用户 {UserId}（{UserName}）的密码。", User.FindFirst(Claims.Subject)?.Value, user.Id, user.UserName);
 
@@ -379,6 +388,9 @@ public sealed class AdminUsersController(
                 new { userName = user.UserName, from = currentRoles.ToArray(), to = actualRoles.ToArray() },
                 HttpContext.Connection.RemoteIpAddress?.ToString()),
             cancellationToken);
+        await securityEvents.RecordAsync(SecurityEventEntryFor(
+            "user.roles_changed", user.Id,
+            new { from = currentRoles.ToArray(), to = actualRoles.ToArray() }), cancellationToken);
 
         if (failure is not null)
         {
@@ -445,6 +457,8 @@ public sealed class AdminUsersController(
                 new { userName = user.UserName, previousLockoutEnd, previousFailedCount },
                 HttpContext.Connection.RemoteIpAddress?.ToString()),
             cancellationToken);
+        await securityEvents.RecordAsync(SecurityEventEntryFor(
+            "user.unlocked", user.Id, new { previousLockoutEnd, previousFailedCount }), cancellationToken);
         logger.LogInformation(
             "管理员 {Actor} 解除了用户 {UserId}（{UserName}）的登录锁定。",
             User.FindFirst(Claims.Subject)?.Value, user.Id, user.UserName);
@@ -519,6 +533,9 @@ public sealed class AdminUsersController(
                 new { userName = user.UserName, emailChanged, nicknameChanged, regionChanged },
                 HttpContext.Connection.RemoteIpAddress?.ToString()),
             cancellationToken);
+        await securityEvents.RecordAsync(SecurityEventEntryFor(
+            "user.profile_updated", user.Id,
+            new { emailChanged, nicknameChanged, regionChanged }), cancellationToken);
         logger.LogInformation(
             "管理员 {Actor} 更新了用户 {UserId}（{UserName}）的资料（email={EmailChanged}, nickname={NicknameChanged}, region={RegionChanged}）。",
             User.FindFirst(Claims.Subject)?.Value, user.Id, user.UserName, emailChanged, nicknameChanged, regionChanged);
@@ -563,6 +580,8 @@ public sealed class AdminUsersController(
         db.MfaRecoveryEvents.Add(new MfaRecoveryEvent { ActorUserId = actorId, TargetUserId = user.Id, Reason = "admin_reset", AuthenticationMethod = MfaClaimTypes.WebAuthn, CreatedAt = now });
         await db.SaveChangesAsync(cancellationToken);
         await audit.RecordAsync(AdminAuditing.Entry(User!, AdminAuditAction.UserResetTwoFactor, "user", user.Id, new { recovery = true }, HttpContext.Connection.RemoteIpAddress?.ToString()), cancellationToken);
+        await securityEvents.RecordAsync(SecurityEventEntryFor(
+            "user.mfa_reset", user.Id, new { recovery = true }), cancellationToken);
         return Ok(await DetailOf(user));
     }
 
@@ -620,6 +639,8 @@ public sealed class AdminUsersController(
                 new { userName = user.UserName, from = previous.ToString() },
                 HttpContext.Connection.RemoteIpAddress?.ToString()),
             cancellationToken);
+        await securityEvents.RecordAsync(SecurityEventEntryFor(
+            "user.deactivated", user.Id, new { from = previous.ToString() }), cancellationToken);
         logger.LogInformation(
             "管理员 {Actor} 注销了用户 {UserId}（{UserName}）。",
             User.FindFirst(Claims.Subject)?.Value, user.Id, user.UserName);
@@ -649,4 +670,17 @@ public sealed class AdminUsersController(
 
     private static AdminUserSummary SummaryOf(PandaUser user)
         => new(user.Id, user.UserName!, user.Email, user.Nickname, user.Status, user.CreatedAt);
+
+    private SecurityEventEntry SecurityEventEntryFor(string eventType, string userId, object? metadata)
+        => new(
+            eventType,
+            userId,
+            User.FindFirst(Claims.Subject)?.Value,
+            "user",
+            userId,
+            User.FindFirst(MfaClaimTypes.Method)?.Value,
+            metadata,
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            Request.Headers.UserAgent.ToString(),
+            HttpContext.TraceIdentifier);
 }
