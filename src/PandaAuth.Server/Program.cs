@@ -163,6 +163,7 @@ builder.Services.AddScoped<WebAuthnCeremonyService>();
 builder.Services.AddSingleton(serviceProvider => new TotpSecretProtector(
     authOptions.Mfa.GetEncryptionKey(builder.Environment.IsProduction()), authOptions.Mfa.TotpKeyVersion));
 builder.Services.AddScoped<TotpFactorService>();
+builder.Services.AddScoped<MfaService>();
 builder.Services.AddSingleton<LoginRateLimiter>();
 builder.Services.AddScoped<LoginAuditWriter>();
 builder.Services.AddScoped<AdminAuditWriter>();
