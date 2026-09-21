@@ -17,8 +17,79 @@ public sealed class MfaController(
     TotpFactorService totpFactors,
     LoginSessionService sessions,
     PandaAuthDbContext db,
-    ILogger<MfaController> logger) : Controller
+    ILogger<MfaController> logger,
+    MfaService? mfa = null) : Controller
 {
+    [HttpGet("user/status")]
+    public async Task<IActionResult> UserStatus(CancellationToken cancellationToken)
+    {
+        var user = await CurrentAsync();
+        if (user is null || mfa is null) return Forbid();
+        return Json(await mfa.GetStatusAsync(user.Id, cancellationToken));
+    }
+
+    [HttpPost("user/recovery-codes")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> GenerateUserRecoveryCodes(CancellationToken cancellationToken)
+    {
+        var user = await CurrentAsync();
+        if (user is null || mfa is null) return Forbid();
+        try
+        {
+            var codes = await mfa.GenerateRecoveryCodesAsync(user.Id, User, cancellationToken);
+            return Json(codes);
+        }
+        catch (MfaPolicyException) { return Forbid(); }
+    }
+
+    [HttpPost("user/passkey/enrollment/options")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> BeginUserPasskeyEnrollment(CancellationToken cancellationToken)
+    {
+        var user = await CurrentAsync();
+        if (user is null || mfa is null) return Forbid();
+        try
+        {
+            await mfa.RequireEnrollmentAsync(user.Id, User, cancellationToken);
+            var ceremony = await ceremonies.BeginEnrollmentAsync(user, cancellationToken);
+            return Json(new { ceremonyId = ceremony.Id, publicKey = ceremony.Options });
+        }
+        catch (MfaPolicyException) { return Forbid(); }
+    }
+
+    [HttpPost("user/passkey/enrollment/complete")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> CompleteUserPasskeyEnrollment(
+        [FromBody] CompletePasskeyEnrollmentRequest request, CancellationToken cancellationToken)
+    {
+        var user = await CurrentAsync();
+        if (user is null || mfa is null) return Forbid();
+        if (request.Response is null) return BadRequest(new { error = "缺少 Passkey 响应。" });
+        try
+        {
+            await mfa.RequireEnrollmentAsync(user.Id, User, cancellationToken);
+            await ceremonies.CompleteEnrollmentAsync(user, request.CeremonyId, request.Response, request.FriendlyName, cancellationToken);
+            return Ok(new { status = "ok" });
+        }
+        catch (MfaPolicyException) { return Forbid(); }
+        catch (Exception exception) when (exception is InvalidOperationException or Fido2NetLib.Fido2VerificationException)
+        {
+            return BadRequest(new { error = "Passkey 注册未完成，请重试。" });
+        }
+    }
+
+    [HttpPost("user/recovery-codes/consume")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ConsumeUserRecoveryCode([FromBody] ConsumeRecoveryCodeRequest request, CancellationToken cancellationToken)
+    {
+        var user = await CurrentAsync();
+        if (user is null || mfa is null) return Forbid();
+        if (!await mfa.ConsumeRecoveryCodeAsync(user.Id, request.Code, cancellationToken))
+            return BadRequest(new { error = "恢复码无效或已使用。" });
+        await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.RecoveryCode);
+        return Ok(new { status = "ok" });
+    }
+
     [HttpGet]
     public async Task<IActionResult> Index(string? returnUrl, CancellationToken cancellationToken)
     {
@@ -144,4 +215,6 @@ public sealed class MfaController(
         return user is not null && (await users.GetRolesAsync(user)).Contains(PandaUser.AdminRole, StringComparer.OrdinalIgnoreCase)
             ? user : null;
     }
+
+    private Task<PandaUser?> CurrentAsync() => users.GetUserAsync(User);
 }

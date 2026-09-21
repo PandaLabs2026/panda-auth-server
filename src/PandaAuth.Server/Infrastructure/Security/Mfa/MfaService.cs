@@ -32,6 +32,9 @@ public sealed class MfaService(
         return await totpFactors.BeginEnrollmentAsync(userId, cancellationToken, requirePasskey: false);
     }
 
+    public Task RequireEnrollmentAsync(string userId, ClaimsPrincipal principal, CancellationToken cancellationToken)
+        => RequireEnrollmentPolicyAsync(userId, principal, cancellationToken);
+
     public async Task<bool> ConfirmEnrollmentAsync(
         string userId, Guid factorId, string code, CancellationToken cancellationToken)
         => await totpFactors.ConfirmAsync(userId, factorId, code, cancellationToken);

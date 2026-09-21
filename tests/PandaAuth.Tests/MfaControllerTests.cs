@@ -17,6 +17,54 @@ namespace PandaAuth.Tests;
 public class MfaControllerTests
 {
     [Fact]
+    public async Task OrdinaryUser_CanReadStatusAndGenerateRecoveryCodes()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "member-mfa", Email = "member-mfa@example.com", EmailConfirmed = true };
+        Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
+        var db = provider.GetRequiredService<PandaAuthDbContext>();
+        db.TotpFactors.Add(new MfaTotpFactor
+        {
+            UserId = user.Id,
+            Id = Guid.NewGuid(),
+            ConfirmedAt = DateTimeOffset.UtcNow,
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        var context = new DefaultHttpContext { RequestServices = provider };
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(
+            [
+                new Claim(ClaimTypes.NameIdentifier, user.Id),
+                new Claim(MfaClaimTypes.Method, MfaClaimTypes.Totp),
+                new Claim(MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
+            ], LoginSessionService.Scheme));
+        var controller = new MfaController(
+            users,
+            new WebAuthnCeremonyService(new Fido2(WebAuthnRelyingParty.Create("https://auth.example.test")),
+                db, new MfaChallengeStore(provider.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>(), TimeProvider.System)),
+            new TotpFactorService(db,
+                new TotpSecretProtector(Convert.FromBase64String("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="), "v1"), TimeProvider.System),
+            provider.GetRequiredService<LoginSessionService>(),
+            db,
+            provider.GetRequiredService<ILoggerFactory>().CreateLogger<MfaController>(),
+            new MfaService(
+                db,
+                users,
+                new TotpFactorService(db,
+                    new TotpSecretProtector(Convert.FromBase64String("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="), "v1"), TimeProvider.System),
+                provider.GetRequiredService<LoginSessionService>(),
+                TimeProvider.System))
+        {
+            ControllerContext = new ControllerContext { HttpContext = context },
+        };
+
+        Assert.IsType<JsonResult>(await controller.UserStatus(CancellationToken.None));
+        var generated = Assert.IsType<JsonResult>(await controller.GenerateUserRecoveryCodes(CancellationToken.None));
+        Assert.Equal(10, ((IReadOnlyList<string>)generated.Value!).Count);
+    }
+
+    [Fact]
     public async Task Enrollment_UnconfirmedAdministrator_IsForbiddenBeforeCreatingSecretsOrCeremonies()
     {
         using var provider = TestUserStoreHost.Create();
