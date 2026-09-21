@@ -18,7 +18,8 @@ public sealed class MfaController(
     LoginSessionService sessions,
     PandaAuthDbContext db,
     ILogger<MfaController> logger,
-    MfaService? mfa = null) : Controller
+    MfaService? mfa = null,
+    SecurityEventWriter? securityEvents = null) : Controller
 {
     [AllowAnonymous]
     [HttpGet("user/reconfigure")]
@@ -113,6 +114,7 @@ public sealed class MfaController(
             await mfa.RequireEnrollmentAsync(user.Id, User, cancellationToken);
             await ceremonies.CompleteEnrollmentAsync(user, request.CeremonyId, request.Response, request.FriendlyName, cancellationToken);
             var count = await db.WebAuthnCredentials.CountAsync(item => item.UserId == user.Id && item.RevokedAt == null, cancellationToken);
+            await RecordSecurityEventAsync("user.passkey_enrolled", user.Id, MfaClaimTypes.WebAuthn, new { activePasskeyCount = count }, cancellationToken);
             return Ok(new { status = "ok", activePasskeyCount = count });
         }
         catch (MfaPolicyException) { return Forbid(); }
@@ -148,6 +150,7 @@ public sealed class MfaController(
         {
             await ceremonies.CompleteAssertionAsync(user, request.CeremonyId, request.Response, cancellationToken);
             await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.WebAuthn);
+            await RecordSecurityEventAsync("user.passkey_asserted", user.Id, MfaClaimTypes.WebAuthn, null, cancellationToken);
             return Ok(new { status = "ok" });
         }
         catch (Exception exception) when (exception is InvalidOperationException or Fido2NetLib.Fido2VerificationException)
@@ -180,6 +183,7 @@ public sealed class MfaController(
         if (!await mfa.ConfirmEnrollmentAsync(user.Id, User, request.FactorId, request.Code, cancellationToken))
             return BadRequest(new { error = "验证码错误或已过期。" });
         await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.Totp);
+        await RecordSecurityEventAsync("user.totp_enrolled", user.Id, MfaClaimTypes.Totp, null, cancellationToken);
         return Ok(new { status = "ok" });
     }
 
@@ -192,6 +196,7 @@ public sealed class MfaController(
         if (!await mfa.VerifyAsync(user.Id, request.Code, cancellationToken))
             return BadRequest(new { error = "验证码错误、已过期或已被使用。" });
         await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.Totp);
+        await RecordSecurityEventAsync("user.totp_asserted", user.Id, MfaClaimTypes.Totp, null, cancellationToken);
         return Ok(new { status = "ok" });
     }
 
@@ -204,6 +209,7 @@ public sealed class MfaController(
         try
         {
             await mfa.RevokeFactorAsync(user.Id, request.FactorId, User, cancellationToken);
+            await RecordSecurityEventAsync("user.mfa_factor_revoked", user.Id, null, new { factorId = request.FactorId }, cancellationToken);
             return Ok(new { status = "ok" });
         }
         catch (MfaPolicyException exception) { return BadRequest(new { error = exception.Message }); }
@@ -218,6 +224,7 @@ public sealed class MfaController(
         if (!await mfa.ConsumeRecoveryCodeAsync(user.Id, request.Code, cancellationToken))
             return BadRequest(new { error = "恢复码无效或已使用。" });
         await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.RecoveryCode);
+        await RecordSecurityEventAsync("user.recovery_code_used", user.Id, MfaClaimTypes.RecoveryCode, null, cancellationToken);
         return Ok(new { status = "ok" });
     }
 
@@ -253,6 +260,7 @@ public sealed class MfaController(
         try
         {
             await ceremonies.CompleteEnrollmentAsync(user, request.CeremonyId, request.Response, request.FriendlyName, cancellationToken);
+            await RecordSecurityEventAsync("admin.passkey_enrolled", user.Id, MfaClaimTypes.WebAuthn, null, cancellationToken);
             logger.LogInformation("Passkey registered adminId={UserId}", user.Id);
             return Ok(new { status = "ok" });
         }
@@ -288,6 +296,7 @@ public sealed class MfaController(
         {
             await ceremonies.CompleteAssertionAsync(user, request.CeremonyId, request.Response, cancellationToken);
             await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.WebAuthn);
+            await RecordSecurityEventAsync("admin.passkey_asserted", user.Id, MfaClaimTypes.WebAuthn, null, cancellationToken);
             logger.LogInformation("Passkey assertion succeeded adminId={UserId}", user.Id);
             return Ok(new { status = "ok" });
         }
@@ -323,6 +332,7 @@ public sealed class MfaController(
         if (!await totpFactors.ConfirmAsync(user.Id, request.FactorId, request.Code, cancellationToken))
             return BadRequest(new { error = "验证码错误或已过期。" });
         await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.Totp);
+        await RecordSecurityEventAsync("admin.totp_enrolled", user.Id, MfaClaimTypes.Totp, null, cancellationToken);
         logger.LogInformation("TOTP confirmed adminId={UserId}", user.Id);
         return Ok(new { status = "ok" });
     }
@@ -336,6 +346,7 @@ public sealed class MfaController(
         if (!await totpFactors.VerifyAsync(user.Id, request.Code, cancellationToken))
             return BadRequest(new { error = "验证码错误、已过期或已被使用。" });
         await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.Totp);
+        await RecordSecurityEventAsync("admin.totp_asserted", user.Id, MfaClaimTypes.Totp, null, cancellationToken);
         logger.LogInformation("TOTP assertion succeeded adminId={UserId}", user.Id);
         return Ok(new { status = "ok" });
     }
@@ -348,4 +359,24 @@ public sealed class MfaController(
     }
 
     private Task<PandaUser?> CurrentAsync() => users.GetUserAsync(User);
+
+    private Task RecordSecurityEventAsync(
+        string eventType,
+        string userId,
+        string? authenticationMethod,
+        object? metadata,
+        CancellationToken cancellationToken)
+        => securityEvents is null
+            ? Task.CompletedTask
+            : securityEvents.RecordAsync(new SecurityEventEntry(
+                eventType,
+                userId,
+                User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+                "user",
+                userId,
+                authenticationMethod,
+                metadata,
+                HttpContext.Connection.RemoteIpAddress?.ToString(),
+                Request.Headers.UserAgent.ToString(),
+                HttpContext.TraceIdentifier), cancellationToken);
 }

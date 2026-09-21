@@ -173,6 +173,7 @@ builder.Services.AddScoped<LoginAuditWriter>();
 builder.Services.AddScoped<AdminAuditWriter>();
 builder.Services.AddScoped<SecurityEventWriter>();
 builder.Services.AddScoped<ClaimsPolicyService>();
+builder.Services.AddScoped<ExternalIdentityService>();
 // 接口注册：Admin 控制器以 ITokenRevoker 依赖（测试可替换；实现不变）。
 builder.Services.AddScoped<ITokenRevoker, TokenRevocationService>();
 // 登录时间侧信道拉平用的 dummy 哈希：必须单例（只算一次哈希），校验仍用 scoped hasher。

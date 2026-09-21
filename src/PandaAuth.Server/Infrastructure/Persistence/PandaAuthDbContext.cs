@@ -19,6 +19,8 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
 
     public DbSet<PandaRoleClaim> RoleClaims => Set<PandaRoleClaim>();
 
+    public DbSet<ExternalIdentity> ExternalIdentities => Set<ExternalIdentity>();
+
     public DbSet<VerificationCode> VerificationCodes => Set<VerificationCode>();
 
     public DbSet<EmailVerification> EmailVerifications => Set<EmailVerification>();
@@ -126,6 +128,21 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
             entity.Property(x => x.Scope).HasMaxLength(128).IsRequired();
             entity.HasIndex(x => new { x.RoleId, x.ClaimType, x.ClaimValue, x.Scope }).IsUnique();
             entity.HasOne<PandaRole>().WithMany().HasForeignKey(x => x.RoleId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<ExternalIdentity>(entity =>
+        {
+            entity.ToTable("panda_external_identities");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.UserId).HasMaxLength(450).IsRequired();
+            entity.Property(x => x.Provider).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.ProviderSubject).HasMaxLength(450).IsRequired();
+            entity.Property(x => x.DisplayName).HasMaxLength(256);
+            entity.Property(x => x.EmailSnapshot).HasMaxLength(256);
+            entity.HasIndex(x => new { x.Provider, x.ProviderSubject }).IsUnique()
+                .HasFilter("\"UnlinkedAt\" IS NULL");
+            entity.HasIndex(x => new { x.UserId, x.UnlinkedAt });
+            entity.HasOne<PandaUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
 
         builder.Entity<VerificationCode>(entity =>
