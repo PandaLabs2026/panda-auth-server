@@ -41,6 +41,7 @@ internal static class AdminTestHost
         services.AddSingleton<ITokenRevoker>(revoker);
         services.AddScoped<AdminAuditWriter>();
         services.AddScoped<SecurityEventWriter>();
+        services.AddScoped<ClaimsPolicyService>();
         return (services.BuildServiceProvider(), revoker);
     }
 
@@ -98,6 +99,7 @@ public class AdminApiAuthorizationContractTests
     [
         typeof(AdminUsersController),
         typeof(AdminClientsController),
+        typeof(AdminClaimsController),
         typeof(AdminAuditController),
     ];
 
