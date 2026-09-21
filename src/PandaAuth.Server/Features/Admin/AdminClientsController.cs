@@ -23,6 +23,7 @@ public sealed class AdminClientsController(
     PandaAuthDbContext dbContext,
     IOpenIddictApplicationManager applications,
     AdminAuditWriter audit,
+    SecurityEventWriter securityEvents,
     ILogger<AdminClientsController> logger) : Controller
 {
     internal const int MaxPageSize = 50;
@@ -127,6 +128,10 @@ public sealed class AdminClientsController(
                 new { redirectUris, postLogoutUris, previousRedirectUris = previousRedirect, previousPostLogoutRedirectUris = previousPostLogout },
                 HttpContext.Connection.RemoteIpAddress?.ToString()),
             cancellationToken);
+        await securityEvents.RecordAsync(SecurityEventEntryFor(
+            "admin.client_redirect_uris_updated", clientId,
+            new { redirectUris, postLogoutUris, previousRedirectUris = previousRedirect, previousPostLogoutRedirectUris = previousPostLogout }),
+            cancellationToken);
         logger.LogInformation("管理员 {Actor} 更新了客户端 {ClientId} 的回调/登出白名单。", User.Identity?.Name, clientId);
 
         return Ok(await BuildDetailAsync(applications, application));
@@ -183,6 +188,10 @@ public sealed class AdminClientsController(
                 new { permissions, previousPermissions = previous },
                 HttpContext.Connection.RemoteIpAddress?.ToString()),
             cancellationToken);
+        await securityEvents.RecordAsync(SecurityEventEntryFor(
+            "admin.client_permissions_updated", clientId,
+            new { permissions, previousPermissions = previous }),
+            cancellationToken);
         logger.LogInformation("管理员 {Actor} 更新了客户端 {ClientId} 的权限集。", User.Identity?.Name, clientId);
 
         return Ok(await BuildDetailAsync(applications, application));
@@ -218,6 +227,10 @@ public sealed class AdminClientsController(
                 new { note = "secret rotated; plaintext returned once, not stored" },
                 HttpContext.Connection.RemoteIpAddress?.ToString()),
             cancellationToken);
+        await securityEvents.RecordAsync(SecurityEventEntryFor(
+            "admin.client_secret_rotated", clientId,
+            new { note = "secret rotated; plaintext returned once, not stored" }),
+            cancellationToken);
         logger.LogInformation("管理员 {Actor} 轮换了客户端 {ClientId} 的密钥。", User.Identity?.Name, clientId);
 
         return Ok(new AdminRotateSecretResponse(clientId, secret));
@@ -238,4 +251,17 @@ public sealed class AdminClientsController(
     private static bool IsAbsoluteHttpUri(string value)
         => Uri.TryCreate(value, UriKind.Absolute, out var uri)
             && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+
+    private SecurityEventEntry SecurityEventEntryFor(string eventType, string clientId, object metadata)
+        => new(
+            eventType,
+            User.FindFirst("sub")?.Value,
+            User.FindFirst("sub")?.Value,
+            "client",
+            clientId,
+            "admin_webauthn",
+            metadata,
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            Request.Headers.UserAgent.ToString(),
+            HttpContext.TraceIdentifier);
 }

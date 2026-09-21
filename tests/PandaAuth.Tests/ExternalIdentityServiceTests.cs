@@ -27,6 +27,10 @@ public sealed class ExternalIdentityServiceTests
         Assert.Equal("subject-1", result.Identity.ProviderSubject);
         Assert.Equal("local@example.com", (await users.FindByEmailAsync("local@example.com"))!.Id == user.Id
             ? "local@example.com" : null);
+        var securityEvent = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents
+            .Where(item => item.EventType == "user.external_identity_linked"));
+        Assert.Equal("user.external_identity_linked", securityEvent.EventType);
+        Assert.Equal(user.Id, securityEvent.UserId);
     }
 
     [Fact]
@@ -79,6 +83,10 @@ public sealed class ExternalIdentityServiceTests
         Assert.Null(await service.FindActiveAsync("wechat", "subject-1"));
         Assert.NotNull(await provider.GetRequiredService<PandaAuthDbContext>().ExternalIdentities
             .SingleAsync(identity => identity.Id == linked.Identity.Id && identity.UnlinkedAt != null));
+        var securityEvent = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents
+            .Where(item => item.EventType == "user.external_identity_unlinked"));
+        Assert.Equal("user.external_identity_unlinked", securityEvent.EventType);
+        Assert.Equal(user.Id, securityEvent.UserId);
     }
 
     private static ServiceProvider CreateProvider()
@@ -86,7 +94,9 @@ public sealed class ExternalIdentityServiceTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddDbContext<PandaAuthDbContext>(options => options.UseInMemoryDatabase(Guid.NewGuid().ToString("N")));
+        services.AddSingleton(TimeProvider.System);
         services.AddUserStore();
+        services.AddScoped<SecurityEventWriter>();
         services.AddScoped<ExternalIdentityService>();
         return services.BuildServiceProvider();
     }

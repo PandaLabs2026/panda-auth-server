@@ -21,6 +21,7 @@ public class AdminClientsControllerTests
             provider.GetRequiredService<PandaAuthDbContext>(),
             provider.GetRequiredService<IOpenIddictApplicationManager>(),
             provider.GetRequiredService<AdminAuditWriter>(),
+            provider.GetRequiredService<SecurityEventWriter>(),
             provider.GetRequiredService<ILoggerFactory>().CreateLogger<AdminClientsController>())
         {
             ControllerContext = new() { HttpContext = AdminTestHost.HttpContext(provider) },
@@ -114,6 +115,11 @@ public class AdminClientsControllerTests
         var entry = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
         Assert.Equal(AdminAuditAction.ClientUpdateUris, entry.Action);
         Assert.Contains("https://old.example/callback", entry.Detail); // 审计记录旧值
+
+        var securityEvent = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents.AsEnumerable());
+        Assert.Equal("admin.client_redirect_uris_updated", securityEvent.EventType);
+        Assert.Equal("client", securityEvent.TargetType);
+        Assert.Equal("delta", securityEvent.TargetId);
     }
 
     [Fact]
@@ -168,6 +174,9 @@ public class AdminClientsControllerTests
         var app = await applications.FindByClientIdAsync("zeta");
         Assert.DoesNotContain("gt:password", (await applications.GetPermissionsAsync(app!)).ToArray());
         Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable()); // 只有成功那次落审计
+        var securityEvent = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents.AsEnumerable());
+        Assert.Equal("admin.client_permissions_updated", securityEvent.EventType);
+        Assert.Equal("zeta", securityEvent.TargetId);
     }
 
     [Fact]
@@ -191,6 +200,9 @@ public class AdminClientsControllerTests
         Assert.NotEqual(response.ClientSecret, stored);
         Assert.Equal(AdminAuditAction.ClientRotateSecret,
             Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable()).Action);
+        var securityEvent = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents.AsEnumerable());
+        Assert.Equal("admin.client_secret_rotated", securityEvent.EventType);
+        Assert.Equal("eta", securityEvent.TargetId);
     }
 
     [Fact]

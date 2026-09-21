@@ -14,7 +14,10 @@ public sealed record ExternalIdentityResult(bool Succeeded, string? ErrorCode = 
 /// <summary>
 /// Provider-neutral external identity association. Provider callback validation belongs to a future adapter.
 /// </summary>
-public sealed class ExternalIdentityService(PandaAuthDbContext db, TimeProvider clock)
+public sealed class ExternalIdentityService(
+    PandaAuthDbContext db,
+    TimeProvider clock,
+    SecurityEventWriter? securityEvents = null)
 {
     public async Task<ExternalIdentityResult> BindAsync(
         string userId,
@@ -50,6 +53,20 @@ public sealed class ExternalIdentityService(PandaAuthDbContext db, TimeProvider 
         try
         {
             await db.SaveChangesAsync(cancellationToken);
+            if (securityEvents is not null)
+            {
+                await securityEvents.RecordAsync(new SecurityEventEntry(
+                    "user.external_identity_linked",
+                    userId,
+                    userId,
+                    "external_identity",
+                    identity.Id.ToString(),
+                    "external_identity",
+                    new { provider, providerSubject, hasEmailSnapshot = emailSnapshot is not null },
+                    null,
+                    null,
+                    null), cancellationToken);
+            }
             return ExternalIdentityResult.Success(identity);
         }
         catch (DbUpdateException)
@@ -79,6 +96,20 @@ public sealed class ExternalIdentityService(PandaAuthDbContext db, TimeProvider 
 
         identity.UnlinkedAt = identity.UpdatedAt = clock.GetUtcNow();
         await db.SaveChangesAsync(cancellationToken);
+        if (securityEvents is not null)
+        {
+            await securityEvents.RecordAsync(new SecurityEventEntry(
+                "user.external_identity_unlinked",
+                userId,
+                userId,
+                "external_identity",
+                identity.Id.ToString(),
+                "external_identity",
+                new { provider = identity.Provider, providerSubject = identity.ProviderSubject },
+                null,
+                null,
+                null), cancellationToken);
+        }
         return ExternalIdentityResult.Success(identity);
     }
 
