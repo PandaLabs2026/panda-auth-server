@@ -29,7 +29,7 @@ public sealed class MfaService(
         await RequireEnrollmentPolicyAsync(userId, principal, cancellationToken);
         if (factor != MfaFactorType.Totp)
             throw new MfaPolicyException("WebAuthn enrollment must use its ceremony service.");
-        return await totpFactors.BeginEnrollmentAsync(userId, cancellationToken);
+        return await totpFactors.BeginEnrollmentAsync(userId, cancellationToken, requirePasskey: false);
     }
 
     public async Task<bool> ConfirmEnrollmentAsync(
