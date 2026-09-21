@@ -48,7 +48,7 @@ public sealed class MfaService(
         var codes = new List<string>(RecoveryCodeCount);
         for (var i = 0; i < RecoveryCodeCount; i++)
         {
-            var code = Convert.ToHexString(RandomNumberGenerator.GetBytes(5)).ToLowerInvariant();
+            var code = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
             var salt = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
             db.MfaRecoveryCodes.Add(new MfaRecoveryCode
             {
@@ -132,5 +132,10 @@ public sealed class MfaService(
     }
 
     private static string HashRecoveryCode(string salt, string code)
-        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(salt + ":" + code))).ToLowerInvariant();
+        => Convert.ToHexString(Rfc2898DeriveBytes.Pbkdf2(
+            Encoding.UTF8.GetBytes(salt + ":" + code),
+            Encoding.UTF8.GetBytes(salt),
+            100_000,
+            HashAlgorithmName.SHA256,
+            32)).ToLowerInvariant();
 }

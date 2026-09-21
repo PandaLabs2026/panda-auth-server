@@ -54,6 +54,7 @@ public sealed class MfaServiceTests
 
         Assert.True(await service.ConsumeRecoveryCodeAsync(user.Id, codes[0], CancellationToken.None));
         Assert.False(await service.ConsumeRecoveryCodeAsync(user.Id, codes[0], CancellationToken.None));
+        Assert.False(await service.ConsumeRecoveryCodeAsync(user.Id, "not-a-recovery-code", CancellationToken.None));
         Assert.NotNull((await provider.GetRequiredService<PandaAuthDbContext>().MfaRecoveryCodes.SingleAsync(
             code => code.CodeHash == stored[0].CodeHash)).ConsumedAt);
     }
