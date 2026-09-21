@@ -60,6 +60,33 @@ public class AuthorizationTokenClaimsTests
         Assert.Equal([Scopes.OpenId], principal.GetScopes().ToArray());
     }
 
+    [Fact]
+    public async Task Principal_OnlyIncludesCustomClaimsWhenTheirScopeIsRequested()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var controller = TestUserStoreHost.CreateAuthorizationController(provider);
+        var user = await SeedUserWithRolesAsync(provider, "user");
+        var claims = provider.GetRequiredService<ClaimsPolicyService>();
+        Assert.True((await claims.AddUserClaimAsync(user.Id, "panda:tenant", "tenant-a", "api")).Succeeded);
+
+        var withoutScope = await controller.CreatePrincipalAsync(user, [Scopes.OpenId]);
+        var withScope = await controller.CreatePrincipalAsync(user, [Scopes.OpenId, "api"]);
+
+        Assert.DoesNotContain(withoutScope.Claims, claim => claim.Type == "panda:tenant");
+        Assert.Contains(withScope.Claims, claim => claim.Type == "panda:tenant" && claim.Value == "tenant-a");
+    }
+
+    [Fact]
+    public async Task ClaimsPolicy_RejectsReservedAndUnnamespacedClaims()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var user = await SeedUserWithRolesAsync(provider, "user");
+        var claims = provider.GetRequiredService<ClaimsPolicyService>();
+
+        Assert.False((await claims.AddUserClaimAsync(user.Id, "role", "admin", "roles")).Succeeded);
+        Assert.False((await claims.AddUserClaimAsync(user.Id, "tenant", "tenant-a", "api")).Succeeded);
+    }
+
     private static async Task<PandaUser> SeedUserWithRolesAsync(IServiceProvider provider, params string[] roles)
     {
         var roleManager = provider.GetRequiredService<RoleService>();

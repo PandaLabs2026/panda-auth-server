@@ -38,6 +38,7 @@ internal static class TestUserStoreHost
         services.AddMemoryCache();
         services.AddSingleton<LoginRateLimiter>();
         services.AddScoped<LoginAuditWriter>();
+        services.AddScoped<ClaimsPolicyService>();
         services.AddSingleton<DummyPasswordHash>();
 
         if (passwordHasher is not null)
@@ -69,7 +70,8 @@ internal static class TestUserStoreHost
     internal static AuthorizationController CreateAuthorizationController(ServiceProvider provider)
         => new(
             provider.GetRequiredService<UserService>(),
-            provider.GetRequiredService<LoginSessionService>())
+            provider.GetRequiredService<LoginSessionService>(),
+            provider.GetRequiredService<ClaimsPolicyService>())
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { RequestServices = provider } },
         };

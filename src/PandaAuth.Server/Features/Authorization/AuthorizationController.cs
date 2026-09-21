@@ -18,7 +18,8 @@ namespace PandaAuth.Server.Features.Authorization;
 [Route("~/connect")]
 public sealed class AuthorizationController(
     UserService userManager,
-    LoginSessionService signInManager) : Controller
+    LoginSessionService signInManager,
+    ClaimsPolicyService claimsPolicy) : Controller
 {
     [HttpGet("authorize")]
     [Authorize]
@@ -200,6 +201,8 @@ public sealed class AuthorizationController(
             var roles = await userManager.GetRolesAsync(user);
             identity.AddClaims(roles.Select(role => new Claim(Claims.Role, role)));
         }
+
+        identity.AddClaims(await claimsPolicy.GetClaimsAsync(user, scopes.ToHashSet(StringComparer.Ordinal)));
 
         identity.SetScopes(scopes);
 

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using PandaAuth.Server.Infrastructure.Persistence;
@@ -11,9 +12,11 @@ using PandaAuth.Server.Infrastructure.Persistence;
 namespace PandaAuth.Server.Migrations
 {
     [DbContext(typeof(PandaAuthDbContext))]
-    partial class PandaAuthDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260921164729_AddSecurityEvents")]
+    partial class AddSecurityEvents
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -583,42 +586,6 @@ namespace PandaAuth.Server.Migrations
                     b.ToTable("panda_roles", (string)null);
                 });
 
-            modelBuilder.Entity("PandaAuth.Server.Domain.PandaRoleClaim", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<string>("ClaimType")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.Property<string>("ClaimValue")
-                        .IsRequired()
-                        .HasMaxLength(2048)
-                        .HasColumnType("character varying(2048)");
-
-                    b.Property<string>("RoleId")
-                        .IsRequired()
-                        .HasMaxLength(450)
-                        .HasColumnType("character varying(450)");
-
-                    b.Property<string>("Scope")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("RoleId", "ClaimType", "ClaimValue", "Scope")
-                        .IsUnique();
-
-                    b.ToTable("panda_role_claims", (string)null);
-                });
-
             modelBuilder.Entity("PandaAuth.Server.Domain.PandaUser", b =>
                 {
                     b.Property<string>("Id")
@@ -695,42 +662,6 @@ namespace PandaAuth.Server.Migrations
                         .IsUnique();
 
                     b.ToTable("panda_users", (string)null);
-                });
-
-            modelBuilder.Entity("PandaAuth.Server.Domain.PandaUserClaim", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<string>("ClaimType")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.Property<string>("ClaimValue")
-                        .IsRequired()
-                        .HasMaxLength(2048)
-                        .HasColumnType("character varying(2048)");
-
-                    b.Property<string>("Scope")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.Property<string>("UserId")
-                        .IsRequired()
-                        .HasMaxLength(450)
-                        .HasColumnType("character varying(450)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("UserId", "ClaimType", "ClaimValue", "Scope")
-                        .IsUnique();
-
-                    b.ToTable("panda_user_claims", (string)null);
                 });
 
             modelBuilder.Entity("PandaAuth.Server.Domain.PandaUserRole", b =>
@@ -999,24 +930,6 @@ namespace PandaAuth.Server.Migrations
                         .WithMany()
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("PandaAuth.Server.Domain.PandaRoleClaim", b =>
-                {
-                    b.HasOne("PandaAuth.Server.Domain.PandaRole", null)
-                        .WithMany()
-                        .HasForeignKey("RoleId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("PandaAuth.Server.Domain.PandaUserClaim", b =>
-                {
-                    b.HasOne("PandaAuth.Server.Domain.PandaUser", null)
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
 

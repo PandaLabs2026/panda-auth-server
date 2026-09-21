@@ -13,6 +13,12 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
 
     public DbSet<AdminAuditLog> AdminAuditLogs => Set<AdminAuditLog>();
 
+    public DbSet<SecurityEvent> SecurityEvents => Set<SecurityEvent>();
+
+    public DbSet<PandaUserClaim> UserClaims => Set<PandaUserClaim>();
+
+    public DbSet<PandaRoleClaim> RoleClaims => Set<PandaRoleClaim>();
+
     public DbSet<VerificationCode> VerificationCodes => Set<VerificationCode>();
 
     public DbSet<EmailVerification> EmailVerifications => Set<EmailVerification>();
@@ -79,6 +85,47 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
             entity.HasIndex(x => new { x.ActorUserId, x.CreatedAt });
             // 保留清理按 CreatedAt 谓词分批删除，同 login_logs 的理由需要单列索引。
             entity.HasIndex(x => x.CreatedAt);
+        });
+
+        builder.Entity<SecurityEvent>(entity =>
+        {
+            entity.ToTable("panda_security_events");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.EventType).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.UserId).HasMaxLength(450);
+            entity.Property(x => x.ActorUserId).HasMaxLength(450);
+            entity.Property(x => x.TargetType).HasMaxLength(64);
+            entity.Property(x => x.TargetId).HasMaxLength(450);
+            entity.Property(x => x.AuthenticationMethod).HasMaxLength(64);
+            entity.Property(x => x.IpAddress).HasMaxLength(128);
+            entity.Property(x => x.UserAgent).HasMaxLength(1024);
+            entity.Property(x => x.CorrelationId).HasMaxLength(128);
+            entity.HasIndex(x => new { x.UserId, x.CreatedAt });
+            entity.HasIndex(x => new { x.EventType, x.CreatedAt });
+        });
+
+        builder.Entity<PandaUserClaim>(entity =>
+        {
+            entity.ToTable("panda_user_claims");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.UserId).HasMaxLength(450).IsRequired();
+            entity.Property(x => x.ClaimType).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.ClaimValue).HasMaxLength(2048).IsRequired();
+            entity.Property(x => x.Scope).HasMaxLength(128).IsRequired();
+            entity.HasIndex(x => new { x.UserId, x.ClaimType, x.ClaimValue, x.Scope }).IsUnique();
+            entity.HasOne<PandaUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<PandaRoleClaim>(entity =>
+        {
+            entity.ToTable("panda_role_claims");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.RoleId).HasMaxLength(450).IsRequired();
+            entity.Property(x => x.ClaimType).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.ClaimValue).HasMaxLength(2048).IsRequired();
+            entity.Property(x => x.Scope).HasMaxLength(128).IsRequired();
+            entity.HasIndex(x => new { x.RoleId, x.ClaimType, x.ClaimValue, x.Scope }).IsUnique();
+            entity.HasOne<PandaRole>().WithMany().HasForeignKey(x => x.RoleId).OnDelete(DeleteBehavior.Cascade);
         });
 
         builder.Entity<VerificationCode>(entity =>
