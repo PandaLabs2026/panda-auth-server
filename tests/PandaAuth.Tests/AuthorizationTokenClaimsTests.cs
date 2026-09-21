@@ -87,6 +87,28 @@ public class AuthorizationTokenClaimsTests
         Assert.False((await claims.AddUserClaimAsync(user.Id, "tenant", "tenant-a", "api")).Succeeded);
     }
 
+    [Fact]
+    public async Task ClaimsPolicy_CanListAndRemoveUserAndRoleClaims()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var user = await SeedUserWithRolesAsync(provider, "user");
+        var role = (await provider.GetRequiredService<RoleService>().FindByNameAsync("user"))!;
+        var claims = provider.GetRequiredService<ClaimsPolicyService>();
+
+        Assert.True((await claims.AddUserClaimAsync(user.Id, "panda:tenant", "tenant-a", "api")).Succeeded);
+        Assert.True((await claims.AddRoleClaimAsync(role.Id, "panda:department", "engineering", "api")).Succeeded);
+
+        var userClaim = Assert.Single(await claims.GetUserClaimsAsync(user.Id));
+        var roleClaim = Assert.Single(await claims.GetRoleClaimsAsync(role.Id));
+        Assert.Equal("panda:tenant", userClaim.ClaimType);
+        Assert.Equal("panda:department", roleClaim.ClaimType);
+
+        Assert.True((await claims.RemoveUserClaimAsync(user.Id, userClaim.Id)).Succeeded);
+        Assert.True((await claims.RemoveRoleClaimAsync(role.Id, roleClaim.Id)).Succeeded);
+        Assert.Empty(await claims.GetUserClaimsAsync(user.Id));
+        Assert.Empty(await claims.GetRoleClaimsAsync(role.Id));
+    }
+
     private static async Task<PandaUser> SeedUserWithRolesAsync(IServiceProvider provider, params string[] roles)
     {
         var roleManager = provider.GetRequiredService<RoleService>();

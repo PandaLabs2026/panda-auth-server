@@ -51,6 +51,36 @@ public sealed class ClaimsPolicyService(PandaAuthDbContext db)
         return AccountResult.Success;
     }
 
+    public Task<List<PandaUserClaim>> GetUserClaimsAsync(string userId)
+        => db.UserClaims.AsNoTracking()
+            .Where(claim => claim.UserId == userId)
+            .OrderBy(claim => claim.Id)
+            .ToListAsync();
+
+    public Task<List<PandaRoleClaim>> GetRoleClaimsAsync(string roleId)
+        => db.RoleClaims.AsNoTracking()
+            .Where(claim => claim.RoleId == roleId)
+            .OrderBy(claim => claim.Id)
+            .ToListAsync();
+
+    public async Task<AccountResult> RemoveUserClaimAsync(string userId, long claimId)
+    {
+        var claim = await db.UserClaims.SingleOrDefaultAsync(item => item.Id == claimId && item.UserId == userId);
+        if (claim is null) return AccountResult.Fail("ClaimNotFound", "Claim does not exist.");
+        db.UserClaims.Remove(claim);
+        await db.SaveChangesAsync();
+        return AccountResult.Success;
+    }
+
+    public async Task<AccountResult> RemoveRoleClaimAsync(string roleId, long claimId)
+    {
+        var claim = await db.RoleClaims.SingleOrDefaultAsync(item => item.Id == claimId && item.RoleId == roleId);
+        if (claim is null) return AccountResult.Fail("ClaimNotFound", "Claim does not exist.");
+        db.RoleClaims.Remove(claim);
+        await db.SaveChangesAsync();
+        return AccountResult.Success;
+    }
+
     public async Task<IReadOnlyList<Claim>> GetClaimsAsync(PandaUser user, IReadOnlySet<string> scopes)
     {
         var userClaims = await db.UserClaims
