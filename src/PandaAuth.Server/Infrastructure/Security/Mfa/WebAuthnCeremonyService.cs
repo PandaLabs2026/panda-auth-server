@@ -32,6 +32,7 @@ public sealed class WebAuthnCeremonyService(IFido2 fido2, PandaAuthDbContext db,
             ExcludeCredentials = credentials.Select(Descriptor).ToArray(),
             AuthenticatorSelection = new AuthenticatorSelection
             {
+                AuthenticatorAttachment = AuthenticatorAttachment.Platform,
                 UserVerification = UserVerificationRequirement.Required,
             },
             AttestationPreference = AttestationConveyancePreference.None,

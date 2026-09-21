@@ -103,16 +103,17 @@ public sealed class MfaController(
     [HttpPost("user/passkey/enrollment/complete")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> CompleteUserPasskeyEnrollment(
-        [FromBody] CompletePasskeyEnrollmentRequest request, CancellationToken cancellationToken)
+        [FromBody] CompletePasskeyEnrollmentRequest? request, CancellationToken cancellationToken)
     {
         var user = await CurrentAsync();
         if (user is null || mfa is null) return Forbid();
-        if (request.Response is null) return BadRequest(new { error = "缺少 Passkey 响应。" });
+        if (request is null || request.Response is null) return BadRequest(new { error = "缺少 Passkey 响应。" });
         try
         {
             await mfa.RequireEnrollmentAsync(user.Id, User, cancellationToken);
             await ceremonies.CompleteEnrollmentAsync(user, request.CeremonyId, request.Response, request.FriendlyName, cancellationToken);
-            return Ok(new { status = "ok" });
+            var count = await db.WebAuthnCredentials.CountAsync(item => item.UserId == user.Id && item.RevokedAt == null, cancellationToken);
+            return Ok(new { status = "ok", activePasskeyCount = count });
         }
         catch (MfaPolicyException) { return Forbid(); }
         catch (Exception exception) when (exception is InvalidOperationException or Fido2NetLib.Fido2VerificationException)
@@ -138,11 +139,11 @@ public sealed class MfaController(
     [HttpPost("user/passkey/assertion/complete")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> CompleteUserPasskeyAssertion(
-        [FromBody] CompletePasskeyAssertionRequest request, CancellationToken cancellationToken)
+        [FromBody] CompletePasskeyAssertionRequest? request, CancellationToken cancellationToken)
     {
         var user = await CurrentAsync();
         if (user is null) return Forbid();
-        if (request.Response is null) return BadRequest(new { error = "缺少 Passkey 响应。" });
+        if (request is null || request.Response is null) return BadRequest(new { error = "缺少 Passkey 响应。" });
         try
         {
             await ceremonies.CompleteAssertionAsync(user, request.CeremonyId, request.Response, cancellationToken);
@@ -243,12 +244,12 @@ public sealed class MfaController(
 
     [HttpPost("enrollment/complete")]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> CompleteEnrollment([FromBody] CompletePasskeyEnrollmentRequest request, CancellationToken cancellationToken)
+    public async Task<IActionResult> CompleteEnrollment([FromBody] CompletePasskeyEnrollmentRequest? request, CancellationToken cancellationToken)
     {
         var user = await AdminAsync();
         if (user is null) return Forbid();
         if (!user.EmailConfirmed) return Forbid();
-        if (request.Response is null) return BadRequest(new { error = "缺少 Passkey 响应。" });
+        if (request is null || request.Response is null) return BadRequest(new { error = "缺少 Passkey 响应。" });
         try
         {
             await ceremonies.CompleteEnrollmentAsync(user, request.CeremonyId, request.Response, request.FriendlyName, cancellationToken);

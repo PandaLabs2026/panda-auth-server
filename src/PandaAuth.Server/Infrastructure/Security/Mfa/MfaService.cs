@@ -12,7 +12,11 @@ public enum MfaFactorType { Totp, WebAuthn }
 
 public sealed class MfaPolicyException(string message) : InvalidOperationException(message);
 
-public sealed record MfaStatus(bool HasActiveFactor, bool RequiresReconfiguration, int RecoveryCodeCount);
+public sealed record MfaStatus(
+    bool HasActiveFactor,
+    bool RequiresReconfiguration,
+    int RecoveryCodeCount,
+    int ActivePasskeyCount);
 
 public sealed class MfaService(
     PandaAuthDbContext db,
@@ -156,7 +160,9 @@ public sealed class MfaService(
         var totp = await db.TotpFactors.AnyAsync(x => x.UserId == userId && x.RevokedAt == null && x.ConfirmedAt != null, cancellationToken);
         var passkey = await db.WebAuthnCredentials.AnyAsync(x => x.UserId == userId && x.RevokedAt == null, cancellationToken);
         var recovery = await db.MfaRecoveryCodes.CountAsync(x => x.UserId == userId && x.ConsumedAt == null, cancellationToken);
-        return new MfaStatus(totp || passkey, user.TwoFactorEnabled && !totp && !passkey, recovery);
+        var activePasskeyCount = await db.WebAuthnCredentials.CountAsync(
+            x => x.UserId == userId && x.RevokedAt == null, cancellationToken);
+        return new MfaStatus(totp || passkey, user.TwoFactorEnabled && !totp && !passkey, recovery, activePasskeyCount);
     }
 
     private async Task RequireEnrollmentPolicyAsync(string userId, ClaimsPrincipal principal, CancellationToken cancellationToken)

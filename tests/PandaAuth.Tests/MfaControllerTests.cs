@@ -31,6 +31,12 @@ public class MfaControllerTests
             ConfirmedAt = DateTimeOffset.UtcNow,
             CreatedAt = DateTimeOffset.UtcNow,
         });
+        db.WebAuthnCredentials.Add(new MfaWebAuthnCredential
+        {
+            UserId = user.Id,
+            CredentialId = [1, 2, 3],
+            PublicKeyCose = [4, 5, 6],
+        });
         await db.SaveChangesAsync();
         var context = new DefaultHttpContext { RequestServices = provider };
         context.User = new ClaimsPrincipal(new ClaimsIdentity(
@@ -59,7 +65,8 @@ public class MfaControllerTests
             ControllerContext = new ControllerContext { HttpContext = context },
         };
 
-        Assert.IsType<JsonResult>(await controller.UserStatus(CancellationToken.None));
+        var status = Assert.IsType<JsonResult>(await controller.UserStatus(CancellationToken.None));
+        Assert.Equal(1, Assert.IsType<MfaStatus>(status.Value).ActivePasskeyCount);
         var generated = Assert.IsType<JsonResult>(await controller.GenerateUserRecoveryCodes(CancellationToken.None));
         Assert.Equal(10, ((IReadOnlyList<string>)generated.Value!).Count);
     }

@@ -30,6 +30,7 @@ public class WebAuthnCeremonyServiceTests
         Assert.NotNull(fido2.EnrollmentRequest);
         var request = fido2.EnrollmentRequest!;
         Assert.Equal(UserVerificationRequirement.Required, request.AuthenticatorSelection.UserVerification);
+        Assert.Equal(AuthenticatorAttachment.Platform, request.AuthenticatorSelection.AuthenticatorAttachment);
         var credential = Assert.Single(request.ExcludeCredentials);
         Assert.Equal([1, 2, 3], credential.Id);
     }

@@ -29,9 +29,15 @@
   });
   const responseJson = credential => ({
     id: credential.id, rawId: encode(credential.rawId), type: credential.type,
-    response: Object.fromEntries(Object.entries(credential.response)
-      .filter(([, value]) => value instanceof ArrayBuffer)
-      .map(([key, value]) => [key, encode(value)])),
+    response: (() => {
+      const response = credential.response;
+      const encoded = { clientDataJSON: encode(response.clientDataJSON) };
+      if (response.attestationObject) encoded.attestationObject = encode(response.attestationObject);
+      if (response.authenticatorData) encoded.authenticatorData = encode(response.authenticatorData);
+      if (response.signature) encoded.signature = encode(response.signature);
+      if (response.userHandle) encoded.userHandle = encode(response.userHandle);
+      return encoded;
+    })(),
     clientExtensionResults: credential.getClientExtensionResults(),
   });
 
