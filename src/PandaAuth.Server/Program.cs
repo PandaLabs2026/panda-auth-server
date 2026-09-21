@@ -150,6 +150,9 @@ openIddict.AddServer(options =>
     {
         options.UseLocalServer();
         options.UseAspNetCore();
+        // Make TokenRevocationService effective for API requests: revoked token entries
+        // must not continue to authenticate merely because the token is self-contained.
+        options.EnableTokenEntryValidation();
     });
 
 // Admin API 角色门禁：按 claim 短名（"role"）断言而非 Roles=——后者走 IsInRole，

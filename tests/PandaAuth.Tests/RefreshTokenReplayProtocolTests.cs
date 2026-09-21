@@ -84,22 +84,30 @@ public sealed class RefreshTokenReplayProtocolTests
         var refreshedJson = await refreshed.Content.ReadFromJsonAsync<TokenResponse>();
         Assert.NotNull(refreshedJson?.RefreshToken);
 
-        using var revokeForm = new FormUrlEncodedContent(new Dictionary<string, string>
+        using var revokeAccessTokenForm = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["client_id"] = "replay-client",
+            ["token"] = tokenJson.AccessToken!,
+            ["token_type_hint"] = "access_token",
+        });
+        var revoked = await client.PostAsync("/connect/revoke", revokeAccessTokenForm);
+        Assert.Equal(HttpStatusCode.OK, revoked.StatusCode);
+
+        // Token-entry validation makes the database revocation state effective for API calls.
+        using var userinfo = new HttpRequestMessage(HttpMethod.Get, "/connect/userinfo");
+        userinfo.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer", tokenJson.AccessToken);
+        var userinfoResponse = await client.SendAsync(userinfo);
+        Assert.Equal(HttpStatusCode.Unauthorized, userinfoResponse.StatusCode);
+
+        using var revokeRefreshTokenForm = new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["client_id"] = "replay-client",
             ["token"] = refreshedJson!.RefreshToken!,
             ["token_type_hint"] = "refresh_token",
         });
-        var revoked = await client.PostAsync("/connect/revoke", revokeForm);
-        Assert.Equal(HttpStatusCode.OK, revoked.StatusCode);
-
-        // Current validation is local and does not enable token-entry validation:
-        // revoking a refresh token must not be documented as revoking an already-issued AT.
-        using var userinfo = new HttpRequestMessage(HttpMethod.Get, "/connect/userinfo");
-        userinfo.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
-            "Bearer", tokenJson.AccessToken);
-        var userinfoResponse = await client.SendAsync(userinfo);
-        Assert.Equal(HttpStatusCode.OK, userinfoResponse.StatusCode);
+        var revokedRefreshToken = await client.PostAsync("/connect/revoke", revokeRefreshTokenForm);
+        Assert.Equal(HttpStatusCode.OK, revokedRefreshToken.StatusCode);
 
         // The explicit policy permits only a short concurrent retry window.
         await Task.Delay(TimeSpan.FromSeconds(6));
