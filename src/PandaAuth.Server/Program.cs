@@ -104,6 +104,7 @@ openIddict.AddServer(options =>
         options.SetAccessTokenLifetime(TimeSpan.FromMinutes(10))
             .SetRefreshTokenLifetime(TimeSpan.FromDays(14))
             .SetAuthorizationCodeLifetime(TimeSpan.FromMinutes(5));
+        options.Configure(RefreshTokenPolicy.Configure);
 
         options.RegisterScopes(
             OpenIddictConstants.Scopes.OpenId,
