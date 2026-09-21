@@ -20,7 +20,13 @@ PandaAuth IDP 核心：ASP.NET Core Identity、EF Core/PostgreSQL 与 OpenIddict
 
 ## 前置条件与构建运行
 
-需要 .NET SDK，版本选择见本仓 [global.json](global.json)（当前请求 10.0.112，允许 latestFeature roll-forward）。七仓按[工作区布局](https://github.com/PandaLabs2026/panda-auth/blob/main/WORKSPACE.md)同级克隆，跨仓链接需要对应访问权限。以下命令在本仓根目录执行；本轮仅静态核对命令，未执行构建或启动。
+需要 .NET SDK，版本选择见本仓 [global.json](global.json)（当前请求 10.0.112，允许 latestFeature roll-forward）。本仓可脱离私有元仓构建，但需将公开 Share 仓同级克隆。以下命令在本仓根目录执行；本轮仅静态核对命令，未执行构建或启动。
+
+```bash
+git clone https://github.com/PandaLabs2026/panda-auth-server.git
+git clone https://github.com/PandaLabs2026/panda-auth-share.git
+cd panda-auth-server
+```
 
 需要同级 Share。运行需要独立的开发 PostgreSQL 数据库和对应权限；默认开发配置见 [appsettings.Development.json](src/PandaAuth.Server/appsettings.Development.json)。其中演示凭据仅用于隔离开发，不复制到生产或公开交付记录。
 
@@ -43,7 +49,7 @@ dotnet test tests/PandaAuth.Tests/PandaAuth.Tests.csproj
 
 ## Roadmap 与治理
 
-实现目标见[能力矩阵](https://github.com/PandaLabs2026/panda-auth/blob/main/docs/open-source/capabilities.md)与[发布门禁](https://github.com/PandaLabs2026/panda-auth/blob/main/docs/open-source/release-readiness.md)。实际业务需求驱动路线图，社区请求按方向和维护成本评估，不承诺交付。[社区/商业边界](https://github.com/PandaLabs2026/panda-auth/blob/main/docs/open-source/strategy.md)表示能力归属，不代表商业模块已经交付。
+产品级路线图、发行门禁和社区/商业边界在正式公开发行前仍由维护者治理；本 README 只描述可独立复现的 Server 构建与运行边界。
 
 - [安全政策](SECURITY.md)：选定私密报告渠道，启用状态未核验；不公开提交漏洞细节。
 - [贡献指南](CONTRIBUTING.md)：本仓检查与统一贡献规则。
