@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using OpenIddict.Validation.AspNetCore;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Admin;
 using PandaAuth.Server.Infrastructure.Persistence;
@@ -13,6 +15,85 @@ namespace PandaAuth.Tests;
 
 public sealed class AdminClaimsControllerTests
 {
+    [Fact]
+    public async Task RoleDirectory_UsesCaseInsensitiveContainsAndStableNameOrdering()
+    {
+        var (provider, _) = AdminTestHost.Create();
+        var roles = provider.GetRequiredService<RoleService>();
+        foreach (var name in new[] { "zeta", "Admin-Read", "admin-write" })
+            Assert.True((await roles.CreateAsync(new PandaRole { Name = name })).Succeeded);
+
+        var controller = new AdminRolesController(provider.GetRequiredService<PandaAuthDbContext>())
+        {
+            ControllerContext = new() { HttpContext = AdminTestHost.HttpContext(provider) },
+        };
+
+        var result = Assert.IsType<OkObjectResult>(await controller.List("ADMIN", 1, 20, CancellationToken.None));
+        var page = Assert.IsType<AdminPageResult<AdminRoleSummary>>(result.Value);
+        Assert.Equal(["Admin-Read", "admin-write"], page.Items.Select(item => item.Name));
+    }
+
+    [Theory]
+    [InlineData(0, 20, 1, 20)]
+    [InlineData(1, 999, 1, 50)]
+    public async Task RoleDirectory_ClampsPageArguments(int page, int pageSize, int expectedPage, int expectedSize)
+    {
+        var (provider, _) = AdminTestHost.Create();
+        var controller = new AdminRolesController(provider.GetRequiredService<PandaAuthDbContext>())
+        {
+            ControllerContext = new() { HttpContext = AdminTestHost.HttpContext(provider) },
+        };
+
+        var result = Assert.IsType<OkObjectResult>(await controller.List(null, page, pageSize, CancellationToken.None));
+        var response = Assert.IsType<AdminPageResult<AdminRoleSummary>>(result.Value);
+        Assert.Equal(expectedPage, response.Page);
+        Assert.Equal(expectedSize, response.PageSize);
+    }
+
+    [Fact]
+    public void RoleDirectory_RequiresAdminValidationAuthorization()
+    {
+        Assert.IsType<RequireConfirmedEmailAttribute>(Attribute.GetCustomAttribute(
+            typeof(AdminRolesController), typeof(RequireConfirmedEmailAttribute)));
+        var authorize = Assert.IsType<AuthorizeAttribute>(Attribute.GetCustomAttribute(
+            typeof(AdminRolesController), typeof(AuthorizeAttribute)));
+        Assert.Equal(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme, authorize.AuthenticationSchemes);
+        Assert.Equal(AdminApiAuthorization.PolicyName, authorize.Policy);
+    }
+
+    [Fact]
+    public async Task RoleDirectory_ProjectsOnlyRoleIdAndName()
+    {
+        var (provider, _) = AdminTestHost.Create();
+        var role = new PandaRole { Name = "role-summary" };
+        Assert.True((await provider.GetRequiredService<RoleService>().CreateAsync(role)).Succeeded);
+        var controller = new AdminRolesController(provider.GetRequiredService<PandaAuthDbContext>())
+        {
+            ControllerContext = new() { HttpContext = AdminTestHost.HttpContext(provider) },
+        };
+
+        var result = Assert.IsType<OkObjectResult>(await controller.List(null, 1, 20, CancellationToken.None));
+        var summary = Assert.Single(Assert.IsType<AdminPageResult<AdminRoleSummary>>(result.Value).Items);
+        Assert.Equal(role.Id, summary.Id);
+        Assert.Equal("role-summary", summary.Name);
+        Assert.Equal(["Id", "Name"], summary.GetType().GetProperties().Select(property => property.Name).Order());
+    }
+
+    [Fact]
+    public async Task RoleDirectory_ReturnsEmptyPageWhenQueryHasNoMatch()
+    {
+        var (provider, _) = AdminTestHost.Create();
+        var controller = new AdminRolesController(provider.GetRequiredService<PandaAuthDbContext>())
+        {
+            ControllerContext = new() { HttpContext = AdminTestHost.HttpContext(provider) },
+        };
+
+        var result = Assert.IsType<OkObjectResult>(await controller.List("absent", 1, 20, CancellationToken.None));
+        var page = Assert.IsType<AdminPageResult<AdminRoleSummary>>(result.Value);
+        Assert.Empty(page.Items);
+        Assert.Equal(0, page.Total);
+    }
+
     private static (AdminClaimsController Controller, ServiceProvider Provider) Create(bool withMfa = true)
     {
         var (provider, _) = AdminTestHost.Create();
