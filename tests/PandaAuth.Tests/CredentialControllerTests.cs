@@ -66,6 +66,7 @@ public class CredentialControllerTests
         services.AddScoped<OtpService>();
         services.AddScoped<AccountVerificationService>();
         services.AddScoped<SecurityEventWriter>();
+        services.AddScoped<SessionSecurityService>();
         var provider = services.BuildServiceProvider();
 
         var users = provider.GetRequiredService<UserService>();
@@ -77,6 +78,7 @@ public class CredentialControllerTests
             provider.GetRequiredService<IEmailSender>(),
             provider.GetRequiredService<ITokenRevoker>(),
             provider.GetRequiredService<SecurityEventWriter>(),
+            provider.GetRequiredService<SessionSecurityService>(),
             provider.GetRequiredService<ILoggerFactory>().CreateLogger<CredentialController>())
         {
             ControllerContext = new ControllerContext(new ActionContext(
