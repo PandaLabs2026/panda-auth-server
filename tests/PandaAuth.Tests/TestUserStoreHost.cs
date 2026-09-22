@@ -8,6 +8,7 @@ using PandaAuth.Server.Configuration;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Account;
 using PandaAuth.Server.Features.Authorization;
+using PandaAuth.Server.Features.Tokens;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
 
@@ -39,6 +40,9 @@ internal static class TestUserStoreHost
         services.AddSingleton<LoginRateLimiter>();
         services.AddScoped<LoginAuditWriter>();
         services.AddScoped<ClaimsPolicyService>();
+        services.AddScoped<SecurityEventWriter>();
+        services.AddScoped<ITokenRevoker, TokenRevocationService>();
+        services.AddScoped<SessionSecurityService>();
         services.AddSingleton<DummyPasswordHash>();
 
         if (passwordHasher is not null)

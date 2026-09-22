@@ -21,6 +21,7 @@ public sealed class CredentialController(
     IEmailSender emailSender,
     ITokenRevoker tokenRevoker,
     SecurityEventWriter securityEvents,
+    SessionSecurityService sessionSecurity,
     ILogger<CredentialController> logger) : Controller
 {
     /// <summary>忘记密码：存在与否都走同一签发路径、回同一句话。</summary>
@@ -193,7 +194,7 @@ public sealed class CredentialController(
         var outcome = await verification.ConsumeEmailChangeAsync(
             user.Id, model.NewEmail, model.Token, cancellationToken);
         if (!outcome.Succeeded) return ViewWithError("令牌错误、已使用或已过期。");
-        await tokenRevoker.RevokeUserTokensAsync(user.Id, cancellationToken: cancellationToken);
+        await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: cancellationToken);
         await signInManager.SignOutAsync(HttpContext);
         if (!string.IsNullOrWhiteSpace(oldEmail))
         {
