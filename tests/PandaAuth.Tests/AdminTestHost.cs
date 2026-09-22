@@ -41,6 +41,7 @@ internal static class AdminTestHost
         services.AddSingleton<ITokenRevoker>(revoker);
         services.AddScoped<AdminAuditWriter>();
         services.AddScoped<SecurityEventWriter>();
+        services.AddScoped<SessionSecurityService>();
         services.AddScoped<ClaimsPolicyService>();
         return (services.BuildServiceProvider(), revoker);
     }

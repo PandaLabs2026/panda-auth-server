@@ -23,7 +23,7 @@ namespace PandaAuth.Server.Features.Admin;
 public sealed class AdminUsersController(
     UserService userManager,
     RoleService roleManager,
-    ITokenRevoker tokenRevoker,
+    SessionSecurityService sessionSecurity,
     AdminAuditWriter audit,
     SecurityEventWriter securityEvents,
     PandaAuthDbContext db,
@@ -213,7 +213,7 @@ public sealed class AdminUsersController(
                 detail: string.Join("; ", update.Errors.Select(error => error.Description)));
         }
 
-        await tokenRevoker.RevokeUserTokensAsync(user.Id, cancellationToken: cancellationToken);
+        await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: cancellationToken);
         var action = request.Status == UserStatus.Frozen ? AdminAuditAction.UserFreeze : AdminAuditAction.UserUnfreeze;
         await audit.RecordAsync(
             AdminAuditing.Entry(User!, action, "user", user.Id,
@@ -278,7 +278,7 @@ public sealed class AdminUsersController(
         }
 
         await userManager.UpdateSecurityStampAsync(user);
-        await tokenRevoker.RevokeUserTokensAsync(user.Id, cancellationToken: cancellationToken);
+        await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: cancellationToken);
         await audit.RecordAsync(
             AdminAuditing.Entry(User!, AdminAuditAction.UserResetPassword, "user", user.Id,
                 new { userName = user.UserName, generated }, HttpContext.Connection.RemoteIpAddress?.ToString()),
@@ -381,7 +381,7 @@ public sealed class AdminUsersController(
 
         user.UpdatedAt = DateTimeOffset.UtcNow;
         await userManager.UpdateSecurityStampAsync(user);
-        await tokenRevoker.RevokeUserTokensAsync(user.Id, cancellationToken: cancellationToken);
+        await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: cancellationToken);
         var actualRoles = await userManager.GetRolesAsync(user);
         await audit.RecordAsync(
             AdminAuditing.Entry(User!, AdminAuditAction.UserUpdateRoles, "user", user.Id,
@@ -527,7 +527,7 @@ public sealed class AdminUsersController(
 
         // nickname/role 一样会进访问令牌 claim（profile scope），吊销保证新资料即时生效。
         await userManager.UpdateSecurityStampAsync(user);
-        await tokenRevoker.RevokeUserTokensAsync(user.Id, cancellationToken: cancellationToken);
+        await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: cancellationToken);
         await audit.RecordAsync(
             AdminAuditing.Entry(User!, AdminAuditAction.UserUpdateProfile, "user", user.Id,
                 new { userName = user.UserName, emailChanged, nicknameChanged, regionChanged },
@@ -576,7 +576,7 @@ public sealed class AdminUsersController(
         foreach (var credential in await db.WebAuthnCredentials.Where(item => item.UserId == user.Id && item.RevokedAt == null).ToListAsync(cancellationToken)) credential.RevokedAt = credential.UpdatedAt = now;
         foreach (var factor in await db.TotpFactors.Where(item => item.UserId == user.Id && item.RevokedAt == null).ToListAsync(cancellationToken)) factor.RevokedAt = now;
         await userManager.UpdateSecurityStampAsync(user);
-        await tokenRevoker.RevokeUserTokensAsync(user.Id, cancellationToken: cancellationToken);
+        await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: cancellationToken);
         db.MfaRecoveryEvents.Add(new MfaRecoveryEvent { ActorUserId = actorId, TargetUserId = user.Id, Reason = "admin_reset", AuthenticationMethod = MfaClaimTypes.WebAuthn, CreatedAt = now });
         await db.SaveChangesAsync(cancellationToken);
         await audit.RecordAsync(AdminAuditing.Entry(User!, AdminAuditAction.UserResetTwoFactor, "user", user.Id, new { recovery = true }, HttpContext.Connection.RemoteIpAddress?.ToString()), cancellationToken);
@@ -633,7 +633,7 @@ public sealed class AdminUsersController(
         }
 
         await userManager.UpdateSecurityStampAsync(user);
-        await tokenRevoker.RevokeUserTokensAsync(user.Id, cancellationToken: cancellationToken);
+        await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: cancellationToken);
         await audit.RecordAsync(
             AdminAuditing.Entry(User!, AdminAuditAction.UserDeactivate, "user", user.Id,
                 new { userName = user.UserName, from = previous.ToString() },
