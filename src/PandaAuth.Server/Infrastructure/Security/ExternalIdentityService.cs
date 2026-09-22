@@ -18,9 +18,9 @@ public sealed record ExternalIdentityProfile(
     string? DisplayName,
     string? EmailSnapshot);
 
-/// <summary>
-/// Provider-neutral external identity association. Provider callback validation belongs to a future adapter.
-/// </summary>
+    /// <summary>
+    /// Provider-neutral external identity association. Provider callback validation belongs to a future adapter.
+    /// </summary>
 public sealed class ExternalIdentityService(
     PandaAuthDbContext db,
     TimeProvider clock,
@@ -67,7 +67,7 @@ public sealed class ExternalIdentityService(
             profile.DisplayName, profile.EmailSnapshot, cancellationToken);
     }
 
-    public async Task<ExternalIdentityResult> BindAsync(
+    internal async Task<ExternalIdentityResult> BindAsync(
         string userId,
         string provider,
         string providerSubject,
