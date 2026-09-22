@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Shared;
@@ -34,12 +35,37 @@ public sealed class ExternalIdentityService(
             .ThenBy(item => item.Id)
             .ToListAsync(cancellationToken);
 
-    public Task<ExternalIdentityResult> BindVerifiedAsync(
+    /// <summary>
+    /// Associates a provider-verified profile only from the caller's current, recently
+    /// reauthenticated account session. Provider adapters must use this boundary; the
+    /// lower-level BindAsync method exists for persistence-focused callers and tests.
+    /// </summary>
+    public async Task<ExternalIdentityResult> BindVerifiedAsync(
         string userId,
+        ClaimsPrincipal principal,
         ExternalIdentityProfile profile,
         CancellationToken cancellationToken = default)
-        => BindAsync(userId, profile.Provider, profile.ProviderSubject,
+    {
+        if (!SessionSecurityService.HasRecentAuthentication(
+                principal, clock.GetUtcNow(), TimeSpan.FromMinutes(10)))
+            return ExternalIdentityResult.Failure(
+                "RecentAuthenticationRequired", "Recent authentication is required.");
+
+        if (sessionSecurity is null)
+            return ExternalIdentityResult.Failure(
+                "SessionSecurityUnavailable", "Session security is not configured.");
+
+        var current = await sessionSecurity.RequireCurrentUserAsync(principal, cancellationToken);
+        if (current is null || !string.Equals(current.Id, userId, StringComparison.Ordinal))
+            return ExternalIdentityResult.Failure(
+                "CurrentSessionInvalid", "The current account session is invalid.");
+        if (!current.EmailConfirmed)
+            return ExternalIdentityResult.Failure(
+                "EmailConfirmationRequired", "A confirmed email address is required.");
+
+        return await BindAsync(userId, profile.Provider, profile.ProviderSubject,
             profile.DisplayName, profile.EmailSnapshot, cancellationToken);
+    }
 
     public async Task<ExternalIdentityResult> BindAsync(
         string userId,

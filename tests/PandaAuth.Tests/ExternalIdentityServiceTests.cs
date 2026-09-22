@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using System.Security.Claims;
 using PandaAuth.Server.Domain;
+using PandaAuth.Server.Features.Tokens;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
 using Xunit;
@@ -107,6 +109,62 @@ public sealed class ExternalIdentityServiceTests
         Assert.Equal(marked.UpdatedAt, marked.LastUsedAt);
     }
 
+    [Fact]
+    public async Task BindVerifiedAsync_RequiresCurrentSessionRecentAuthenticationAndConfirmedEmail()
+    {
+        using var provider = CreateProvider();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "external-secure-bind", Email = "bind@example.com" };
+        Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
+        var service = provider.GetRequiredService<ExternalIdentityService>();
+        var profile = new ExternalIdentityProfile("wechat", "subject-secure", "Panda", "bind@example.com");
+
+        var noRecentAuth = await service.BindVerifiedAsync(user.Id, Principal(user), profile);
+        Assert.False(noRecentAuth.Succeeded);
+        Assert.Equal("RecentAuthenticationRequired", noRecentAuth.ErrorCode);
+
+        user.EmailConfirmed = true;
+        await provider.GetRequiredService<PandaAuthDbContext>().SaveChangesAsync();
+        var recent = Principal(user, recent: true);
+        var success = await service.BindVerifiedAsync(user.Id, recent, profile);
+
+        Assert.True(success.Succeeded);
+        Assert.Equal(user.Id, success.Identity!.UserId);
+    }
+
+    [Fact]
+    public async Task BindVerifiedAsync_RejectsUnconfirmedEmailEvenWithRecentAuthentication()
+    {
+        using var provider = CreateProvider();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "external-unconfirmed", Email = "unconfirmed@example.com" };
+        Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
+        var service = provider.GetRequiredService<ExternalIdentityService>();
+
+        var result = await service.BindVerifiedAsync(
+            user.Id,
+            Principal(user, recent: true),
+            new ExternalIdentityProfile("wechat", "subject-unconfirmed", null, null));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("EmailConfirmationRequired", result.ErrorCode);
+    }
+
+    private static ClaimsPrincipal Principal(PandaUser user, bool recent = false)
+    {
+        var claims = new List<Claim>
+        {
+            new(ClaimTypes.NameIdentifier, user.Id),
+            new(LoginSessionService.StampClaim, user.SecurityStamp!),
+        };
+        if (recent)
+        {
+            claims.Add(new Claim(LoginSessionService.AuthenticatedAtClaim,
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()));
+        }
+        return new ClaimsPrincipal(new ClaimsIdentity(claims, LoginSessionService.Scheme));
+    }
+
     private static ServiceProvider CreateProvider()
     {
         var services = new ServiceCollection();
@@ -115,6 +173,8 @@ public sealed class ExternalIdentityServiceTests
         services.AddSingleton(TimeProvider.System);
         services.AddUserStore();
         services.AddScoped<SecurityEventWriter>();
+        services.AddSingleton<ITokenRevoker, NoopTokenRevoker>();
+        services.AddScoped<SessionSecurityService>();
         services.AddScoped<ExternalIdentityService>();
         return services.BuildServiceProvider();
     }
