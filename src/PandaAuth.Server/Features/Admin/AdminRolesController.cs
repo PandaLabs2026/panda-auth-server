@@ -29,18 +29,21 @@ public sealed class AdminRolesController(PandaAuthDbContext db) : Controller
         var roles = db.Roles.AsNoTracking();
         if (!string.IsNullOrWhiteSpace(query))
         {
-            var normalized = query.Trim().ToUpperInvariant();
+            var normalized = UserService.Normalize(query.Trim())!;
             roles = roles.Where(role => role.NormalizedName!.Contains(normalized));
         }
 
         var total = await roles.CountAsync(cancellationToken);
-        var items = await roles
-            .OrderBy(role => role.NormalizedName)
-            .ThenBy(role => role.Id)
-            .Skip((pageNumber - 1) * size)
-            .Take(size)
-            .Select(role => new AdminRoleSummary(role.Id, role.Name!))
-            .ToListAsync(cancellationToken);
+        var offset = (long)(pageNumber - 1) * size;
+        List<AdminRoleSummary> items = offset >= total
+            ? []
+            : await roles
+                .OrderBy(role => role.NormalizedName)
+                .ThenBy(role => role.Id)
+                .Skip((int)offset)
+                .Take(size)
+                .Select(role => new AdminRoleSummary(role.Id, role.Name!))
+                .ToListAsync(cancellationToken);
 
         return Ok(new AdminPageResult<AdminRoleSummary>(items, total, pageNumber, size));
     }

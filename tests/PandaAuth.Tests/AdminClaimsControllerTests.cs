@@ -51,6 +51,81 @@ public sealed class AdminClaimsControllerTests
     }
 
     [Fact]
+    public async Task RoleDirectory_NormalizesUnicodeQueryLikeRolePersistence()
+    {
+        var (provider, _) = AdminTestHost.Create();
+        var role = new PandaRole { Name = "Café-Read" };
+        Assert.True((await provider.GetRequiredService<RoleService>().CreateAsync(role)).Succeeded);
+        var controller = new AdminRolesController(provider.GetRequiredService<PandaAuthDbContext>())
+        {
+            ControllerContext = new() { HttpContext = AdminTestHost.HttpContext(provider) },
+        };
+
+        var result = Assert.IsType<OkObjectResult>(await controller.List("cafe\u0301", 1, 20, CancellationToken.None));
+        var page = Assert.IsType<AdminPageResult<AdminRoleSummary>>(result.Value);
+        Assert.Equal(["Café-Read"], page.Items.Select(item => item.Name));
+    }
+
+    [Fact]
+    public async Task RoleDirectory_PaginatesStableOrderingAndReportsTotal()
+    {
+        var (provider, _) = AdminTestHost.Create();
+        var roles = provider.GetRequiredService<RoleService>();
+        foreach (var name in new[] { "gamma", "delta", "beta", "alpha" })
+            Assert.True((await roles.CreateAsync(new PandaRole { Name = name })).Succeeded);
+        var controller = new AdminRolesController(provider.GetRequiredService<PandaAuthDbContext>())
+        {
+            ControllerContext = new() { HttpContext = AdminTestHost.HttpContext(provider) },
+        };
+
+        var result = Assert.IsType<OkObjectResult>(await controller.List(null, 2, 2, CancellationToken.None));
+        var page = Assert.IsType<AdminPageResult<AdminRoleSummary>>(result.Value);
+        Assert.Equal(4, page.Total);
+        Assert.Equal(["delta", "gamma"], page.Items.Select(item => item.Name));
+    }
+
+    [Fact]
+    public async Task RoleDirectory_FiltersBeforeCountingAndReturnsEmptyPagePastEnd()
+    {
+        var (provider, _) = AdminTestHost.Create();
+        var roles = provider.GetRequiredService<RoleService>();
+        foreach (var name in new[] { "admin-read", "admin-write", "auditor" })
+            Assert.True((await roles.CreateAsync(new PandaRole { Name = name })).Succeeded);
+        var controller = new AdminRolesController(provider.GetRequiredService<PandaAuthDbContext>())
+        {
+            ControllerContext = new() { HttpContext = AdminTestHost.HttpContext(provider) },
+        };
+
+        var filtered = Assert.IsType<OkObjectResult>(await controller.List(" admin ", 2, 1, CancellationToken.None));
+        var filteredPage = Assert.IsType<AdminPageResult<AdminRoleSummary>>(filtered.Value);
+        Assert.Equal(2, filteredPage.Total);
+        Assert.Equal(["admin-write"], filteredPage.Items.Select(item => item.Name));
+
+        var pastEnd = Assert.IsType<OkObjectResult>(await controller.List("admin", 3, 1, CancellationToken.None));
+        var pastEndPage = Assert.IsType<AdminPageResult<AdminRoleSummary>>(pastEnd.Value);
+        Assert.Equal(2, pastEndPage.Total);
+        Assert.Empty(pastEndPage.Items);
+    }
+
+    [Fact]
+    public async Task RoleDirectory_ReturnsEmptyPageForMaximumLegalPageNumber()
+    {
+        var (provider, _) = AdminTestHost.Create();
+        Assert.True((await provider.GetRequiredService<RoleService>().CreateAsync(
+            new PandaRole { Name = "first-role" })).Succeeded);
+        var controller = new AdminRolesController(provider.GetRequiredService<PandaAuthDbContext>())
+        {
+            ControllerContext = new() { HttpContext = AdminTestHost.HttpContext(provider) },
+        };
+
+        var result = Assert.IsType<OkObjectResult>(await controller.List(null, int.MaxValue, 20, CancellationToken.None));
+        var page = Assert.IsType<AdminPageResult<AdminRoleSummary>>(result.Value);
+        Assert.Equal(int.MaxValue, page.Page);
+        Assert.Equal(1, page.Total);
+        Assert.Empty(page.Items);
+    }
+
+    [Fact]
     public void RoleDirectory_RequiresAdminValidationAuthorization()
     {
         Assert.IsType<RequireConfirmedEmailAttribute>(Attribute.GetCustomAttribute(
