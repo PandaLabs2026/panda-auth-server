@@ -4,9 +4,9 @@
 
 品牌名称、Logo、图标不因该许可获得新增授权。`wwwroot/brand/`、`frontend/public/` 等位置存在的 PandaAuth 品牌图片不纳入本轮新增 MIT 授权范围；遵循既有生成管线，不能手改或手工拷贝。来源与分发权利尚需发行前核验。
 
-本仓 MIT 许可独立于当前元仓及官网的专有声明。下述元仓政策链接目前需要访问权限，公开发行前须提供公开副本；这不改变本仓 LICENSE 已授予的权利。
+本仓 MIT 许可独立于当前元仓及官网的专有声明。项目级治理政策的公开副本和最终发行入口仍属于 G14 公开门禁；公开发行前，社区运行和安全报告不得依赖私有协调仓。这不改变本仓 LICENSE 已授予的权利。
 
-This repository's MIT grant is independent of the proprietary coordination and Website repositories. Central policy links currently require access; public copies must be available before release. This does not change rights granted by this repository's LICENSE.
+This repository's MIT grant is independent of the proprietary coordination and Website repositories. Public copies of project governance policies and the final release entry remain G14 release gates; community operation and security reporting must not depend on a private coordination repository before release. This does not change rights granted by this repository's LICENSE.
 
 本文件与 [LICENSE](LICENSE) 是本仓可公开阅读的许可边界；发行前仍需整理实际源码包、软件包及镜像的许可/NOTICE，并确认历史贡献授权。
 
