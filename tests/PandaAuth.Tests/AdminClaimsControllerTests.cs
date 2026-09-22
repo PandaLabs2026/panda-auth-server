@@ -61,6 +61,10 @@ public sealed class AdminClaimsControllerTests
     [Fact]
     public async Task RoleClaims_CanBeManaged_WithScopeBoundCustomClaim()
     {
+        Assert.Equal("/admin-api/roles", PandaAuthAdminApi.Roles);
+        var summary = new AdminRoleSummary("role-1", "admin");
+        Assert.Equal("admin", summary.Name);
+
         var (controller, provider) = Create();
         var role = new PandaRole { Name = "claims-role" };
         Assert.True((await provider.GetRequiredService<RoleService>().CreateAsync(role)).Succeeded);
