@@ -6,17 +6,17 @@
 
 ## 职责与边界
 
-PandaAuth IDP 核心：ASP.NET Core Identity、EF Core/PostgreSQL 与 OpenIddict 7.7.0。持久化、迁移、登录控制器和服务测试归本仓；跨进程契约引用同级 [panda-auth-share](https://github.com/PandaLabs2026/panda-auth-share)。
+PandaAuth IDP 核心：自研用户与角色存储层、EF Core/PostgreSQL 与 OpenIddict 7.7.0。持久化、迁移、登录控制器和服务测试归本仓；跨进程契约引用同级 [panda-auth-share](https://github.com/PandaLabs2026/panda-auth-share)。ASP.NET Core Identity 不再作为运行时用户存储权威。
 
 ## 当前实现与限制
 
 - [协议注册](src/PandaAuth.Server/Program.cs)启用授权码配合 PKCE、客户端凭证和刷新令牌；配置 authorize/token/userinfo/logout/introspect/revoke 端点。
 - [密码哈希](src/PandaAuth.Server/Infrastructure/Security/Argon2idPasswordHasher.cs)采用 Argon2id；[限流](src/PandaAuth.Server/Infrastructure/Security/LoginRateLimiter.cs)为内存 IP/账号双维固定窗口，条目按 TTL 回收；登录审计写入数据库，并由后台任务按默认 90 天的保留期清理（口径见[部署说明](deploy/README.md)）。
 - [密钥存储](src/PandaAuth.Server/Infrastructure/Security/SigningKeyStore.cs)在启动时检查签名密钥轮换，不是运行中的定时轮换；加密密钥仅在缺失时创建。新旧密钥生效需要测试。
-- [批量吊销服务](src/PandaAuth.Server/Features/Tokens/TokenRevocationService.cs)存在，尚未接入改密/冻结/注销流程。标准 revoke 处理单个提交的 token，不代表所有 API 或 Cookie 会话即时失效。
+- [批量吊销服务](src/PandaAuth.Server/Features/Tokens/TokenRevocationService.cs)已由 `SessionSecurityService` 接入改密、冻结、角色变更、MFA 重置、外部身份解绑和注销等路径。标准 revoke 处理提交的 token；在线 token-entry validation 可使本服务 API 识别吊销状态，但不代表离线 Access Token、外部资源服务器缓存或所有 Cookie 会话即时失效。
 - [Web DemoClient](samples/PandaAuth.DemoClient)包含登录、profile、刷新、单 token 撤销和 RP 退出代码；[单元测试](tests/PandaAuth.Tests)覆盖哈希、限流（含冷启动并发放大的并发用例）、登录时间侧信道、ForwardedHeaders 取值、Seeder 与登录审计保留期，**59 例**，但不是完整协议验证。
 
-**2026-09-14 静态核查发现的三项启动阻断项均已修复并验证：** 已注册 MVC 服务；`--migrate` 分支在调用 Seeder 前已注册 OpenIddict 依赖；Seeder 现在检查 `Seed:Enabled` 与 Demo/Admin/Me 三个独立开关（`Auth:Seed:Demo:Enabled` **默认 `false`**，demo 客户端不再默认播种）。生产上的 `--migrate` 已跑通（一次性 migrator 角色迁移/播种，常驻服务用无 DDL 的运行角色启动）。**这仍不等于认证 QuickStart 已验收**：完成登录之后的 userinfo / 刷新 / 登出链路未验证，非维护者在干净环境的可复现步骤也未验收。追踪见元仓 G00/G04/G07。
+**2026-09-14 静态核查发现的三项启动阻断项均已修复并验证：** 已注册 MVC 服务；`--migrate` 分支在调用 Seeder 前已注册 OpenIddict 依赖；Seeder 现在检查 `Seed:Enabled` 与 Demo/Admin/Me 三个独立开关（`Auth:Seed:Demo:Enabled` **默认 `false`**，demo 客户端不再默认播种）。生产上的 `--migrate` 已跑通（一次性 migrator 角色迁移/播种，常驻服务用无 DDL 的运行角色启动）。**脚本化生产 OIDC 全流程已验证**：授权码+PKCE、userinfo、刷新、吊销和登出均有证据；仍不等于真实浏览器或非维护者干净环境验收。追踪见元仓 G00/G04/G06/G07。
 
 ## 前置条件与构建运行
 
