@@ -22,7 +22,7 @@ public class AdminUsersControllerTests
         var controller = new AdminUsersController(
             provider.GetRequiredService<UserService>(),
             provider.GetRequiredService<RoleService>(),
-            provider.GetRequiredService<ITokenRevoker>(),
+            provider.GetRequiredService<SessionSecurityService>(),
             provider.GetRequiredService<AdminAuditWriter>(),
             provider.GetRequiredService<SecurityEventWriter>(),
             provider.GetRequiredService<PandaAuthDbContext>(),
