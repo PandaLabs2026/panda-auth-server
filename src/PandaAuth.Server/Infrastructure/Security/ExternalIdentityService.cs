@@ -11,14 +11,36 @@ public sealed record ExternalIdentityResult(bool Succeeded, string? ErrorCode = 
     public static ExternalIdentityResult Failure(string code, string message) => new(false, code, message);
 }
 
+public sealed record ExternalIdentityProfile(
+    string Provider,
+    string ProviderSubject,
+    string? DisplayName,
+    string? EmailSnapshot);
+
 /// <summary>
 /// Provider-neutral external identity association. Provider callback validation belongs to a future adapter.
 /// </summary>
 public sealed class ExternalIdentityService(
     PandaAuthDbContext db,
     TimeProvider clock,
-    SecurityEventWriter? securityEvents = null)
+    SecurityEventWriter? securityEvents = null,
+    SessionSecurityService? sessionSecurity = null)
 {
+    public Task<List<ExternalIdentity>> ListActiveAsync(
+        string userId, CancellationToken cancellationToken = default)
+        => db.ExternalIdentities
+            .Where(item => item.UserId == userId && item.UnlinkedAt == null)
+            .OrderBy(item => item.Provider)
+            .ThenBy(item => item.Id)
+            .ToListAsync(cancellationToken);
+
+    public Task<ExternalIdentityResult> BindVerifiedAsync(
+        string userId,
+        ExternalIdentityProfile profile,
+        CancellationToken cancellationToken = default)
+        => BindAsync(userId, profile.Provider, profile.ProviderSubject,
+            profile.DisplayName, profile.EmailSnapshot, cancellationToken);
+
     public async Task<ExternalIdentityResult> BindAsync(
         string userId,
         string provider,
@@ -116,6 +138,11 @@ public sealed class ExternalIdentityService(
 
         identity.UnlinkedAt = identity.UpdatedAt = clock.GetUtcNow();
         await db.SaveChangesAsync(cancellationToken);
+        if (sessionSecurity is not null)
+        {
+            await sessionSecurity.InvalidateUserAsync(
+                user!, "external_identity_unlinked", userId, cancellationToken);
+        }
         if (securityEvents is not null)
         {
             await securityEvents.RecordAsync(new SecurityEventEntry(

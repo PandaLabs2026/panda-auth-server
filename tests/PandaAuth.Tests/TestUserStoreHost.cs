@@ -40,8 +40,9 @@ internal static class TestUserStoreHost
         services.AddSingleton<LoginRateLimiter>();
         services.AddScoped<LoginAuditWriter>();
         services.AddScoped<ClaimsPolicyService>();
+        services.AddScoped<ExternalIdentityService>();
         services.AddScoped<SecurityEventWriter>();
-        services.AddScoped<ITokenRevoker, TokenRevocationService>();
+        services.AddSingleton<ITokenRevoker, NoopTokenRevoker>();
         services.AddScoped<SessionSecurityService>();
         services.AddSingleton<DummyPasswordHash>();
 
@@ -79,4 +80,13 @@ internal static class TestUserStoreHost
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { RequestServices = provider } },
         };
+}
+
+internal sealed class NoopTokenRevoker : ITokenRevoker
+{
+    public Task RevokeUserTokensAsync(string userId, string? clientId = null, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task RevokeClientTokensAsync(string clientId, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
 }
