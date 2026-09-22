@@ -24,6 +24,7 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock)
     public const string Scheme = "PandaAuth.Login.v2";
     public const string ReconfigurationScheme = "PandaAuth.MfaReconfiguration.v1";
     public const string StampClaim = "panda_security_stamp";
+    public const string AuthenticatedAtClaim = "panda_authenticated_at";
 
     public Task<LoginOutcome> CheckPasswordSignInAsync(PandaUser user, string password, bool lockoutOnFailure)
         => users.VerifyLoginAsync(user, password, lockoutOnFailure);
@@ -40,6 +41,7 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock)
             new Claim(ClaimTypes.NameIdentifier, current.Id),
             new Claim(ClaimTypes.Name, current.UserName ?? current.Id),
             new Claim(StampClaim, current.SecurityStamp ?? ""),
+            new Claim(AuthenticatedAtClaim, clock.GetUtcNow().ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture)),
         ], Scheme));
         await context.SignInAsync(Scheme, principal, new AuthenticationProperties { IsPersistent = isPersistent });
     }
