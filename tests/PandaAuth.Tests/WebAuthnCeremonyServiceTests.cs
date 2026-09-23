@@ -1,7 +1,6 @@
 using Fido2NetLib;
 using Fido2NetLib.Objects;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Memory;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security.Mfa;
@@ -22,8 +21,7 @@ public class WebAuthnCeremonyServiceTests
             new MfaWebAuthnCredential { UserId = user.Id, CredentialId = [1, 2, 3] },
             new MfaWebAuthnCredential { UserId = user.Id, CredentialId = [4, 5, 6], RevokedAt = DateTimeOffset.UtcNow });
         await db.SaveChangesAsync();
-        using var cache = new MemoryCache(new MemoryCacheOptions());
-        var service = new WebAuthnCeremonyService(fido2, db, new MfaChallengeStore(cache, TimeProvider.System));
+        var service = new WebAuthnCeremonyService(fido2, db, new MfaChallengeStore(db, TimeProvider.System));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.BeginEnrollmentAsync(user, CancellationToken.None));
 
@@ -46,8 +44,7 @@ public class WebAuthnCeremonyServiceTests
             new MfaWebAuthnCredential { UserId = user.Id, CredentialId = [1, 2, 3] },
             new MfaWebAuthnCredential { UserId = user.Id, CredentialId = [4, 5, 6], RevokedAt = DateTimeOffset.UtcNow });
         await db.SaveChangesAsync();
-        using var cache = new MemoryCache(new MemoryCacheOptions());
-        var service = new WebAuthnCeremonyService(fido2, db, new MfaChallengeStore(cache, TimeProvider.System));
+        var service = new WebAuthnCeremonyService(fido2, db, new MfaChallengeStore(db, TimeProvider.System));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.BeginAssertionAsync(user, CancellationToken.None));
 

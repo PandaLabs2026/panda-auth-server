@@ -28,6 +28,7 @@ internal static class TestUserStoreHost
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddControllersWithViews();
+        services.AddAntiforgery();
         services.AddDataProtection().UseEphemeralDataProtectionProvider();
         services.AddHttpContextAccessor();
         services.AddSingleton(Options.Create(options ?? new AuthOptions()));

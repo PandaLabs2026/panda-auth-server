@@ -37,6 +37,8 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
 
     public DbSet<MfaRecoveryCode> MfaRecoveryCodes => Set<MfaRecoveryCode>();
 
+    public DbSet<MfaChallenge> MfaChallenges => Set<MfaChallenge>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
@@ -240,6 +242,17 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
             entity.Property(x => x.Salt).HasMaxLength(64).IsRequired();
             entity.HasIndex(x => new { x.UserId, x.ConsumedAt });
             entity.HasOne<PandaUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<MfaChallenge>(entity =>
+        {
+            entity.ToTable("panda_mfa_challenges");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Purpose).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.SubjectId).HasMaxLength(450).IsRequired();
+            entity.Property(x => x.Value).IsRequired();
+            // 保留清理按 ExpiresAt 谓词分批删除，同 login_logs 的理由需要单列索引。
+            entity.HasIndex(x => x.ExpiresAt);
         });
     }
 }

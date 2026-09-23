@@ -18,6 +18,13 @@ public sealed record MfaStatus(
     int RecoveryCodeCount,
     int ActivePasskeyCount);
 
+public sealed record MfaFactorInfo(
+    Guid Id,
+    string Type,
+    string? FriendlyName,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? LastUsedAt);
+
 public sealed class MfaService(
     PandaAuthDbContext db,
     UserService users,
@@ -165,6 +172,22 @@ public sealed class MfaService(
         return new MfaStatus(totp || passkey, user.TwoFactorEnabled && !totp && !passkey, recovery, activePasskeyCount);
     }
 
+    /// <summary>自助管理的因子清单（撤销所需的 factorId 来源）。</summary>
+    public async Task<IReadOnlyList<MfaFactorInfo>> ListFactorsAsync(string userId, CancellationToken cancellationToken)
+    {
+        var totp = await db.TotpFactors
+            .Where(x => x.UserId == userId && x.RevokedAt == null && x.ConfirmedAt != null)
+            .OrderBy(x => x.CreatedAt)
+            .Select(x => new MfaFactorInfo(x.Id, "totp", null, x.CreatedAt, null))
+            .ToListAsync(cancellationToken);
+        var passkeys = await db.WebAuthnCredentials
+            .Where(x => x.UserId == userId && x.RevokedAt == null)
+            .OrderBy(x => x.CreatedAt)
+            .Select(x => new MfaFactorInfo(x.Id, "passkey", x.FriendlyName, x.CreatedAt, x.LastUsedAt))
+            .ToListAsync(cancellationToken);
+        return [.. totp, .. passkeys];
+    }
+
     private async Task RequireEnrollmentPolicyAsync(string userId, ClaimsPrincipal principal, CancellationToken cancellationToken)
     {
         var user = await users.FindByIdAsync(userId) ?? throw new MfaPolicyException("User not found.");
@@ -172,13 +195,28 @@ public sealed class MfaService(
         await RequireRecentAuthenticationAsync(userId, principal, cancellationToken);
     }
 
+    /// <summary>近期认证窗口：所有自助 MFA 操作共用。</summary>
+    private static readonly TimeSpan RecentAuthenticationWindow = TimeSpan.FromMinutes(5);
+
     private async Task RequireRecentAuthenticationAsync(string userId, ClaimsPrincipal principal, CancellationToken cancellationToken)
     {
-        if (principal.FindFirstValue(ClaimTypes.NameIdentifier) != userId ||
-            !RecentMfaRequirement.HasValidMfa(principal, clock.GetUtcNow(), TimeSpan.FromMinutes(5)))
-            throw new MfaPolicyException("Recent MFA authentication is required.");
-        await Task.CompletedTask;
+        if (principal.FindFirstValue(ClaimTypes.NameIdentifier) != userId)
+            throw new MfaPolicyException("Recent authentication is required.");
+        var now = clock.GetUtcNow();
+        if (RecentMfaRequirement.HasValidMfa(principal, now, RecentAuthenticationWindow))
+            return;
+        // 首因子解锁：amr 只能来自已完成的 MFA，账户没有任何活跃因子时不存在合法途径产生它，
+        // 此时以 5 分钟内的密码登录（panda_authenticated_at）视为「近期重新认证」；
+        // 已有因子后仍必须完成一次 MFA（防止仅凭密码注册第二因子绕过 step-up）。
+        if (!await HasActiveFactorAsync(userId, cancellationToken) &&
+            SessionSecurityService.HasRecentAuthentication(principal, now, RecentAuthenticationWindow))
+            return;
+        throw new MfaPolicyException("Recent MFA authentication is required.");
     }
+
+    private async Task<bool> HasActiveFactorAsync(string userId, CancellationToken cancellationToken)
+        => await db.TotpFactors.AnyAsync(x => x.UserId == userId && x.RevokedAt == null && x.ConfirmedAt != null, cancellationToken)
+            || await db.WebAuthnCredentials.AnyAsync(x => x.UserId == userId && x.RevokedAt == null, cancellationToken);
 
     private static string HashRecoveryCode(string salt, string code)
         => Convert.ToHexString(Rfc2898DeriveBytes.Pbkdf2(

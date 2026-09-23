@@ -136,6 +136,53 @@ public sealed class MfaServiceTests
         Assert.True(status.RequiresReconfiguration);
     }
 
+    [Fact]
+    public async Task FirstFactor_CanEnrollWithFreshPasswordLogin()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "first-factor", Email = "first-factor@example.com", EmailConfirmed = true };
+        Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
+        var service = CreateService(provider);
+
+        var enrollment = await service.BeginEnrollmentAsync(
+            user.Id, Principal(user.Id, authenticatedAt: DateTimeOffset.UtcNow), MfaFactorType.Totp, CancellationToken.None);
+
+        Assert.NotEqual(Guid.Empty, enrollment.FactorId);
+    }
+
+    [Fact]
+    public async Task FirstFactor_RequiresRecentLogin_NotStaleSession()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "stale-login", Email = "stale@example.com", EmailConfirmed = true };
+        Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
+        var service = CreateService(provider);
+
+        await Assert.ThrowsAsync<MfaPolicyException>(() => service.BeginEnrollmentAsync(
+            user.Id,
+            Principal(user.Id, authenticatedAt: DateTimeOffset.UtcNow.AddMinutes(-10)),
+            MfaFactorType.Totp,
+            CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task SecondFactor_StillRequiresRecentMfa_NotJustFreshLogin()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "second-factor", Email = "second@example.com", EmailConfirmed = true };
+        Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
+        var db = provider.GetRequiredService<PandaAuthDbContext>();
+        db.TotpFactors.Add(new MfaTotpFactor { UserId = user.Id, Id = Guid.NewGuid(), ConfirmedAt = DateTimeOffset.UtcNow });
+        await db.SaveChangesAsync();
+        var service = CreateService(provider);
+
+        await Assert.ThrowsAsync<MfaPolicyException>(() => service.BeginEnrollmentAsync(
+            user.Id, Principal(user.Id, authenticatedAt: DateTimeOffset.UtcNow), MfaFactorType.Totp, CancellationToken.None));
+    }
+
     private static MfaService CreateService(ServiceProvider provider)
         => new(
             provider.GetRequiredService<PandaAuthDbContext>(),
@@ -146,13 +193,19 @@ public sealed class MfaServiceTests
             provider.GetRequiredService<LoginSessionService>(),
             TimeProvider.System);
 
-    private static ClaimsPrincipal Principal(string userId, string? recentMethod = null)
+    private static ClaimsPrincipal Principal(string userId, string? recentMethod = null, DateTimeOffset? authenticatedAt = null)
     {
         var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, userId) };
         if (recentMethod is not null)
         {
             claims.Add(new Claim(MfaClaimTypes.Method, recentMethod));
             claims.Add(new Claim(MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()));
+        }
+
+        if (authenticatedAt is not null)
+        {
+            claims.Add(new Claim(LoginSessionService.AuthenticatedAtClaim,
+                authenticatedAt.Value.ToUnixTimeSeconds().ToString()));
         }
 
         return new ClaimsPrincipal(new ClaimsIdentity(claims, LoginSessionService.Scheme));

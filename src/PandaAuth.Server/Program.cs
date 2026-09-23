@@ -166,7 +166,8 @@ builder.Services.AddAuthorization(options => options.AddPolicy(AdminApiAuthoriza
 // 登录限流器条目承载在内存缓存上并按 TTL 回收（见 LoginRateLimiter）。
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<IFido2>(_ => new Fido2(WebAuthnRelyingParty.Create(authOptions.Issuer)));
-builder.Services.AddSingleton<MfaChallengeStore>();
+// challenge 状态在数据库（panda_mfa_challenges），随 DbContext 作用域；换实现见 MfaChallengeStore。
+builder.Services.AddScoped<MfaChallengeStore>();
 builder.Services.AddScoped<WebAuthnCeremonyService>();
 builder.Services.AddSingleton(serviceProvider => new TotpSecretProtector(
     authOptions.Mfa.GetEncryptionKey(builder.Environment.IsProduction()), authOptions.Mfa.TotpKeyVersion));

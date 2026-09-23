@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -70,6 +71,22 @@ public sealed class MfaController(
         var user = await CurrentAsync();
         if (user is null || mfa is null) return Forbid();
         return Json(await mfa.GetStatusAsync(user.Id, cancellationToken));
+    }
+
+    [HttpGet("user/factors")]
+    public async Task<IActionResult> UserFactors(CancellationToken cancellationToken)
+    {
+        var user = await CurrentAsync();
+        if (user is null || mfa is null) return Forbid();
+        return Json(await mfa.ListFactorsAsync(user.Id, cancellationToken));
+    }
+
+    /// <summary>给同源 SPA 发放 antiforgery 请求令牌（IDP 未配置自定义 header，前端用默认 RequestVerificationToken 头回传）。</summary>
+    [HttpGet("user/antiforgery")]
+    public IActionResult UserAntiforgeryToken([FromServices] IAntiforgery antiforgery)
+    {
+        var tokens = antiforgery.GetAndStoreTokens(HttpContext);
+        return Ok(new { token = tokens.RequestToken });
     }
 
     [HttpPost("user/recovery-codes")]
