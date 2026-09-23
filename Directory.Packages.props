@@ -12,6 +12,7 @@
     <PackageVersion Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1" />
     <PackageVersion Include="Fido2" Version="4.0.1" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore" Version="10.0.12" />
     <!-- 测试用 EF InMemory 提供程序（DbSeeder 集成测试驱动真实 OpenIddict Core 管理器） -->
     <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.12" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.12" />

@@ -208,7 +208,9 @@ builder.Services.AddScoped<OtpService>();
 builder.Services.AddScoped<AccountVerificationService>();
 // login_logs / admin_audit_logs 保留策略：后台按天删除超期审计记录（Auth:Audit:RetentionDays，默认 90 天）。
 builder.Services.AddHostedService<LoginLogRetentionService>();
-builder.Services.AddHealthChecks();
+// /healthz 必须反映核心依赖：空检查会对「数据库停摆」假绿（门户状态页据此渲染组件状态）。
+// DbContextCheck 执行 CanConnectAsync，库不可达时健康端点转为 503。
+builder.Services.AddHealthChecks().AddDbContextCheck<PandaAuthDbContext>();
 
 var app = builder.Build();
 
