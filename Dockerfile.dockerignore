@@ -10,7 +10,7 @@
 # 刻意不排除的路径：
 #   server / website 的 wwwroot/ —— 它们的 wwwroot/brand/** 是**随源码提交**的品牌
 #                   资产，排除会让生产 favicon 404。因此**不能笼统排除 `**/wwwroot/`**：
-#                   属于构建产物的 SPA 输出（me / webadmin 的 wwwroot/<spa>）须按仓
+#                   属于构建产物的 SPA 输出（me / admin 的 wwwroot/<spa>）须按仓
 #                   **定向**排除，不在这里一刀切。server 自身无 SPA 输出，故本文件
 #                   不出现该类路径；me 那份见其文件末。
 #   *.md         —— 无收益，徒增风险。
@@ -42,13 +42,13 @@ releases/
 !**/deploy/.env.example
 **/deploy/backups/
 
-# SPA 构建产物：本上下文（工作区根）里 me 与 webadmin 各有一份，两份都排。
+# SPA 构建产物：本上下文（工作区根）里 me 与 admin 各有一份，两份都排。
 # 它们的 src/<Proj>/wwwroot/ 被各自 .gitignore 忽略、git ls-files 命中 0，
 # 100% 是 `npm run build` 的输出。二者都进不了 server 的镜像
 # （本文件只 COPY panda-auth-server/ 与 panda-auth-share/），但会进上下文与构建缓存。
 # 别动 server / website 自己的 wwwroot（品牌资产，随源码提交）。
 panda-auth-me/src/PandaAuth.Me/wwwroot/
-panda-auth-webadmin/src/PandaAuth.WebAdmin/wwwroot/
+panda-auth-admin/src/PandaAuth.Admin/wwwroot/
 
 # 本地流程账本（.superpowers/，未入库、随机器与每轮任务变化）。与 .zcode/ 同类：
 # 不是源码、任何构建都不读它（release.sh 无引用），留在上下文里只会让上下文传输

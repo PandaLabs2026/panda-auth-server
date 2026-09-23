@@ -14,7 +14,7 @@ using static OpenIddict.Abstractions.OpenIddictConstants;
 namespace PandaAuth.Server.Features.Admin;
 
 /// <summary>
-/// 用户管理数据 API（webadmin BFF 专用，Bearer + admin 角色；路径不经公网）。
+/// 用户管理数据 API（admin BFF 专用，Bearer + admin 角色；路径不经公网）。
 /// 冻结/重置/角色变更/注销都联动批量吊销：令牌即时失效是 G06 的生效边界要求。
 /// </summary>
 [Route("~/admin-api/users")]
