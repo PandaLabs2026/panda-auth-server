@@ -8,16 +8,16 @@ public class WebAuthnRelyingPartyTests
     [Fact]
     public void Create_BindsRpIdAndOriginToCanonicalHttpsIssuer()
     {
-        var configuration = WebAuthnRelyingParty.Create("https://auth.pandalabs.cc/");
+        var configuration = WebAuthnRelyingParty.Create("https://auth.pandalabs.cn/");
 
-        Assert.Equal("auth.pandalabs.cc", configuration.ServerDomain);
-        Assert.Contains("https://auth.pandalabs.cc", configuration.Origins);
+        Assert.Equal("auth.pandalabs.cn", configuration.ServerDomain);
+        Assert.Contains("https://auth.pandalabs.cn", configuration.Origins);
     }
 
     [Fact]
     public void Create_RejectsNonHttpsIssuer()
     {
-        Assert.Throws<InvalidOperationException>(() => WebAuthnRelyingParty.Create("http://auth.pandalabs.cc"));
+        Assert.Throws<InvalidOperationException>(() => WebAuthnRelyingParty.Create("http://auth.pandalabs.cn"));
     }
 
     [Fact]

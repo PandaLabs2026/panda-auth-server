@@ -4,7 +4,7 @@ public sealed class AuthOptions
 {
     public const string SectionName = "Auth";
 
-    /// <summary>OIDC Issuer（生产由环境变量 Auth__Issuer 注入，如 https://auth.pandalabs.cc；国内/海外双实例零代码切换）。</summary>
+    /// <summary>OIDC Issuer（生产由环境变量 Auth__Issuer 注入，如 https://auth.pandalabs.cn；国内/海外双实例零代码切换）。</summary>
     public string Issuer { get; set; } = string.Empty;
 
     /// <summary>是否强制 HTTPS（生产强制开启；本地开发可关闭）。</summary>

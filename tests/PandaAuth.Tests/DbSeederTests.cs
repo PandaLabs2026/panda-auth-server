@@ -16,15 +16,15 @@ namespace PandaAuth.Tests;
 /// <summary>Seeder 集成测试：EF InMemory + 真实 OpenIddict Core 管理器，验证播种开关与 me-web / admin-web upsert 行为。</summary>
 public class DbSeederTests
 {
-    private const string MeRedirectUri = "https://auth.pandalabs.cc/me/callback/login/pandaauth";
+    private const string MeRedirectUri = "https://auth.pandalabs.cn/me/callback/login/pandaauth";
 
-    private const string MePostLogoutUri = "https://auth.pandalabs.cc/me/";
+    private const string MePostLogoutUri = "https://auth.pandalabs.cn/me/";
 
     private const string MeClientSecret = "me-web-test-secret";
 
-    private const string AdminWebRedirectUri = "https://auth.pandalabs.cc/admin/callback/login/pandaauth";
+    private const string AdminWebRedirectUri = "https://auth.pandalabs.cn/admin/callback/login/pandaauth";
 
-    private const string AdminWebPostLogoutUri = "https://auth.pandalabs.cc/admin/callback/logout/pandaauth";
+    private const string AdminWebPostLogoutUri = "https://auth.pandalabs.cn/admin/callback/logout/pandaauth";
 
     private const string AdminWebClientSecret = "admin-web-test-secret";
 
