@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Configure the local PostgreSQL roles and least-privilege access for PandaAuth.
-# Run with sudo. Passwords are entered through psql's hidden interactive prompt.
+# Run with sudo. Passwords are read from the validated 0600 secret file and sent
+# to psql through stdin; they never appear in argv, logs, or repository files.
 #
 # 默认规则（均可用环境变量覆盖，无个人路径硬编码）：
 #   RUN_USER    运行服务、并且必须拥有密钥文件的操作系统账号。
@@ -90,6 +91,28 @@ print(values[0], end="")
 PY
 )"
 
+DB_MIGRATOR_PASSWORD="$(python3 - "$SECRET_FILE" <<'PY'
+import re
+import sys
+
+values = []
+with open(sys.argv[1], encoding="utf-8") as stream:
+    for line in stream:
+        line = line.rstrip("\r\n")
+        match = re.fullmatch(r"\s*DB_MIGRATOR_PASSWORD\s*=\s*(.*?)\s*", line)
+        if match:
+            value = match.group(1)
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            if not value or "\n" in value or "\r" in value:
+                raise SystemExit("DB_MIGRATOR_PASSWORD must be a non-empty single-line value.")
+            values.append(value)
+if len(values) != 1:
+    raise SystemExit("Expected exactly one DB_MIGRATOR_PASSWORD assignment in panda-auth.env.")
+print(values[0], end="")
+PY
+)"
+
 postgres_psql -X -v ON_ERROR_STOP=1 <<'SQL'
 SELECT format('CREATE ROLE %I LOGIN', 'panda_auth')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'panda_auth')
@@ -128,10 +151,10 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'panda_auth')
 ALTER DATABASE panda_auth OWNER TO panda_auth_migrator;
 SQL
 
-echo "Set panda_auth to the DB_PASSWORD value already stored in $SECRET_FILE."
-postgres_psql -X -v ON_ERROR_STOP=1 -c '\password panda_auth'
-echo "Set a separate strong password for panda_auth_migrator."
-postgres_psql -X -v ON_ERROR_STOP=1 -c '\password panda_auth_migrator'
+printf '%s\n%s\n' "$DB_PASSWORD" "$DB_PASSWORD" \
+  | postgres_psql -X -v ON_ERROR_STOP=1 -c '\password panda_auth'
+printf '%s\n%s\n' "$DB_MIGRATOR_PASSWORD" "$DB_MIGRATOR_PASSWORD" \
+  | postgres_psql -X -v ON_ERROR_STOP=1 -c '\password panda_auth_migrator'
 
 postgres_psql -X -v ON_ERROR_STOP=1 -d panda_auth <<'SQL'
 REASSIGN OWNED BY panda_auth TO panda_auth_migrator;
@@ -269,7 +292,7 @@ if ! PGPASSWORD="$DB_PASSWORD" psql -h 127.0.0.1 -U panda_auth -d panda_auth -X 
 fi
 
 echo "Database roles, least-privilege grants, and loopback-only SCRAM rules are configured."
-echo "Add DB_MIGRATOR_PASSWORD to $SECRET_FILE (mode 0600) using the password just entered."
+echo "DB_PASSWORD and DB_MIGRATOR_PASSWORD were loaded from the validated 0600 secret file."
 echo "Before release, verify DB_MIGRATOR_PASSWORD and use the one-off migration container."
 
 # 显式报告签名密钥权限状态：首次装机（迁移前）该表还不存在，上面的 REVOKE 是空操作，
