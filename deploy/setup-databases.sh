@@ -10,6 +10,11 @@
 #               默认 <RUN_USER 家目录>/.config/panda-auth/panda-auth.env；
 #               可用 PANDA_AUTH_SECRET_FILE 显式指定。
 #               文件必须属于 RUN_USER 且权限为 0600，否则脚本拒绝执行。
+#   PANDA_AUTH_PGHOST / PANDA_AUTH_PGPORT
+#               可选的 PostgreSQL 管理连接地址；默认使用宿主机 Unix socket。
+#   PANDA_AUTH_HBA_FILE
+#               可选的宿主机可见 pg_hba.conf 路径；默认从 PostgreSQL 查询。
+#   PANDA_AUTH_HBA_HOSTS 允许的受限 TCP 来源 CIDR，默认仅 127.0.0.1/32 和 ::1/128。
 # 例：sudo PANDA_AUTH_SECRET_FILE=/srv/panda-auth/panda-auth.env bash setup-databases.sh
 set -euo pipefail
 
@@ -20,6 +25,14 @@ fi
 
 command -v psql >/dev/null || { echo "psql is required." >&2; exit 1; }
 command -v python3 >/dev/null || { echo "python3 is required to read the env file safely." >&2; exit 1; }
+
+postgres_psql() {
+  if [ -n "${PANDA_AUTH_PGHOST:-}" ]; then
+    sudo -u postgres env PGHOST="$PANDA_AUTH_PGHOST" PGPORT="${PANDA_AUTH_PGPORT:-5432}" psql "$@"
+  else
+    sudo -u postgres psql "$@"
+  fi
+}
 
 RUN_USER="${PANDA_AUTH_RUN_USER:-${SUDO_USER:-$(id -un)}}"
 if ! RUN_UID="$(id -u "$RUN_USER" 2>/dev/null)" || [ -z "$RUN_UID" ]; then
@@ -48,7 +61,7 @@ if [ "$SECRET_UID" != "$RUN_UID" ] || [ "$SECRET_MODE" != "600" ]; then
   exit 1
 fi
 
-PG_VERSION_NUM="$(sudo -u postgres psql -X -v ON_ERROR_STOP=1 -tA -c 'SHOW server_version_num' | tr -d '[:space:]')"
+PG_VERSION_NUM="$(postgres_psql -X -v ON_ERROR_STOP=1 -tA -c 'SHOW server_version_num' | tr -d '[:space:]')"
 if [[ ! "$PG_VERSION_NUM" =~ ^18[0-9]{4}$ ]]; then
   echo "Expected PostgreSQL 18 on the selected postgres connection; refusing to modify another cluster." >&2
   exit 1
@@ -77,7 +90,7 @@ print(values[0], end="")
 PY
 )"
 
-sudo -u postgres psql -X -v ON_ERROR_STOP=1 <<'SQL'
+postgres_psql -X -v ON_ERROR_STOP=1 <<'SQL'
 SELECT format('CREATE ROLE %I LOGIN', 'panda_auth')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'panda_auth')
 \gexec
@@ -116,11 +129,11 @@ ALTER DATABASE panda_auth OWNER TO panda_auth_migrator;
 SQL
 
 echo "Set panda_auth to the DB_PASSWORD value already stored in $SECRET_FILE."
-sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c '\password panda_auth'
+postgres_psql -X -v ON_ERROR_STOP=1 -c '\password panda_auth'
 echo "Set a separate strong password for panda_auth_migrator."
-sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c '\password panda_auth_migrator'
+postgres_psql -X -v ON_ERROR_STOP=1 -c '\password panda_auth_migrator'
 
-sudo -u postgres psql -X -v ON_ERROR_STOP=1 -d panda_auth <<'SQL'
+postgres_psql -X -v ON_ERROR_STOP=1 -d panda_auth <<'SQL'
 REASSIGN OWNED BY panda_auth TO panda_auth_migrator;
 ALTER SCHEMA public OWNER TO panda_auth_migrator;
 DO $$
@@ -174,11 +187,38 @@ END
 $$;
 SQL
 
-HBA_FILE="$(sudo -u postgres psql -X -v ON_ERROR_STOP=1 -tA -c 'SHOW hba_file' | tr -d '[:space:]')"
+if [ -n "${PANDA_AUTH_HBA_FILE:-}" ]; then
+  HBA_FILE="$PANDA_AUTH_HBA_FILE"
+else
+  HBA_FILE="$(postgres_psql -X -v ON_ERROR_STOP=1 -tA -c 'SHOW hba_file' | tr -d '[:space:]')"
+fi
 HBA_BACKUP="$(dirname "$HBA_FILE")/$(basename "$HBA_FILE").pre-panda-auth.$(date -u +%Y%m%d%H%M%S)"
 TEMP_FILE="$(mktemp "${HBA_FILE}.XXXXXX")"
 trap 'rm -f "$TEMP_FILE"' EXIT
 cp -a "$HBA_FILE" "$HBA_BACKUP"
+
+HBA_HOSTS="${PANDA_AUTH_HBA_HOSTS:-127.0.0.1/32 ::1/128}"
+read -r -a HBA_HOST_LIST <<< "$HBA_HOSTS"
+HBA_RULES=(
+  'local panda_auth panda_auth reject'
+  'local panda_auth_migrator panda_auth_migrator reject'
+)
+for hba_host in "${HBA_HOST_LIST[@]}"; do
+  if [[ ! "$hba_host" =~ ^[0-9A-Fa-f:./]+$ ]]; then
+    echo "Invalid PANDA_AUTH_HBA_HOSTS entry: $hba_host" >&2
+    exit 1
+  fi
+  HBA_RULES+=(
+    "host panda_auth panda_auth $hba_host scram-sha-256"
+    "host panda_auth panda_auth_migrator $hba_host scram-sha-256"
+  )
+done
+HBA_RULES+=(
+  'host panda_auth panda_auth 0.0.0.0/0 reject'
+  'host panda_auth panda_auth ::/0 reject'
+  'host panda_auth panda_auth_migrator 0.0.0.0/0 reject'
+  'host panda_auth panda_auth_migrator ::/0 reject'
+)
 
 # Replace only our managed block. Explicit rejects precede any broad host rules,
 # so neither database credential can be used from a non-loopback address.
@@ -188,20 +228,9 @@ awk '
   !skip { print }
 ' "$HBA_FILE" > "$TEMP_FILE"
 {
-  cat <<'HBA'
-# BEGIN PANDAAUTH MANAGED RULES
-local panda_auth panda_auth reject
-local panda_auth_migrator panda_auth_migrator reject
-host panda_auth panda_auth 127.0.0.1/32 scram-sha-256
-host panda_auth panda_auth ::1/128 scram-sha-256
-host panda_auth panda_auth_migrator 127.0.0.1/32 scram-sha-256
-host panda_auth panda_auth_migrator ::1/128 scram-sha-256
-host panda_auth panda_auth 0.0.0.0/0 reject
-host panda_auth panda_auth ::/0 reject
-host panda_auth panda_auth_migrator 0.0.0.0/0 reject
-host panda_auth panda_auth_migrator ::/0 reject
-# END PANDAAUTH MANAGED RULES
-HBA
+  echo '# BEGIN PANDAAUTH MANAGED RULES'
+  printf '%s\n' "${HBA_RULES[@]}"
+  echo '# END PANDAAUTH MANAGED RULES'
   cat "$TEMP_FILE"
 } > "${TEMP_FILE}.new"
 mv "${TEMP_FILE}.new" "$TEMP_FILE"
@@ -210,37 +239,26 @@ chmod --reference="$HBA_FILE" "$TEMP_FILE"
 mv "$TEMP_FILE" "$HBA_FILE"
 trap - EXIT
 
-if ! sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c 'SELECT pg_reload_conf()' >/dev/null \
-  || sudo -u postgres psql -X -v ON_ERROR_STOP=1 -tA -c \
+if ! postgres_psql -X -v ON_ERROR_STOP=1 -c 'SELECT pg_reload_conf()' >/dev/null \
+  || postgres_psql -X -v ON_ERROR_STOP=1 -tA -c \
     "SELECT count(*) FROM pg_hba_file_rules WHERE error IS NOT NULL" | grep -vq '^0$'; then
   cp -a "$HBA_BACKUP" "$HBA_FILE"
-  sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c 'SELECT pg_reload_conf()' >/dev/null || true
+  postgres_psql -X -v ON_ERROR_STOP=1 -c 'SELECT pg_reload_conf()' >/dev/null || true
   echo "PostgreSQL rejected the HBA configuration; restored the backup at $HBA_BACKUP." >&2
   exit 1
 fi
 
 HBA_RULES_OK="t"
-while IFS= read -r rule; do
+for rule in "${HBA_RULES[@]}"; do
   if ! grep -Fxq "$rule" "$HBA_FILE"; then HBA_RULES_OK="f"; break; fi
-done <<'HBA_RULES'
-local panda_auth panda_auth reject
-local panda_auth_migrator panda_auth_migrator reject
-host panda_auth panda_auth 127.0.0.1/32 scram-sha-256
-host panda_auth panda_auth ::1/128 scram-sha-256
-host panda_auth panda_auth_migrator 127.0.0.1/32 scram-sha-256
-host panda_auth panda_auth_migrator ::1/128 scram-sha-256
-host panda_auth panda_auth 0.0.0.0/0 reject
-host panda_auth panda_auth ::/0 reject
-host panda_auth panda_auth_migrator 0.0.0.0/0 reject
-host panda_auth panda_auth_migrator ::/0 reject
-HBA_RULES
-if [ "$HBA_RULES_OK" = "t" ] && sudo -u postgres psql -X -v ON_ERROR_STOP=1 -tA -c \
+done
+if [ "$HBA_RULES_OK" = "t" ] && postgres_psql -X -v ON_ERROR_STOP=1 -tA -c \
   "SELECT count(*) FROM pg_hba_file_rules WHERE error IS NOT NULL" | grep -vq '^0$'; then
   HBA_RULES_OK="f"
 fi
 if [ "$HBA_RULES_OK" != "t" ]; then
   cp -a "$HBA_BACKUP" "$HBA_FILE"
-  sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c 'SELECT pg_reload_conf()' >/dev/null || true
+  postgres_psql -X -v ON_ERROR_STOP=1 -c 'SELECT pg_reload_conf()' >/dev/null || true
   echo "Required database/role HBA rules were not loaded; restored the backup at $HBA_BACKUP." >&2
   exit 1
 fi
@@ -256,7 +274,7 @@ echo "Before release, verify DB_MIGRATOR_PASSWORD and use the one-off migration 
 
 # 显式报告签名密钥权限状态：首次装机（迁移前）该表还不存在，上面的 REVOKE 是空操作，
 # 必须让运维一眼看到「还没收紧、迁移后要重跑」，而不是把静默通过当成已完成。
-SIGNING_KEYS_STATE="$(sudo -u postgres psql -X -v ON_ERROR_STOP=1 -tA -d panda_auth -c \
+SIGNING_KEYS_STATE="$(postgres_psql -X -v ON_ERROR_STOP=1 -tA -d panda_auth -c \
   "SELECT CASE
      WHEN to_regclass('public.signing_keys') IS NULL THEN 'absent'
      WHEN has_table_privilege('panda_auth', 'public.signing_keys', 'DELETE') THEN 'still-delete'

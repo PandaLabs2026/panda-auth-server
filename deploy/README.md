@@ -8,7 +8,9 @@
 
 运行依赖 PostgreSQL，开发配置见 [appsettings.Development.json](../src/PandaAuth.Server/appsettings.Development.json)，使用独立开发库。不要让开发配置指向生产，也不要将演示凭据用于生产。
 
-[setup-databases.sh](setup-databases.sh)面向宿主机 PostgreSQL 18，由管理员执行。脚本创建独立 `panda_auth`（运行）与 `panda_auth_migrator`（迁移）角色；数据库由 migrator 所有，运行角色只有 DML 权限。通过 `\password` 交互设置密码，并为本机回环连接增加 SCRAM 规则。服务器密钥文件保存 `DB_PASSWORD`、`DB_MIGRATOR_PASSWORD` 等值；不要将它们提交到仓库。
+[setup-databases.sh](setup-databases.sh)面向 PostgreSQL 18，由管理员执行。脚本创建独立 `panda_auth`（运行）与 `panda_auth_migrator`（迁移）角色；数据库由 migrator 所有，运行角色只有 DML 权限。通过 `\password` 交互设置密码，并为本机回环连接增加 SCRAM 规则。服务器密钥文件保存 `DB_PASSWORD`、`DB_MIGRATOR_PASSWORD` 等值；不要将它们提交到仓库。
+
+默认连接宿主机 Unix socket；Docker PostgreSQL 部署可显式设置 `PANDA_AUTH_PGHOST=127.0.0.1`、`PANDA_AUTH_PGPORT=5432` 和宿主机可见的 `PANDA_AUTH_HBA_FILE`。若数据库容器通过 Docker 网桥接收宿主机转发连接，再将该宿主机网桥 `/32` 加入 `PANDA_AUTH_HBA_HOSTS`；该变量默认仅允许 `127.0.0.1/32 ::1/128`，脚本始终保留公网拒绝规则。
 
 脚本不绑定具体账号与个人路径，默认规则（均可覆盖）见脚本头注释：运行账号默认取 `SUDO_USER`（`PANDA_AUTH_RUN_USER` 可覆盖），密钥文件默认取该账号家目录下的 `.config/panda-auth/panda-auth.env`（`PANDA_AUTH_SECRET_FILE` 可覆盖），并要求该文件属于该账号且权限为 0600。
 
