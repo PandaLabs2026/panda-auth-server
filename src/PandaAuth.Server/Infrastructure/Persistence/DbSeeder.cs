@@ -72,6 +72,47 @@ public static class DbSeeder
             await SeedFirstPartyWebApplicationAsync(
                 applications, "admin-web", "PandaAuth 管理后台", "Auth:Seed:AdminWeb", options.Seed.AdminWeb);
         }
+
+        if (options.Seed.Fleet.Enabled)
+        {
+            await SeedFleetApplicationAsync(applications, options.Seed.Fleet);
+        }
+    }
+
+    private static async Task SeedFleetApplicationAsync(IOpenIddictApplicationManager applications, FleetSeedOptions fleet)
+    {
+        if (string.IsNullOrWhiteSpace(fleet.ClientSecret))
+        {
+            throw new InvalidOperationException("缺少 Auth:Seed:Fleet:ClientSecret 配置（fleet-api 客户端密钥）。");
+        }
+
+        var existing = await applications.FindByClientIdAsync("fleet-api");
+        if (existing is null)
+        {
+            await applications.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "fleet-api",
+                ClientType = ClientTypes.Confidential,
+                ClientSecret = fleet.ClientSecret,
+                ConsentType = ConsentTypes.Implicit,
+                DisplayName = "PandaLabs Fleet 控制面 API",
+                Permissions =
+                {
+                    Permissions.Endpoints.Token,
+                    Permissions.GrantTypes.ClientCredentials,
+                    Permissions.Prefixes.Scope + "fleet.read",
+                    Permissions.Prefixes.Scope + "fleet.allocate",
+                    Permissions.Prefixes.Scope + "fleet.apply",
+                    Permissions.Prefixes.Scope + "fleet.server.manage",
+                },
+            });
+            return;
+        }
+
+        if (!await applications.ValidateClientSecretAsync(existing, fleet.ClientSecret))
+        {
+            await applications.UpdateAsync(existing, fleet.ClientSecret);
+        }
     }
 
     /// <summary>demo 三客户端：默认关闭播种；开启后密钥必须经配置注入，源码不内置任何密钥常量。</summary>

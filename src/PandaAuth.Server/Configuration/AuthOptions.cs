@@ -79,6 +79,8 @@ public sealed class SeedOptions
 
     public AdminWebSeedOptions AdminWeb { get; set; } = new();
 
+    public FleetSeedOptions Fleet { get; set; } = new();
+
     public DemoSeedOptions Demo { get; set; } = new();
 }
 
@@ -115,6 +117,15 @@ public sealed class MeSeedOptions : FirstPartyWebSeedOptions
 
 public sealed class AdminWebSeedOptions : FirstPartyWebSeedOptions
 {
+}
+
+public sealed class FleetSeedOptions
+{
+    /// <summary>是否播种 Fleet 平台级客户端；默认关闭，只有专用 PandaAuth 实例显式开启。</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>Fleet API 客户端凭据；只从专用控制面私密环境变量注入。</summary>
+    public string ClientSecret { get; set; } = string.Empty;
 }
 
 public sealed class DemoSeedOptions
