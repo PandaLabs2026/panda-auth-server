@@ -22,6 +22,7 @@ public static class DbSeeder
         var roleManager = services.GetRequiredService<RoleService>();
         var userManager = services.GetRequiredService<UserService>();
         var applications = services.GetRequiredService<IOpenIddictApplicationManager>();
+        var scopes = services.GetRequiredService<IOpenIddictScopeManager>();
 
         if (!await roleManager.RoleExistsAsync(PandaUser.AdminRole))
         {
@@ -71,6 +72,64 @@ public static class DbSeeder
         {
             await SeedFirstPartyWebApplicationAsync(
                 applications, "admin-web", "PandaAuth 管理后台", "Auth:Seed:AdminWeb", options.Seed.AdminWeb);
+        }
+
+        if (options.Seed.Fleet.Enabled)
+        {
+            await SeedFleetScopesAsync(scopes);
+            await SeedFleetApplicationAsync(applications, options.Seed.Fleet);
+        }
+    }
+
+    private static async Task SeedFleetScopesAsync(IOpenIddictScopeManager scopes)
+    {
+        foreach (var name in new[] { "fleet.read", "fleet.allocate", "fleet.apply", "fleet.server.manage" })
+        {
+            if (await scopes.FindByNameAsync(name) is not null) continue;
+
+            await scopes.CreateAsync(new OpenIddictScopeDescriptor
+            {
+                Name = name,
+                DisplayName = $"PandaLabs Fleet {name[6..]}",
+                Resources = { "fleet-api" },
+            });
+        }
+    }
+
+    private static async Task SeedFleetApplicationAsync(IOpenIddictApplicationManager applications, FleetSeedOptions fleet)
+    {
+        if (string.IsNullOrWhiteSpace(fleet.ClientSecret))
+        {
+            throw new InvalidOperationException("缺少 Auth:Seed:Fleet:ClientSecret 配置（fleet-api 客户端密钥）。");
+        }
+
+        var existing = await applications.FindByClientIdAsync("fleet-api");
+        if (existing is null)
+        {
+            await applications.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "fleet-api",
+                ClientType = ClientTypes.Confidential,
+                ClientSecret = fleet.ClientSecret,
+                ConsentType = ConsentTypes.Implicit,
+                DisplayName = "PandaLabs Fleet 控制面 API",
+                Permissions =
+                {
+                    Permissions.Endpoints.Token,
+                    Permissions.Endpoints.Introspection,
+                    Permissions.GrantTypes.ClientCredentials,
+                    Permissions.Prefixes.Scope + "fleet.read",
+                    Permissions.Prefixes.Scope + "fleet.allocate",
+                    Permissions.Prefixes.Scope + "fleet.apply",
+                    Permissions.Prefixes.Scope + "fleet.server.manage",
+                },
+            });
+            return;
+        }
+
+        if (!await applications.ValidateClientSecretAsync(existing, fleet.ClientSecret))
+        {
+            await applications.UpdateAsync(existing, fleet.ClientSecret);
         }
     }
 
@@ -161,7 +220,6 @@ public static class DbSeeder
                 Permissions =
                 {
                     Permissions.Endpoints.Token,
-                    Permissions.Endpoints.Introspection,
                     Permissions.GrantTypes.ClientCredentials,
                     Permissions.Prefixes.Scope + "api",
                 },

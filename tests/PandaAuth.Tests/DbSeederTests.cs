@@ -96,6 +96,50 @@ public class DbSeederTests
     }
 
     [Fact]
+    public async Task FleetEnabled_CreatesConfidentialClientWithPlatformScopes()
+    {
+        var options = ValidOptions();
+        options.Seed.Fleet = new FleetSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "fleet-api-test-secret",
+        };
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var fleet = await applications.FindByClientIdAsync("fleet-api");
+        Assert.NotNull(fleet);
+        Assert.True(await applications.ValidateClientSecretAsync(fleet, "fleet-api-test-secret"));
+        Assert.Equal(ClientTypes.Confidential, await applications.GetClientTypeAsync(fleet));
+        Assert.True(await applications.HasPermissionAsync(fleet, Permissions.GrantTypes.ClientCredentials));
+        Assert.True(await applications.HasPermissionAsync(fleet, Permissions.Prefixes.Scope + "fleet.read"));
+        Assert.True(await applications.HasPermissionAsync(fleet, Permissions.Prefixes.Scope + "fleet.allocate"));
+        Assert.True(await applications.HasPermissionAsync(fleet, Permissions.Prefixes.Scope + "fleet.apply"));
+        Assert.True(await applications.HasPermissionAsync(fleet, Permissions.Prefixes.Scope + "fleet.server.manage"));
+        Assert.False(await applications.HasPermissionAsync(fleet, Permissions.Endpoints.Authorization));
+
+        var scopes = provider.GetRequiredService<IOpenIddictScopeManager>();
+        Assert.NotNull(await scopes.FindByNameAsync("fleet.read"));
+        Assert.NotNull(await scopes.FindByNameAsync("fleet.allocate"));
+        Assert.NotNull(await scopes.FindByNameAsync("fleet.apply"));
+        Assert.NotNull(await scopes.FindByNameAsync("fleet.server.manage"));
+    }
+
+    [Fact]
+    public async Task FleetEnabledWithoutSecret_FailsClosed()
+    {
+        var options = ValidOptions();
+        options.Seed.Fleet = new FleetSeedOptions { Enabled = true };
+
+        using var provider = BuildProvider(options);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => DbSeeder.SeedAsync(provider));
+
+        Assert.Contains("Auth:Seed:Fleet:ClientSecret", exception.Message);
+    }
+
+    [Fact]
     public async Task DemoEnabledWithoutWebSecret_ThrowsBeforeCreatingClients()
     {
         var options = ValidOptions();
