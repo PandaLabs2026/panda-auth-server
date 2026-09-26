@@ -68,6 +68,10 @@ public sealed class AuthorizationController(
             clientIdentity.AddClaim(new Claim(Claims.Name, request.ClientId!));
             clientIdentity.AddClaim(new Claim(Claims.ClientId, request.ClientId!));
             clientIdentity.SetScopes(request.GetScopes());
+            if (request.GetScopes().Any(scope => scope.StartsWith("fleet.", StringComparison.Ordinal)))
+            {
+                clientIdentity.SetResources("fleet-api");
+            }
 
             var clientPrincipal = new ClaimsPrincipal(clientIdentity);
             clientPrincipal.SetDestinations(static _ => [Destinations.AccessToken]);

@@ -40,6 +40,30 @@ public sealed class RefreshTokenReplayProtocolTests
         Assert.True(issued.IsSuccessStatusCode, $"Fleet token request returned {(int)issued.StatusCode}: {issuedBody}");
         var token = await issued.Content.ReadFromJsonAsync<TokenResponse>();
         Assert.NotNull(token?.AccessToken);
+        Assert.Contains("fleet.read", token!.Scope ?? string.Empty, StringComparison.Ordinal);
+        Assert.Contains("fleet.allocate", token.Scope ?? string.Empty, StringComparison.Ordinal);
+
+        using var introspection = new HttpRequestMessage(HttpMethod.Post, "/connect/introspect")
+        {
+            Content = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["token"] = token.AccessToken!,
+            }),
+        };
+        introspection.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Basic",
+            Convert.ToBase64String(Encoding.UTF8.GetBytes("fleet-api:fleet-api-test-secret")));
+        var introspected = await client.SendAsync(introspection);
+        var introspectedBody = await introspected.Content.ReadAsStringAsync();
+        Assert.True(introspected.IsSuccessStatusCode,
+            $"Fleet introspection returned {(int)introspected.StatusCode}: {introspectedBody}");
+        using var introspectionJson = System.Text.Json.JsonDocument.Parse(introspectedBody);
+        var introspectionRoot = introspectionJson.RootElement;
+        Assert.True(introspectionRoot.GetProperty("active").GetBoolean());
+        Assert.Contains("fleet.read", introspectionRoot.GetProperty("scope").GetString() ?? string.Empty,
+            StringComparison.Ordinal);
+        Assert.Contains("fleet-api", introspectionRoot.GetProperty("aud").EnumerateArray()
+            .Select(value => value.GetString()), StringComparer.Ordinal);
 
         using var invalidScopeForm = new FormUrlEncodedContent(new Dictionary<string, string>
         {
