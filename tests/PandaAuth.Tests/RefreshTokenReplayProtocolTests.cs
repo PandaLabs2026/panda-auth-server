@@ -19,6 +19,42 @@ namespace PandaAuth.Tests;
 public sealed class RefreshTokenReplayProtocolTests
 {
     [PostgresFact]
+    public async Task FleetClientCredentials_issues_only_configured_platform_scopes()
+    {
+        await using var database = await TestDatabase.CreateAsync();
+        await database.MigrateAsync();
+        await database.SeedAsync();
+
+        await using var factory = new ProtocolFactory(database.ConnectionString);
+        using var client = factory.CreateClient();
+
+        using var tokenForm = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["client_id"] = "fleet-api",
+            ["client_secret"] = "fleet-api-test-secret",
+            ["grant_type"] = "client_credentials",
+            ["scope"] = "fleet.read fleet.allocate",
+        });
+        var issued = await client.PostAsync("/connect/token", tokenForm);
+        Assert.Equal(HttpStatusCode.OK, issued.StatusCode);
+        var token = await issued.Content.ReadFromJsonAsync<TokenResponse>();
+        Assert.NotNull(token?.AccessToken);
+        Assert.Contains("fleet.read", token!.Scope ?? string.Empty, StringComparison.Ordinal);
+        Assert.Contains("fleet.allocate", token.Scope ?? string.Empty, StringComparison.Ordinal);
+
+        using var invalidScopeForm = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["client_id"] = "fleet-api",
+            ["client_secret"] = "fleet-api-test-secret",
+            ["grant_type"] = "client_credentials",
+            ["scope"] = "fleet.admin",
+        });
+        var rejected = await client.PostAsync("/connect/token", invalidScopeForm);
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        Assert.Contains("invalid_scope", await rejected.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [PostgresFact]
     public async Task RefreshTokenReplayAfterReuseLeewayIsRejected()
     {
         await using var database = await TestDatabase.CreateAsync();
@@ -157,7 +193,8 @@ public sealed class RefreshTokenReplayProtocolTests
 
     private sealed record TokenResponse(
         [property: System.Text.Json.Serialization.JsonPropertyName("access_token")] string? AccessToken,
-        [property: System.Text.Json.Serialization.JsonPropertyName("refresh_token")] string? RefreshToken);
+        [property: System.Text.Json.Serialization.JsonPropertyName("refresh_token")] string? RefreshToken,
+        [property: System.Text.Json.Serialization.JsonPropertyName("scope")] string? Scope);
 
     private sealed class ProtocolFactory(string connectionString) : WebApplicationFactory<Program>
     {
@@ -237,6 +274,22 @@ public sealed class RefreshTokenReplayProtocolTests
                     OpenIddictConstants.Permissions.Prefixes.Scope + OpenIddictConstants.Scopes.OpenId,
                     OpenIddictConstants.Permissions.Prefixes.Scope + OpenIddictConstants.Scopes.OfflineAccess,
                     OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange,
+                },
+            });
+            await applications.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "fleet-api",
+                ClientType = OpenIddictConstants.ClientTypes.Confidential,
+                ClientSecret = "fleet-api-test-secret",
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.ClientCredentials,
+                    OpenIddictConstants.Permissions.Prefixes.Scope + "fleet.read",
+                    OpenIddictConstants.Permissions.Prefixes.Scope + "fleet.allocate",
+                    OpenIddictConstants.Permissions.Prefixes.Scope + "fleet.apply",
+                    OpenIddictConstants.Permissions.Prefixes.Scope + "fleet.server.manage",
                 },
             });
             await db.SaveChangesAsync();
