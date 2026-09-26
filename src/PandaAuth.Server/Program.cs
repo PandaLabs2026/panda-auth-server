@@ -112,7 +112,11 @@ openIddict.AddServer(options =>
             OpenIddictConstants.Scopes.Profile,
             OpenIddictConstants.Scopes.Roles,
             OpenIddictConstants.Scopes.OfflineAccess,
-            "api");
+            "api",
+            "fleet.read",
+            "fleet.allocate",
+            "fleet.apply",
+            "fleet.server.manage");
 
         // Issuer 全部来自配置（生产 https://auth.pandalabs.cn，海外实例改环境变量即可，零代码切换）。
         options.SetIssuer(IssuerUri());

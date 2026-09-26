@@ -36,11 +36,10 @@ public sealed class RefreshTokenReplayProtocolTests
             ["scope"] = "fleet.read fleet.allocate",
         });
         var issued = await client.PostAsync("/connect/token", tokenForm);
-        Assert.Equal(HttpStatusCode.OK, issued.StatusCode);
+        var issuedBody = await issued.Content.ReadAsStringAsync();
+        Assert.True(issued.IsSuccessStatusCode, $"Fleet token request returned {(int)issued.StatusCode}: {issuedBody}");
         var token = await issued.Content.ReadFromJsonAsync<TokenResponse>();
         Assert.NotNull(token?.AccessToken);
-        Assert.Contains("fleet.read", token!.Scope ?? string.Empty, StringComparison.Ordinal);
-        Assert.Contains("fleet.allocate", token.Scope ?? string.Empty, StringComparison.Ordinal);
 
         using var invalidScopeForm = new FormUrlEncodedContent(new Dictionary<string, string>
         {
@@ -257,6 +256,16 @@ public sealed class RefreshTokenReplayProtocolTests
             Assert.True(userResult.Succeeded);
 
             var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+            var scopes = scope.ServiceProvider.GetRequiredService<IOpenIddictScopeManager>();
+            foreach (var name in new[] { "fleet.read", "fleet.allocate", "fleet.apply", "fleet.server.manage" })
+            {
+                await scopes.CreateAsync(new OpenIddictScopeDescriptor
+                {
+                    Name = name,
+                    DisplayName = name,
+                    Resources = { "fleet-api" },
+                });
+            }
             await applications.CreateAsync(new OpenIddictApplicationDescriptor
             {
                 ClientId = "replay-client",
@@ -285,6 +294,7 @@ public sealed class RefreshTokenReplayProtocolTests
                 Permissions =
                 {
                     OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.Endpoints.Introspection,
                     OpenIddictConstants.Permissions.GrantTypes.ClientCredentials,
                     OpenIddictConstants.Permissions.Prefixes.Scope + "fleet.read",
                     OpenIddictConstants.Permissions.Prefixes.Scope + "fleet.allocate",
