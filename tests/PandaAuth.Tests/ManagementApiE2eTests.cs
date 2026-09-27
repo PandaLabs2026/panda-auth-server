@@ -277,6 +277,13 @@ public sealed class ManagementApiE2eTests
         /// </summary>
         public async Task SeedAsync()
         {
+            // 先迁移建表，再跑真实 DbSeeder 与用例数据。
+            await using (var db = new PandaAuthDbContext(new DbContextOptionsBuilder<PandaAuthDbContext>()
+                .UseNpgsql(ConnectionString).UseOpenIddict().Options))
+            {
+                await db.Database.MigrateAsync();
+            }
+
             var services = new ServiceCollection();
             services.AddLogging();
             services.AddDbContext<PandaAuthDbContext>(options => options.UseNpgsql(ConnectionString).UseOpenIddict());
