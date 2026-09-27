@@ -10,6 +10,7 @@ using PandaAuth.Server.Features.Account;
 using PandaAuth.Server.Features.Authorization;
 using PandaAuth.Server.Features.Tokens;
 using PandaAuth.Server.Infrastructure.Persistence;
+using OpenIddict.Abstractions;
 using PandaAuth.Server.Infrastructure.Security;
 
 namespace PandaAuth.Tests;
@@ -34,9 +35,12 @@ internal static class TestUserStoreHost
         services.AddSingleton(Options.Create(options ?? new AuthOptions()));
         var databaseName = Guid.NewGuid().ToString("N");
         services.AddDbContext<PandaAuthDbContext>(builder => builder
-            .UseInMemoryDatabase(databaseName));
+            .UseInMemoryDatabase(databaseName)
+            .UseOpenIddict());
         services.AddAuthentication();
         services.AddUserStore();
+        // AuthorizationController 依赖 IOpenIddictScopeManager（client_credentials 资源解析）；既有测试流不触发该路径。
+        services.AddOpenIddict().AddCore(builder => builder.UseEntityFrameworkCore().UseDbContext<PandaAuthDbContext>());
         services.AddMemoryCache();
         services.AddSingleton<LoginRateLimiter>();
         services.AddScoped<LoginAuditWriter>();
@@ -77,7 +81,8 @@ internal static class TestUserStoreHost
         => new(
             provider.GetRequiredService<UserService>(),
             provider.GetRequiredService<LoginSessionService>(),
-            provider.GetRequiredService<ClaimsPolicyService>())
+            provider.GetRequiredService<ClaimsPolicyService>(),
+            provider.GetRequiredService<IOpenIddictScopeManager>())
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { RequestServices = provider } },
         };
