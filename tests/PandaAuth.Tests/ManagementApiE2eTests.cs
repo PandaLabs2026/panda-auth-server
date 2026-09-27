@@ -207,39 +207,6 @@ public sealed class ManagementApiE2eTests
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
-    [PostgresFact]
-    public async Task Debug_TokenClaims_ViaIntrospection()
-    {
-        // 临时诊断：确认令牌载荷中的 aud/scope claim 形态（定位策略 403 的真实原因后移除）。
-        await using var database = await TestDatabase.CreateAsync();
-        await database.SeedAsync();
-        await using var factory = new MgmtFactory(database.ConnectionString, mgmtEnabled: true);
-        using var client = factory.CreateClient();
-
-        var token = await GetTokenAsync(client, PandaAuthMgmtApi.UsersReadScope);
-        using var introspection = new HttpRequestMessage(HttpMethod.Post, "/connect/introspect")
-        {
-            Content = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["token"] = token,
-            }),
-        };
-        introspection.Headers.Authorization = new AuthenticationHeaderValue(
-            "Basic", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"mgmt-api:{MgmtSecret}")));
-        var introspected = await client.SendAsync(introspection);
-        var body = await introspected.Content.ReadAsStringAsync();
-
-        await using var scope = factory.Services.CreateAsyncScope();
-        var scopeManager = scope.ServiceProvider.GetRequiredService<IOpenIddictScopeManager>();
-        var entity = await scopeManager.FindByNameAsync(PandaAuthMgmtApi.UsersReadScope);
-        var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
-        var app = await applications.FindByClientIdAsync("mgmt-api");
-        var permissions = app is null ? null : string.Join(",", await applications.GetPermissionsAsync(app));
-
-        Assert.Fail($"introspection {(int)introspected.StatusCode}: {System.Text.RegularExpressions.Regex.Replace(body, "eyJ[A-Za-z0-9_-]{40,}", "JWT...")} || " +
-                    $"scopeEntity={(entity is not null)} || mgmtPerms={permissions}");
-    }
-
     private static async Task<string> GetTokenAsync(HttpClient client, string? scope)
     {
         var form = new Dictionary<string, string>

@@ -19,7 +19,8 @@ namespace PandaAuth.Server.Features.Authorization;
 public sealed class AuthorizationController(
     UserService userManager,
     LoginSessionService signInManager,
-    ClaimsPolicyService claimsPolicy) : Controller
+    ClaimsPolicyService claimsPolicy,
+    IOpenIddictScopeManager scopeManager) : Controller
 {
     [HttpGet("authorize")]
     [Authorize]
@@ -68,10 +69,9 @@ public sealed class AuthorizationController(
             clientIdentity.AddClaim(new Claim(Claims.Name, request.ClientId!));
             clientIdentity.AddClaim(new Claim(Claims.ClientId, request.ClientId!));
             clientIdentity.SetScopes(request.GetScopes());
-            if (request.GetScopes().Any(scope => scope.StartsWith("fleet.", StringComparison.Ordinal)))
-            {
-                clientIdentity.SetResources("fleet-api");
-            }
+            // audience 来自 scope 实体的资源绑定（fleet.* → fleet-api、mgmt.* → panda-mgmt-api），
+            // 不在控制器里硬编码资源名——新 scope 绑定资源后令牌自动携带对应 audience。
+            clientIdentity.SetResources(await scopeManager.ListResourcesAsync(request.GetScopes(), HttpContext.RequestAborted).ToListAsync(HttpContext.RequestAborted));
 
             var clientPrincipal = new ClaimsPrincipal(clientIdentity);
             clientPrincipal.SetDestinations(static _ => [Destinations.AccessToken]);
