@@ -228,7 +228,7 @@ public sealed class ManagementApiE2eTests
             "Basic", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"mgmt-api:{MgmtSecret}")));
         var introspected = await client.SendAsync(introspection);
         var body = await introspected.Content.ReadAsStringAsync();
-        Assert.True(false, $"introspection {(int)introspected.StatusCode}: {body}");
+        Assert.Fail($"introspection {(int)introspected.StatusCode}: {body}");
     }
 
     private static async Task<string> GetTokenAsync(HttpClient client, string? scope)
