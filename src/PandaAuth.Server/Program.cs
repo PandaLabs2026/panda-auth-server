@@ -197,6 +197,8 @@ builder.Services.AddSingleton(serviceProvider => new TotpSecretProtector(
 builder.Services.AddScoped<TotpFactorService>();
 builder.Services.AddScoped<MfaService>();
 builder.Services.AddSingleton<LoginRateLimiter>();
+// Management API 限流与登录限流共用 FixedWindowLimiterCache 机械；桶配置见 Auth:Mgmt:RateLimit。
+builder.Services.AddSingleton<ManagementRateLimiter>();
 builder.Services.AddScoped<LoginAuditWriter>();
 builder.Services.AddScoped<AdminAuditWriter>();
 builder.Services.AddScoped<SecurityEventWriter>();

@@ -15,7 +15,7 @@ namespace PandaAuth.Server.Features.Management;
 [ApiController]
 [Route("mgmt/v1/users")]
 [Authorize(AuthenticationSchemes = OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme, Policy = MgmtApiAuthorization.UsersReadPolicy)]
-public sealed class ManagementUsersController(UserService userManager) : ControllerBase
+public sealed class ManagementUsersController(UserService userManager, ManagementRateLimiter rateLimiter) : ControllerBase
 {
     private const int DefaultPageSize = 20;
     private const int MaxPageSize = 100;
@@ -28,6 +28,14 @@ public sealed class ManagementUsersController(UserService userManager) : Control
         [FromQuery] int? pageSize,
         CancellationToken cancellationToken)
     {
+        var decision = rateLimiter.CheckRead(
+            ManagementRateLimiterPrincipals.GetClientId(User),
+            HttpContext.Connection.RemoteIpAddress?.ToString());
+        if (!decision.Allowed)
+        {
+            return this.TooManyRequests(decision);
+        }
+
         var pageNumber = Math.Max(page ?? 1, 1);
         var size = Math.Clamp(pageSize ?? DefaultPageSize, 1, MaxPageSize);
 

@@ -28,6 +28,7 @@ public class ManagementClientsControllerTests
             provider.GetRequiredService<PandaAuthDbContext>(),
             provider.GetRequiredService<IOpenIddictApplicationManager>(),
             provider.GetRequiredService<AdminAuditWriter>(),
+            TestsMgmtLimiter.New(),
             provider.GetRequiredService<ILoggerFactory>().CreateLogger<ManagementClientsController>())
         {
             ControllerContext = new() { HttpContext = MgmtHttpContext(provider) },

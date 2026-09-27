@@ -147,6 +147,21 @@ public sealed class MgmtOptions
 {
     /// <summary>是否注册 /mgmt/v1/* 路由；默认关闭（fail-closed），未启用时端点对外等效不存在（404）。</summary>
     public bool Enabled { get; set; }
+
+    public MgmtRateLimitOptions RateLimit { get; set; } = new();
+}
+
+/// <summary>Management API 限流配置：clientId 与 IP 双维固定窗口；P3 集群化时与登录限流一同替换为 Redis 实现。</summary>
+public sealed class MgmtRateLimitOptions
+{
+    /// <summary>只读端点（列表/详情/用户查询）每分钟许可，clientId 与 IP 各一维。</summary>
+    public int ReadPerMinute { get; set; } = 60;
+
+    /// <summary>写端点（创建/更新/删除）每分钟许可，clientId 与 IP 各一维。</summary>
+    public int WritePerMinute { get; set; } = 10;
+
+    /// <summary>密钥端点（创建/重置密钥）的额外按 IP 严格许可（防 clientId/密钥枚举）。</summary>
+    public int SecretPerMinute { get; set; } = 6;
 }
 
 public sealed class DemoSeedOptions

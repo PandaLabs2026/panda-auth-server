@@ -27,6 +27,7 @@ public sealed partial class ManagementClientsController(
     PandaAuthDbContext dbContext,
     IOpenIddictApplicationManager applications,
     AdminAuditWriter audit,
+    ManagementRateLimiter rateLimiter,
     ILogger<ManagementClientsController> logger) : ControllerBase
 {
     internal const int MaxPageSize = 50;
@@ -45,6 +46,11 @@ public sealed partial class ManagementClientsController(
         [FromQuery] int? pageSize,
         CancellationToken cancellationToken)
     {
+        if (RateGate(rateLimiter.CheckRead(ClientKey(), Ip())) is { } gate)
+        {
+            return gate;
+        }
+
         var pageNumber = Math.Max(page ?? 1, 1);
         var size = Math.Clamp(pageSize ?? DefaultPageSize, 1, MaxPageSize);
 
@@ -65,6 +71,11 @@ public sealed partial class ManagementClientsController(
     [Authorize(Policy = MgmtApiAuthorization.ClientsReadPolicy)]
     public async Task<IActionResult> Detail(string clientId)
     {
+        if (RateGate(rateLimiter.CheckRead(ClientKey(), Ip())) is { } gate)
+        {
+            return gate;
+        }
+
         var application = await applications.FindByClientIdAsync(clientId);
         if (application is null)
         {
@@ -81,6 +92,11 @@ public sealed partial class ManagementClientsController(
         [FromBody] ManagementCreateClientRequest? request,
         CancellationToken cancellationToken)
     {
+        if (RateGate(rateLimiter.CheckSecret(ClientKey(), Ip())) is { } gate)
+        {
+            return gate;
+        }
+
         if (request is null || string.IsNullOrWhiteSpace(request.DisplayName))
         {
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "请求体缺失或 displayName 为空");
@@ -183,6 +199,11 @@ public sealed partial class ManagementClientsController(
         [FromBody] ManagementUpdateClientRequest? request,
         CancellationToken cancellationToken)
     {
+        if (RateGate(rateLimiter.CheckWrite(ClientKey(), Ip())) is { } gate)
+        {
+            return gate;
+        }
+
         if (ReservedClientIds.Contains(clientId))
         {
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "保留客户端",
@@ -269,6 +290,11 @@ public sealed partial class ManagementClientsController(
     [Authorize(Policy = MgmtApiAuthorization.ClientsWritePolicy)]
     public async Task<IActionResult> ResetSecret(string clientId, CancellationToken cancellationToken)
     {
+        if (RateGate(rateLimiter.CheckSecret(ClientKey(), Ip())) is { } gate)
+        {
+            return gate;
+        }
+
         if (ReservedClientIds.Contains(clientId))
         {
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "保留客户端",
@@ -306,6 +332,11 @@ public sealed partial class ManagementClientsController(
     [Authorize(Policy = MgmtApiAuthorization.ClientsWritePolicy)]
     public async Task<IActionResult> Delete(string clientId, CancellationToken cancellationToken)
     {
+        if (RateGate(rateLimiter.CheckWrite(ClientKey(), Ip())) is { } gate)
+        {
+            return gate;
+        }
+
         if (ReservedClientIds.Contains(clientId))
         {
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "保留客户端",
@@ -329,6 +360,14 @@ public sealed partial class ManagementClientsController(
 
         return NoContent();
     }
+
+    /// <summary>限流门：Allowed 直接放行，被拒返回 429 + Retry-After。</summary>
+    private IActionResult? RateGate(ManagementRateLimiter.Decision decision)
+        => decision.Allowed ? null : this.TooManyRequests(decision);
+
+    private string ClientKey() => ManagementRateLimiterPrincipals.GetClientId(User);
+
+    private string? Ip() => HttpContext.Connection.RemoteIpAddress?.ToString();
 
     private async Task<AdminClientDetail?> FindDetailAsync(string clientId, CancellationToken cancellationToken)
     {

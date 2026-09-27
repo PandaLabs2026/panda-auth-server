@@ -1,5 +1,8 @@
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
+using PandaAuth.Server.Configuration;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Management;
 using PandaAuth.Server.Infrastructure.Security;
@@ -14,10 +17,12 @@ namespace PandaAuth.Tests;
 /// </summary>
 public class ManagementUsersControllerTests
 {
-    private static (ManagementUsersController Controller, ServiceProvider Provider) Create()
+    private static (ManagementUsersController Controller, ServiceProvider Provider) Create(ManagementRateLimiter? limiter = null)
     {
         var (provider, _) = AdminTestHost.Create();
-        var controller = new ManagementUsersController(provider.GetRequiredService<UserService>())
+        var controller = new ManagementUsersController(
+            provider.GetRequiredService<UserService>(),
+            limiter ?? TestsMgmtLimiter.New())
         {
             ControllerContext = new() { HttpContext = AdminTestHost.HttpContext(provider) },
         };
@@ -79,4 +84,28 @@ public class ManagementUsersControllerTests
         Assert.Equal(0, page.Total);
         Assert.Empty(page.Items);
     }
+
+    [Fact]
+    public async Task List_RateLimited_Returns429WithRetryAfter()
+    {
+        var (provider, _) = AdminTestHost.Create();
+        var limiter = TestsMgmtLimiter.New(new MgmtRateLimitOptions { ReadPerMinute = 1 });
+        var controller = new ManagementUsersController(provider.GetRequiredService<UserService>(), limiter)
+        {
+            ControllerContext = new() { HttpContext = AdminTestHost.HttpContext(provider) },
+        };
+
+        Assert.IsType<OkObjectResult>(await controller.List(null, null, null, CancellationToken.None));
+
+        var limited = Assert.IsType<ObjectResult>(await controller.List(null, null, null, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status429TooManyRequests, limited.StatusCode);
+        Assert.True(controller.Response.Headers.ContainsKey("Retry-After"));
+    }
+}
+
+/// <summary>Management 限流器的测试构造入口：默认桶配置 + 独立 MemoryCache。</summary>
+internal static class TestsMgmtLimiter
+{
+    public static ManagementRateLimiter New(MgmtRateLimitOptions? options = null)
+        => new(new MemoryCache(new MemoryCacheOptions()), options ?? new MgmtRateLimitOptions());
 }
