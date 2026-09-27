@@ -79,6 +79,12 @@ public static class DbSeeder
             await SeedFleetScopesAsync(scopes);
             await SeedFleetApplicationAsync(applications, options.Seed.Fleet);
         }
+
+        if (options.Seed.Mgmt.Enabled)
+        {
+            await SeedMgmtScopesAsync(scopes);
+            await SeedMgmtApplicationAsync(applications, options.Seed.Mgmt);
+        }
     }
 
     private static async Task SeedFleetScopesAsync(IOpenIddictScopeManager scopes)
@@ -130,6 +136,68 @@ public static class DbSeeder
         if (!await applications.ValidateClientSecretAsync(existing, fleet.ClientSecret))
         {
             await applications.UpdateAsync(existing, fleet.ClientSecret);
+        }
+    }
+
+    /// <summary>
+    /// Management API（M0，设计稿见元仓 docs/superpowers/specs/2026-09-27-management-api-m0-design.md）：
+    /// mgmt.* scope 绑定 panda-mgmt-api 资源；专用机密客户端 mgmt-api 只含管理 scope。
+    /// 交互式应用客户端一律不追加管理 scope——Auth0 组织级 M2M 无法访问管理 API 教训的直接落实。
+    /// </summary>
+    private static async Task SeedMgmtScopesAsync(IOpenIddictScopeManager scopes)
+    {
+        foreach (var name in new[]
+                 {
+                     Features.Management.MgmtApiAuthorization.ClientsReadScope,
+                     Features.Management.MgmtApiAuthorization.ClientsWriteScope,
+                     Features.Management.MgmtApiAuthorization.UsersReadScope,
+                 })
+        {
+            if (await scopes.FindByNameAsync(name) is not null) continue;
+
+            await scopes.CreateAsync(new OpenIddictScopeDescriptor
+            {
+                Name = name,
+                DisplayName = $"PandaAuth Management API: {name}",
+                Resources = { Features.Management.MgmtApiAuthorization.Audience },
+            });
+        }
+    }
+
+    private static async Task SeedMgmtApplicationAsync(IOpenIddictApplicationManager applications, MgmtSeedOptions mgmt)
+    {
+        if (string.IsNullOrWhiteSpace(mgmt.ClientSecret))
+        {
+            throw new InvalidOperationException(
+                "Auth:Seed:Mgmt:Enabled=true 但缺少 Auth:Seed:Mgmt:ClientSecret 配置（mgmt-api 机密客户端密钥）。");
+        }
+
+        var existing = await applications.FindByClientIdAsync("mgmt-api");
+        if (existing is null)
+        {
+            await applications.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "mgmt-api",
+                ClientType = ClientTypes.Confidential,
+                ClientSecret = mgmt.ClientSecret,
+                ConsentType = ConsentTypes.Implicit,
+                DisplayName = "PandaAuth Management API",
+                Permissions =
+                {
+                    Permissions.Endpoints.Token,
+                    Permissions.Endpoints.Introspection,
+                    Permissions.GrantTypes.ClientCredentials,
+                    Permissions.Prefixes.Scope + Features.Management.MgmtApiAuthorization.ClientsReadScope,
+                    Permissions.Prefixes.Scope + Features.Management.MgmtApiAuthorization.ClientsWriteScope,
+                    Permissions.Prefixes.Scope + Features.Management.MgmtApiAuthorization.UsersReadScope,
+                },
+            });
+            return;
+        }
+
+        if (!await applications.ValidateClientSecretAsync(existing, mgmt.ClientSecret))
+        {
+            await applications.UpdateAsync(existing, mgmt.ClientSecret);
         }
     }
 

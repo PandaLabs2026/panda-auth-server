@@ -11,6 +11,7 @@ using OpenIddict.Abstractions;
 using PandaAuth.Server.Configuration;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Admin;
+using PandaAuth.Server.Features.Management;
 using PandaAuth.Server.Features.Tokens;
 using PandaAuth.Server.Infrastructure.Messaging;
 using PandaAuth.Server.Infrastructure.Persistence;
@@ -26,7 +27,16 @@ var connectionStringName = isMigrateCommand ? "Migration" : "Default";
 var connectionString = builder.Configuration.GetConnectionString(connectionStringName)
     ?? throw new InvalidOperationException($"缺少连接字符串 ConnectionStrings:{connectionStringName}。");
 
-builder.Services.AddControllersWithViews()
+// Management API 是部署面开关：启动时一次性读取，未启用时管理控制器整体不进路由模型
+// （对外等效不存在，路由 404 且不进 ApiExplorer）；运行期改开关需重启进程。
+var mgmtApiEnabled = builder.Configuration.GetValue("Auth:Mgmt:Enabled", false);
+builder.Services.AddControllersWithViews(o =>
+    {
+        if (!mgmtApiEnabled)
+        {
+            o.Conventions.Add(new MgmtRoutesDisabledConvention());
+        }
+    })
     .AddJsonOptions(options =>
         options.JsonSerializerOptions.TypeInfoResolverChain.Insert(0, FidoModelSerializerContext.Default));
 
@@ -166,6 +176,15 @@ openIddict.AddServer(options =>
 // 高风险操作继续要求五分钟内 WebAuthn（见 AdminApiAuthorization）。
 builder.Services.AddAuthorization(options => options.AddPolicy(AdminApiAuthorization.PolicyName, policy =>
     policy.RequireClaim(OpenIddict.Abstractions.OpenIddictConstants.Claims.Role, PandaAuthRoles.Admin)));
+
+// Management API 作用域门禁（M0）：audience + scope 双条件，缺一拒绝；M2M 主体无角色、无 MFA step-up，
+// 替代控制是专用机密客户端、最小 scope、部署面总开关、速率限制与写审计（设计稿见元仓 2026-09-27）。
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy(MgmtApiAuthorization.ClientsReadPolicy, MgmtApiAuthorization.RequireScope(MgmtApiAuthorization.ClientsReadScope));
+    options.AddPolicy(MgmtApiAuthorization.ClientsWritePolicy, MgmtApiAuthorization.RequireScope(MgmtApiAuthorization.ClientsWriteScope));
+    options.AddPolicy(MgmtApiAuthorization.UsersReadPolicy, MgmtApiAuthorization.RequireScope(MgmtApiAuthorization.UsersReadScope));
+});
 
 // 登录限流器条目承载在内存缓存上并按 TTL 回收（见 LoginRateLimiter）。
 builder.Services.AddMemoryCache();

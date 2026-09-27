@@ -20,6 +20,9 @@ public sealed class AuthOptions
 
     public MfaOptions Mfa { get; set; } = new();
 
+    /// <summary>公开 Management API（/mgmt/v1/*）总开关；默认关闭，未启用时管理控制器不进路由模型。</summary>
+    public MgmtOptions Mgmt { get; set; } = new();
+
     /// <summary>DataProtection 密钥持久化目录；为空时使用临时密钥（仅限开发环境）。</summary>
     public string DataProtectionKeyPath { get; set; } = string.Empty;
 }
@@ -81,6 +84,8 @@ public sealed class SeedOptions
 
     public FleetSeedOptions Fleet { get; set; } = new();
 
+    public MgmtSeedOptions Mgmt { get; set; } = new();
+
     public DemoSeedOptions Demo { get; set; } = new();
 }
 
@@ -126,6 +131,22 @@ public sealed class FleetSeedOptions
 
     /// <summary>Fleet API 客户端凭据；只从专用控制面私密环境变量注入。</summary>
     public string ClientSecret { get; set; } = string.Empty;
+}
+
+public sealed class MgmtSeedOptions
+{
+    /// <summary>是否播种 Management API（mgmt.* scope 与 mgmt-api 机密客户端）；默认关闭，显式开启方可用。</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>mgmt-api 客户端凭据；只从私密环境变量注入（Auth__Seed__Mgmt__ClientSecret）。</summary>
+    public string ClientSecret { get; set; } = string.Empty;
+}
+
+/// <summary>公开 Management API 的部署面开关：启动时一次性读取，运行期不热切换（改开关需重启进程）。</summary>
+public sealed class MgmtOptions
+{
+    /// <summary>是否注册 /mgmt/v1/* 路由；默认关闭（fail-closed），未启用时端点对外等效不存在（404）。</summary>
+    public bool Enabled { get; set; }
 }
 
 public sealed class DemoSeedOptions

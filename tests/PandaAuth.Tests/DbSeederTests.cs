@@ -140,6 +140,48 @@ public class DbSeederTests
     }
 
     [Fact]
+    public async Task MgmtEnabled_CreatesConfidentialClientWithMgmtScopes()
+    {
+        var options = ValidOptions();
+        options.Seed.Mgmt = new MgmtSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "mgmt-api-test-secret",
+        };
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var mgmt = await applications.FindByClientIdAsync("mgmt-api");
+        Assert.NotNull(mgmt);
+        Assert.True(await applications.ValidateClientSecretAsync(mgmt, "mgmt-api-test-secret"));
+        Assert.Equal(ClientTypes.Confidential, await applications.GetClientTypeAsync(mgmt));
+        Assert.True(await applications.HasPermissionAsync(mgmt, Permissions.GrantTypes.ClientCredentials));
+        Assert.True(await applications.HasPermissionAsync(mgmt, Permissions.Prefixes.Scope + "mgmt.clients.read"));
+        Assert.True(await applications.HasPermissionAsync(mgmt, Permissions.Prefixes.Scope + "mgmt.clients.write"));
+        Assert.True(await applications.HasPermissionAsync(mgmt, Permissions.Prefixes.Scope + "mgmt.users.read"));
+        Assert.False(await applications.HasPermissionAsync(mgmt, Permissions.Endpoints.Authorization));
+
+        var scopes = provider.GetRequiredService<IOpenIddictScopeManager>();
+        var usersRead = await scopes.FindByNameAsync("mgmt.users.read");
+        Assert.NotNull(usersRead);
+        Assert.Contains("panda-mgmt-api", await scopes.GetResourcesAsync(usersRead));
+    }
+
+    [Fact]
+    public async Task MgmtEnabledWithoutSecret_FailsClosed()
+    {
+        var options = ValidOptions();
+        options.Seed.Mgmt = new MgmtSeedOptions { Enabled = true };
+
+        using var provider = BuildProvider(options);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => DbSeeder.SeedAsync(provider));
+
+        Assert.Contains("Auth:Seed:Mgmt:ClientSecret", exception.Message);
+    }
+
+    [Fact]
     public async Task DemoEnabledWithoutWebSecret_ThrowsBeforeCreatingClients()
     {
         var options = ValidOptions();
