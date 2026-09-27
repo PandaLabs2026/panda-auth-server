@@ -186,6 +186,7 @@ public static class DbSeeder
                 {
                     Permissions.Endpoints.Token,
                     Permissions.Endpoints.Introspection,
+                    Permissions.Endpoints.Revocation,
                     Permissions.GrantTypes.ClientCredentials,
                     Permissions.Prefixes.Scope + Features.Management.MgmtApiAuthorization.ClientsReadScope,
                     Permissions.Prefixes.Scope + Features.Management.MgmtApiAuthorization.ClientsWriteScope,
