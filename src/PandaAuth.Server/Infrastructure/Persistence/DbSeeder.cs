@@ -22,6 +22,7 @@ public static class DbSeeder
         var roleManager = services.GetRequiredService<RoleService>();
         var userManager = services.GetRequiredService<UserService>();
         var applications = services.GetRequiredService<IOpenIddictApplicationManager>();
+        var scopes = services.GetRequiredService<IOpenIddictScopeManager>();
 
         if (!await roleManager.RoleExistsAsync(PandaUser.AdminRole))
         {
@@ -75,7 +76,23 @@ public static class DbSeeder
 
         if (options.Seed.Fleet.Enabled)
         {
+            await SeedFleetScopesAsync(scopes);
             await SeedFleetApplicationAsync(applications, options.Seed.Fleet);
+        }
+    }
+
+    private static async Task SeedFleetScopesAsync(IOpenIddictScopeManager scopes)
+    {
+        foreach (var name in new[] { "fleet.read", "fleet.allocate", "fleet.apply", "fleet.server.manage" })
+        {
+            if (await scopes.FindByNameAsync(name) is not null) continue;
+
+            await scopes.CreateAsync(new OpenIddictScopeDescriptor
+            {
+                Name = name,
+                DisplayName = $"PandaLabs Fleet {name[6..]}",
+                Resources = { "fleet-api" },
+            });
         }
     }
 
@@ -99,6 +116,7 @@ public static class DbSeeder
                 Permissions =
                 {
                     Permissions.Endpoints.Token,
+                    Permissions.Endpoints.Introspection,
                     Permissions.GrantTypes.ClientCredentials,
                     Permissions.Prefixes.Scope + "fleet.read",
                     Permissions.Prefixes.Scope + "fleet.allocate",
@@ -202,7 +220,6 @@ public static class DbSeeder
                 Permissions =
                 {
                     Permissions.Endpoints.Token,
-                    Permissions.Endpoints.Introspection,
                     Permissions.GrantTypes.ClientCredentials,
                     Permissions.Prefixes.Scope + "api",
                 },

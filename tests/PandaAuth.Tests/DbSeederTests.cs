@@ -119,6 +119,12 @@ public class DbSeederTests
         Assert.True(await applications.HasPermissionAsync(fleet, Permissions.Prefixes.Scope + "fleet.apply"));
         Assert.True(await applications.HasPermissionAsync(fleet, Permissions.Prefixes.Scope + "fleet.server.manage"));
         Assert.False(await applications.HasPermissionAsync(fleet, Permissions.Endpoints.Authorization));
+
+        var scopes = provider.GetRequiredService<IOpenIddictScopeManager>();
+        Assert.NotNull(await scopes.FindByNameAsync("fleet.read"));
+        Assert.NotNull(await scopes.FindByNameAsync("fleet.allocate"));
+        Assert.NotNull(await scopes.FindByNameAsync("fleet.apply"));
+        Assert.NotNull(await scopes.FindByNameAsync("fleet.server.manage"));
     }
 
     [Fact]
