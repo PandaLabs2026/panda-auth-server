@@ -156,7 +156,9 @@ public sealed class ManagementApiE2eTests
         await using var factory = new MgmtFactory(database.ConnectionString, mgmtEnabled: true);
         using var client = factory.CreateClient();
 
-        var writeToken = await GetTokenAsync(client, PandaAuthMgmtApi.ClientsWriteScope);
+        // CRUD 动线同时涉及 write（创建/删除）与 read（详情确认）端点：令牌一次携带两个 scope。
+        var writeToken = await GetTokenAsync(
+            client, $"{PandaAuthMgmtApi.ClientsWriteScope} {PandaAuthMgmtApi.ClientsReadScope}");
 
         using var createForm = JsonContent.Create(new
         {
