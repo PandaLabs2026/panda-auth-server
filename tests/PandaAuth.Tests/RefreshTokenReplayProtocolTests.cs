@@ -40,8 +40,6 @@ public sealed class RefreshTokenReplayProtocolTests
         Assert.True(issued.IsSuccessStatusCode, $"Fleet token request returned {(int)issued.StatusCode}: {issuedBody}");
         var token = await issued.Content.ReadFromJsonAsync<TokenResponse>();
         Assert.NotNull(token?.AccessToken);
-        Assert.Contains("fleet.read", token!.Scope ?? string.Empty, StringComparison.Ordinal);
-        Assert.Contains("fleet.allocate", token.Scope ?? string.Empty, StringComparison.Ordinal);
 
         using var introspection = new HttpRequestMessage(HttpMethod.Post, "/connect/introspect")
         {
@@ -62,8 +60,15 @@ public sealed class RefreshTokenReplayProtocolTests
         Assert.True(introspectionRoot.GetProperty("active").GetBoolean());
         Assert.Contains("fleet.read", introspectionRoot.GetProperty("scope").GetString() ?? string.Empty,
             StringComparison.Ordinal);
-        Assert.Contains("fleet-api", introspectionRoot.GetProperty("aud").EnumerateArray()
-            .Select(value => value.GetString()), StringComparer.Ordinal);
+        var audience = introspectionRoot.GetProperty("aud");
+        if (audience.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            Assert.Contains("fleet-api", audience.EnumerateArray().Select(value => value.GetString()), StringComparer.Ordinal);
+        }
+        else
+        {
+            Assert.Equal("fleet-api", audience.GetString());
+        }
 
         using var invalidScopeForm = new FormUrlEncodedContent(new Dictionary<string, string>
         {

@@ -28,6 +28,7 @@ public sealed class PostgresFactAttribute : FactAttribute
 public class UserStoreMigrationTests
 {
     private const string PreviousMigration = "20260919162138_AddVerificationCodes";
+    private const string UserStoreCutoverMigration = "20260920040410_SelfBuiltUserStore";
 
     [PostgresFact]
     public async Task TokenRevocation_RecordsSecurityEventWithoutTokenContent()
@@ -141,7 +142,7 @@ public class UserStoreMigrationTests
         await db.GetService<IMigrator>().MigrateAsync(PreviousMigration);
         var hash = new Argon2idPasswordHasher().Hash("Legacy!Password123");
         await SeedLegacyAsync(db, hash);
-        await db.Database.MigrateAsync();
+        await db.GetService<IMigrator>().MigrateAsync(UserStoreCutoverMigration);
 
         var user = await db.Users.SingleAsync();
         Assert.Equal("legacy-user", user.Id);
@@ -180,6 +181,11 @@ public class UserStoreMigrationTests
         // Observation tables remain readable, but accidental old binaries must fail closed.
         await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlRawAsync(
             """UPDATE "AspNetUsers" SET "Nickname" = 'must fail'"""));
+
+        await db.Database.MigrateAsync();
+        Assert.False(await db.Database.SqlQueryRaw<bool>("""
+            SELECT to_regclass('"AspNetUsers"') IS NOT NULL AS "Value"
+            """).SingleAsync());
     }
 
     [PostgresFact]
