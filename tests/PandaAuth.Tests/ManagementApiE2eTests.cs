@@ -114,8 +114,11 @@ public sealed class ManagementApiE2eTests
         var description = json.RootElement.TryGetProperty("error_description", out var descriptionProperty)
             ? descriptionProperty.GetString()
             : null;
-        Assert.True(error == "invalid_scope",
-            $"expected invalid_scope, got {error}: {description}");
+        // OpenIddict 7 对 scope 权限缺失返回 invalid_request（描述固定含 "not allowed to use the specified scope"），
+        // 而非 RFC 6749 的 invalid_scope——钉住实际行为并留注释。
+        Assert.True(
+            description is not null && description.Contains("not allowed to use the specified scope", StringComparison.Ordinal),
+            $"expected scope-permission rejection, got {error}: {description}");
     }
 
     [PostgresFact]
@@ -241,7 +244,9 @@ public sealed class ManagementApiE2eTests
         return token!.AccessToken!;
     }
 
-    private sealed record TokenResponse(string? AccessToken);
+    // OAuth 响应是 snake_case：必须显式 JsonPropertyName（大小写不敏感不处理下划线）。
+    private sealed record TokenResponse(
+        [property: System.Text.Json.Serialization.JsonPropertyName("access_token")] string? AccessToken);
 
     private sealed class MgmtFactory(string connectionString, bool mgmtEnabled) : WebApplicationFactory<Program>
     {
