@@ -52,5 +52,6 @@ dotnet test tests/PandaAuth.Tests/PandaAuth.Tests.csproj
 产品级路线图、发行门禁和社区/商业边界在正式公开发行前仍由维护者治理；本 README 只描述可独立复现的 Server 构建与运行边界。
 
 - [安全政策](SECURITY.md)：选定私密报告渠道，启用状态未核验；不公开提交漏洞细节。
+- [调试材料卫生](docs/debug-material-hygiene.md)：HAR/调试输出会携带会话 Cookie 与令牌，报告问题前先脱敏；含服务端日志默认行为说明。
 - [贡献指南](CONTRIBUTING.md)：本仓检查与统一贡献规则。
 - [MIT License](LICENSE)：适用于自有代码和文档，具体范围见[许可说明](LICENSING.md)；第三方许可仍适用，品牌图片除外。
