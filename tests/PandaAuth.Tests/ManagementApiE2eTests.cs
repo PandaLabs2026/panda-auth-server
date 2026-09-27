@@ -207,6 +207,30 @@ public sealed class ManagementApiE2eTests
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    [PostgresFact]
+    public async Task Debug_TokenClaims_ViaIntrospection()
+    {
+        // 临时诊断：确认令牌载荷中的 aud/scope claim 形态（定位策略 403 的真实原因后移除）。
+        await using var database = await TestDatabase.CreateAsync();
+        await database.SeedAsync();
+        await using var factory = new MgmtFactory(database.ConnectionString, mgmtEnabled: true);
+        using var client = factory.CreateClient();
+
+        var token = await GetTokenAsync(client, PandaAuthMgmtApi.UsersReadScope);
+        using var introspection = new HttpRequestMessage(HttpMethod.Post, "/connect/introspect")
+        {
+            Content = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["token"] = token,
+            }),
+        };
+        introspection.Headers.Authorization = new AuthenticationHeaderValue(
+            "Basic", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"mgmt-api:{MgmtSecret}")));
+        var introspected = await client.SendAsync(introspection);
+        var body = await introspected.Content.ReadAsStringAsync();
+        Assert.True(false, $"introspection {(int)introspected.StatusCode}: {body}");
+    }
+
     private static async Task<string> GetTokenAsync(HttpClient client, string? scope)
     {
         var form = new Dictionary<string, string>
