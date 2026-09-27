@@ -228,7 +228,7 @@ public sealed class ManagementApiE2eTests
             "Basic", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"mgmt-api:{MgmtSecret}")));
         var introspected = await client.SendAsync(introspection);
         var body = await introspected.Content.ReadAsStringAsync();
-        Assert.Fail($"introspection {(int)introspected.StatusCode}: {body}");
+        Assert.Fail($"introspection {(int)introspected.StatusCode}: {System.Text.RegularExpressions.Regex.Replace(body, "eyJ[A-Za-z0-9_-]{40,}", "JWT...")}");
     }
 
     private static async Task<string> GetTokenAsync(HttpClient client, string? scope)
@@ -284,6 +284,11 @@ public sealed class ManagementApiE2eTests
             builder.UseSetting("Auth:Mgmt:Enabled", mgmtEnabled ? "true" : "false");
             builder.UseSetting("Logging:LogLevel:Default", "Warning");
             builder.UseSetting("Logging:LogLevel:Microsoft.AspNetCore", "Warning");
+            if (mgmtEnabled)
+            {
+                // 诊断期：OpenIddict 服务端事件落 Debug，定位 scope/audience 签发路径。
+                builder.UseSetting("Logging:LogLevel:OpenIddict", "Debug");
+            }
         }
     }
 
