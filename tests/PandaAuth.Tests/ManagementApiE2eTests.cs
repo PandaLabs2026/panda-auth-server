@@ -106,9 +106,16 @@ public sealed class ManagementApiE2eTests
             ["scope"] = PandaAuthMgmtApi.UsersReadScope,
         });
         var response = await client.PostAsync("/connect/token", form);
+        var body = await response.Content.ReadAsStringAsync();
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Contains("invalid_scope", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        using var json = JsonDocument.Parse(body);
+        var error = json.RootElement.GetProperty("error").GetString();
+        var description = json.RootElement.TryGetProperty("error_description", out var descriptionProperty)
+            ? descriptionProperty.GetString()
+            : null;
+        Assert.True(error == "invalid_scope",
+            $"expected invalid_scope, got {error}: {description}");
     }
 
     [PostgresFact]
@@ -214,7 +221,7 @@ public sealed class ManagementApiE2eTests
         var body = await issued.Content.ReadAsStringAsync();
         Assert.True(issued.IsSuccessStatusCode, $"mgmt token request returned {(int)issued.StatusCode}: {body}");
         var token = await issued.Content.ReadFromJsonAsync<TokenResponse>();
-        Assert.False(string.IsNullOrWhiteSpace(token?.AccessToken));
+        Assert.True(!string.IsNullOrWhiteSpace(token?.AccessToken), $"mgmt token response 200 without access_token: {body}");
         return token!.AccessToken!;
     }
 
