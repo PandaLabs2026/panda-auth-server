@@ -67,8 +67,34 @@ public sealed class ResendEmailSender(
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct);
-            logger.LogError("Resend API 失败 status={Status} body={Body}", (int)response.StatusCode, body);
+            logger.LogError("Resend API 失败 status={Status} detail={Detail}", (int)response.StatusCode, SummarizeErrorBody(body));
             throw new InvalidOperationException($"Resend API 返回 {(int)response.StatusCode}");
         }
+    }
+
+    // 错误回包可能回显提交内容（收件地址、主题等）：只解析 name/message 并截断，不落完整 body。
+    private static string SummarizeErrorBody(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                var root = doc.RootElement;
+                var name = root.TryGetProperty("name", out var nameProp) ? nameProp.GetString() : null;
+                var message = root.TryGetProperty("message", out var messageProp) ? messageProp.GetString() : null;
+                var detail = string.IsNullOrWhiteSpace(message) ? name : $"{name}: {message}";
+                if (!string.IsNullOrWhiteSpace(detail))
+                {
+                    return detail.Length <= 200 ? detail : detail[..200];
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // 非 JSON 回包按原文截断处理。
+        }
+
+        return body.Length <= 200 ? body : body[..200];
     }
 }
