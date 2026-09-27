@@ -24,10 +24,25 @@ internal static class MgmtApiAuthorization
     public const string ClientsWriteScope = PandaAuthMgmtApi.ClientsWriteScope;
     public const string UsersReadScope = PandaAuthMgmtApi.UsersReadScope;
 
-    /// <summary>audience 与 scope 缺一不可：只带 scope 的令牌可能是为其他资源签发的。</summary>
+    /// <summary>audience 与 scope 缺一不可；两者都兼容两种载体（见下）。</summary>
     public static bool HasAudienceAndScope(ClaimsPrincipal principal, string scope)
+        => HasAudience(principal) && HasScope(principal, scope);
+
+    /// <summary>
+    /// audience 双载体：OpenIddict 私有 <c>oi_aud</c>（验证管线富化路径）或标准 <c>aud</c> claim
+    /// （自包含 JWT/JWE 直接解出的路径）。只读其一会在另一种令牌路径上漏判。
+    /// </summary>
+    private static bool HasAudience(ClaimsPrincipal principal)
         => principal.GetAudiences().Contains(Audience, StringComparer.Ordinal)
-           && principal.HasScope(scope);
+           || principal.FindAll(OpenIddictConstants.Claims.Audience)
+               .Any(claim => string.Equals(claim.Value, Audience, StringComparison.Ordinal));
+
+    /// <summary>scope 双载体：私有 <c>oi_scp</c>（<see cref="OpenIddict.Abstractions.PrincipalExtensions.HasScope"/>）或标准 scope claim（单值空格分隔或多 claim）。</summary>
+    private static bool HasScope(ClaimsPrincipal principal, string scope)
+        => principal.HasScope(scope)
+           || principal.FindAll(OpenIddictConstants.Claims.Scope)
+               .Any(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                   .Contains(scope, StringComparer.Ordinal));
 
     public static Action<AuthorizationPolicyBuilder> RequireScope(string scope)
     {
