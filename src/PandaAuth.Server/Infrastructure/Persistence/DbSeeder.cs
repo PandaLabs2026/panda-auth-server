@@ -65,13 +65,13 @@ public static class DbSeeder
 
         if (options.Seed.Me.Enabled)
         {
-            await SeedFirstPartyWebApplicationAsync(applications, "me-web", "PandaAuth 账户中心", "Auth:Seed:Me", options.Seed.Me);
+            await SeedFirstPartyWebApplicationAsync(applications, "me-web", "PandaAuth 账户中心", "Auth:Seed:Me", options.Seed.Me, options.TenantRouting, "me");
         }
 
         if (options.Seed.AdminWeb.Enabled)
         {
             await SeedFirstPartyWebApplicationAsync(
-                applications, "admin-web", "PandaAuth 管理后台", "Auth:Seed:AdminWeb", options.Seed.AdminWeb);
+                applications, "admin-web", "PandaAuth 管理后台", "Auth:Seed:AdminWeb", options.Seed.AdminWeb, options.TenantRouting, "admin");
         }
 
         if (options.Seed.Fleet.Enabled)
@@ -305,18 +305,22 @@ public static class DbSeeder
         string clientId,
         string displayName,
         string configPrefix,
-        FirstPartyWebSeedOptions seed)
+        FirstPartyWebSeedOptions seed,
+        TenantRoutingOptions? tenantRouting = null,
+        string? callbackArea = null)
     {
+        var redirectUris = ExpandTenantRedirectUris(seed.RedirectUris, tenantRouting, callbackArea, "callback/login/pandaauth");
+        var postLogoutRedirectUris = ExpandTenantRedirectUris(seed.PostLogoutRedirectUris, tenantRouting, callbackArea, "");
         var existing = await applications.FindByClientIdAsync(clientId);
         if (existing is null)
         {
             // 回调白名单经 {configPrefix}:RedirectUris / PostLogoutRedirectUris 配置注入，缺失即失败（第一方必备客户端）。
-            if (seed.RedirectUris.Length == 0)
+            if (redirectUris.Length == 0)
             {
                 throw new InvalidOperationException($"缺少 {configPrefix}:RedirectUris 配置（{clientId} 为第一方必备客户端）。");
             }
 
-            if (seed.PostLogoutRedirectUris.Length == 0)
+            if (postLogoutRedirectUris.Length == 0)
             {
                 throw new InvalidOperationException(
                     $"缺少 {configPrefix}:PostLogoutRedirectUris 配置（{clientId} 为第一方必备客户端）。");
@@ -348,12 +352,12 @@ public static class DbSeeder
                 },
             };
 
-            foreach (var uri in seed.RedirectUris)
+            foreach (var uri in redirectUris)
             {
                 descriptor.RedirectUris.Add(new Uri(uri, UriKind.Absolute));
             }
 
-            foreach (var uri in seed.PostLogoutRedirectUris)
+            foreach (var uri in postLogoutRedirectUris)
             {
                 descriptor.PostLogoutRedirectUris.Add(new Uri(uri, UriKind.Absolute));
             }
@@ -365,8 +369,8 @@ public static class DbSeeder
         // 存量订正：白名单替换与密钥对账各自独立判断，两者都不需要做时才提前返回——
         // 旧实现见任一白名单数组为空就 return，会连带跳过密钥对账。
         // 全部经 ApplicationManager API 完成，不直接写 EF。
-        var replaceRedirectUris = seed.RedirectUris.Length > 0;
-        var replacePostLogoutRedirectUris = seed.PostLogoutRedirectUris.Length > 0;
+        var replaceRedirectUris = redirectUris.Length > 0;
+        var replacePostLogoutRedirectUris = postLogoutRedirectUris.Length > 0;
 
         // 密钥对账：密钥唯一事实源是服务器 env 文件（{configPrefix}:ClientSecret）。
         // 幂等依据：ValidateClientSecretAsync 命中即说明库内哈希已对应配置密钥，此时不改写；
@@ -390,7 +394,7 @@ public static class DbSeeder
             if (replaceRedirectUris)
             {
                 updated.RedirectUris.Clear();
-                foreach (var uri in seed.RedirectUris)
+                foreach (var uri in redirectUris)
                 {
                     updated.RedirectUris.Add(new Uri(uri, UriKind.Absolute));
                 }
@@ -399,7 +403,7 @@ public static class DbSeeder
             if (replacePostLogoutRedirectUris)
             {
                 updated.PostLogoutRedirectUris.Clear();
-                foreach (var uri in seed.PostLogoutRedirectUris)
+                foreach (var uri in postLogoutRedirectUris)
                 {
                     updated.PostLogoutRedirectUris.Add(new Uri(uri, UriKind.Absolute));
                 }
@@ -421,5 +425,27 @@ public static class DbSeeder
         {
             await applications.UpdateAsync(existing);
         }
+    }
+
+    private static string[] ExpandTenantRedirectUris(
+        string[] configuredUris,
+        TenantRoutingOptions? tenantRouting,
+        string? callbackArea,
+        string suffix)
+    {
+        if (tenantRouting is null || callbackArea is null)
+            return configuredUris;
+
+        var tenantUris = tenantRouting.Bindings
+            .Where(binding => binding.Product == TenantProduct.PandaAuth && binding.State == TenantRouteState.Ready)
+            .Select(binding =>
+            {
+                var host = TenantCanonicalHost.For(TenantId.Parse(binding.TenantId), TenantProduct.PandaAuth);
+                return suffix.Length == 0
+                    ? $"https://{host}/{callbackArea}/"
+                    : $"https://{host}/{callbackArea}/{suffix}";
+            });
+
+        return configuredUris.Concat(tenantUris).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 }
