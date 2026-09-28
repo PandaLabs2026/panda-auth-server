@@ -23,6 +23,9 @@ public sealed class AuthOptions
     /// <summary>公开 Management API（/mgmt/v1/*）总开关；默认关闭，未启用时管理控制器不进路由模型。</summary>
     public MgmtOptions Mgmt { get; set; } = new();
 
+    /// <summary>泄露密码检测（HIBP k-anonymity）；默认关闭——自托管部署可能没有稳定外网出口。</summary>
+    public HibpOptions Hibp { get; set; } = new();
+
     /// <summary>DataProtection 密钥持久化目录；为空时使用临时密钥（仅限开发环境）。</summary>
     public string DataProtectionKeyPath { get; set; } = string.Empty;
 }
@@ -162,6 +165,26 @@ public sealed class MgmtRateLimitOptions
 
     /// <summary>密钥端点（创建/重置密钥）的额外按 IP 严格许可（防 clientId/密钥枚举）。</summary>
     public int SecretPerMinute { get; set; } = 6;
+}
+
+/// <summary>
+/// 泄露密码检测（HIBP k-anonymity）。设计决策（2026-09-28，见 gap-analysis 登记）：
+/// 设置新密码路径（自助改密/邮箱重置）命中泄露库即拒绝；登录路径检测下一迭代接入；
+/// 服务故障默认失败开放（不因外呼故障阻断用户），可配 FailClosed 收紧。
+/// </summary>
+public sealed class HibpOptions
+{
+    /// <summary>启用泄露密码检测；默认关闭。</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>调用 HIBP 失败（网络/超时/非 200）时拒绝操作（失败关闭）；默认 false = 失败开放。</summary>
+    public bool FailClosed { get; set; }
+
+    /// <summary>HIBP range API 基址；默认官方端点，可指向自建代理以规避外网不可达。</summary>
+    public string ApiBase { get; set; } = "https://api.pwnedpasswords.com";
+
+    /// <summary>外呼超时毫秒；超时按失败策略处理。</summary>
+    public int TimeoutMs { get; set; } = 2000;
 }
 
 public sealed class DemoSeedOptions

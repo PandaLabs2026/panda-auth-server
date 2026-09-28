@@ -22,6 +22,7 @@ public sealed class CredentialController(
     ITokenRevoker tokenRevoker,
     SecurityEventWriter securityEvents,
     SessionSecurityService sessionSecurity,
+    IPwnedPasswordChecker pwnedPasswords,
     ILogger<CredentialController> logger) : Controller
 {
     /// <summary>忘记密码：存在与否都走同一签发路径、回同一句话。</summary>
@@ -88,6 +89,15 @@ public sealed class CredentialController(
         if (!ipLease.IsAcquired)
         {
             return ViewWithError("尝试过于频繁，请稍后再试。");
+        }
+
+        // 泄露密码检测在令牌消费之前：命中即拒绝且不烧掉一次性令牌。
+        var pwned = await pwnedPasswords.CheckAsync(model.NewPassword, cancellationToken);
+        if (pwned.Rejected)
+        {
+            return ViewWithError(pwned.Outcome == PwnedPasswordOutcome.Breached
+                ? "该密码出现在已知泄露库中，请更换新密码。"
+                : "暂时无法核验密码安全性，请稍后再试。");
         }
 
         var outcome = await verification.ConsumePasswordResetAsync(
@@ -250,6 +260,17 @@ public sealed class CredentialController(
         // every mutation must use its reloaded entity, not the pre-check instance.
         user = check.User!;
         if (!user.EmailConfirmed) return ViewWithError("请先确认当前邮箱。");
+
+        // 泄露密码检测：通过当前密码核验后、写入前执行。
+        var pwned = await pwnedPasswords.CheckAsync(model.NewPassword, cancellationToken);
+        if (pwned.Rejected)
+        {
+            ModelState.AddModelError(string.Empty, pwned.Outcome == PwnedPasswordOutcome.Breached
+                ? "该密码出现在已知泄露库中，请更换新密码。"
+                : "暂时无法核验密码安全性，请稍后再试。");
+            return View(model);
+        }
+
         var (changed, error) = await ReplacePasswordAsync(user, model.NewPassword);
         if (!changed)
         {

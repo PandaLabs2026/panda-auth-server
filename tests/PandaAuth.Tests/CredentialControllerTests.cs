@@ -63,6 +63,9 @@ public class CredentialControllerTests
         services.AddSingleton<IEmailSender, StubEmailSender>();
         var revoker = new StubTokenRevoker();
         services.AddSingleton<ITokenRevoker>(revoker);
+        var pwned = new StubPwnedChecker();
+        services.AddSingleton(pwned);
+        services.AddSingleton<IPwnedPasswordChecker>(pwned);
         services.AddScoped<OtpService>();
         services.AddScoped<AccountVerificationService>();
         services.AddScoped<SecurityEventWriter>();
@@ -79,6 +82,7 @@ public class CredentialControllerTests
             provider.GetRequiredService<ITokenRevoker>(),
             provider.GetRequiredService<SecurityEventWriter>(),
             provider.GetRequiredService<SessionSecurityService>(),
+            pwned,
             provider.GetRequiredService<ILoggerFactory>().CreateLogger<CredentialController>())
         {
             ControllerContext = new ControllerContext(new ActionContext(
@@ -332,6 +336,73 @@ public class CredentialControllerTests
     }
 
     [Fact]
+    public async Task ChangePassword_BreachedPassword_IsRejectedWithoutChange()
+    {
+        var (controller, provider, _, revoker, users) = await CreateAsync();
+        provider.GetRequiredService<StubPwnedChecker>().Outcome = PwnedPasswordOutcome.Breached;
+        var user = await SeedUserAsync(users, "breach-change@example.com");
+        controller.HttpContext.User = Principal(user.Id);
+
+        var result = await controller.ChangePassword(new ChangePasswordViewModel
+        {
+            CurrentPassword = "Passw0rd!1234",
+            NewPassword = "NewPass!2026x",
+        }, CancellationToken.None);
+
+        Assert.IsType<ViewResult>(result);
+        Assert.Contains("泄露库", controller.ModelState[string.Empty]!.Errors.Single().ErrorMessage);
+        Assert.True(await users.CheckPasswordAsync((await users.FindByIdAsync(user.Id))!, "Passw0rd!1234"));
+        Assert.Empty(revoker.RevokedUsers);
+    }
+
+    [Fact]
+    public async Task ResetPassword_BreachedPassword_IsRejected_TokenNotConsumed()
+    {
+        var (controller, provider, sender, revoker, users) = await CreateAsync();
+        var checker = provider.GetRequiredService<StubPwnedChecker>();
+        checker.Outcome = PwnedPasswordOutcome.Breached;
+        var user = await SeedUserAsync(users, "breach-reset@example.com");
+        await controller.ForgotPassword(new ForgotPasswordViewModel { Email = "breach-reset@example.com" }, CancellationToken.None);
+        var token = sender.TakeToken();
+
+        var result = await controller.ResetPassword(
+            new ResetPasswordViewModel { Email = "breach-reset@example.com", Token = token, NewPassword = "NewPass!2026x" },
+            CancellationToken.None);
+
+        Assert.IsType<ViewResult>(result);
+        Assert.Contains("泄露库", controller.ModelState[string.Empty]!.Errors.Single().ErrorMessage);
+        Assert.True(await users.CheckPasswordAsync((await users.FindByIdAsync(user.Id))!, "Passw0rd!1234"));
+
+        // 令牌未被烧掉：检测恢复为干净后，同一令牌完成重置（新请求 = 清空前一次的 ModelState）。
+        controller.ModelState.Clear();
+        checker.Outcome = PwnedPasswordOutcome.Clean;
+        var retry = Assert.IsType<RedirectToActionResult>(await controller.ResetPassword(
+            new ResetPasswordViewModel { Email = "breach-reset@example.com", Token = token, NewPassword = "NewPass!2026x" },
+            CancellationToken.None));
+        Assert.Equal("Login", retry.ActionName);
+        Assert.True(await users.CheckPasswordAsync((await users.FindByIdAsync(user.Id))!, "NewPass!2026x"));
+    }
+
+    [Fact]
+    public async Task ResetPassword_ServiceUnavailable_FailOpen_AllowsReset()
+    {
+        var (controller, provider, sender, _, users) = await CreateAsync();
+        provider.GetRequiredService<StubPwnedChecker>().Outcome = PwnedPasswordOutcome.ServiceUnavailable;
+
+        var user = await SeedUserAsync(users, "failopen@example.com");
+        await controller.ForgotPassword(new ForgotPasswordViewModel { Email = "failopen@example.com" }, CancellationToken.None);
+        var token = sender.TakeToken();
+
+        var result = await controller.ResetPassword(
+            new ResetPasswordViewModel { Email = "failopen@example.com", Token = token, NewPassword = "NewPass!2026x" },
+            CancellationToken.None);
+
+        // 默认失败开放：检测不可用不阻断重置。
+        Assert.IsType<RedirectToActionResult>(result);
+        Assert.True(await users.CheckPasswordAsync((await users.FindByIdAsync(user.Id))!, "NewPass!2026x"));
+    }
+
+    [Fact]
     public async Task ResetPassword_WrongCode_Rejected_NothingChanges()
     {
         var (controller, _, sender, revoker, users) = await CreateAsync();
@@ -358,5 +429,19 @@ internal sealed class NullTempDataProvider : ITempDataProvider
 
     public void SaveTempData(HttpContext context, IDictionary<string, object> values)
     {
+    }
+}
+
+internal sealed class StubPwnedChecker : IPwnedPasswordChecker
+{
+    public PwnedPasswordOutcome Outcome { get; set; } = PwnedPasswordOutcome.Clean;
+
+    public int Calls;
+
+    public Task<PwnedPasswordDecision> CheckAsync(string? password, CancellationToken cancellationToken = default)
+    {
+        Interlocked.Increment(ref Calls);
+        var rejected = Outcome is PwnedPasswordOutcome.Breached;
+        return Task.FromResult(new PwnedPasswordDecision(rejected, Outcome));
     }
 }

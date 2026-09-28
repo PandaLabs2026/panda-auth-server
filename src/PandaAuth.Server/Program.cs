@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
 using PandaAuth.Server.Configuration;
@@ -199,6 +200,9 @@ builder.Services.AddScoped<MfaService>();
 builder.Services.AddSingleton<LoginRateLimiter>();
 // Management API 限流与登录限流共用 FixedWindowLimiterCache 机械；桶配置见 Auth:Mgmt:RateLimit。
 builder.Services.AddSingleton<ManagementRateLimiter>();
+// 泄露密码检测（HIBP k-anonymity，Auth:Hibp 默认关闭）：只外呼 SHA1 前缀；超时/故障按失败策略处理。
+builder.Services.AddHttpClient<IPwnedPasswordChecker, PwnedPasswordChecker>((sp, client) =>
+    client.Timeout = TimeSpan.FromMilliseconds(sp.GetRequiredService<IOptions<AuthOptions>>().Value.Hibp.TimeoutMs));
 builder.Services.AddScoped<LoginAuditWriter>();
 builder.Services.AddScoped<AdminAuditWriter>();
 builder.Services.AddScoped<SecurityEventWriter>();
