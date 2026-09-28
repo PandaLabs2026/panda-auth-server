@@ -61,6 +61,22 @@ public class AuthorizationTokenClaimsTests
     }
 
     [Fact]
+    public async Task Principal_Carries_verified_tenant_claims_only_from_request_context()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var accessor = (TenantContextAccessor)provider.GetRequiredService<ITenantContextAccessor>();
+        accessor.Current = new TenantContext(TenantId.Parse("t0042"), TenantProduct.PandaAuth,
+            "t0042.auth.pandalabs.cn", 3, TenantRouteState.Ready);
+        var controller = TestUserStoreHost.CreateAuthorizationController(provider);
+        var user = await SeedUserWithRolesAsync(provider, "user");
+
+        var principal = await controller.CreatePrincipalAsync(user, [Scopes.OpenId]);
+
+        Assert.Equal("t0042", principal.GetClaim(PandaAuthClaims.TenantId));
+        Assert.Equal("t0042.auth.pandalabs.cn", principal.GetClaim(PandaAuthClaims.TenantHost));
+    }
+
+    [Fact]
     public async Task Principal_OnlyIncludesCustomClaimsWhenTheirScopeIsRequested()
     {
         using var provider = TestUserStoreHost.Create();

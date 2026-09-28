@@ -43,6 +43,11 @@ builder.Services.AddControllersWithViews(o =>
 
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
 var authOptions = builder.Configuration.GetSection(AuthOptions.SectionName).Get<AuthOptions>() ?? new AuthOptions();
+builder.Services.AddSingleton(authOptions.TenantRouting);
+builder.Services.AddSingleton<ITenantHostResolver, TenantHostResolver>();
+builder.Services.AddSingleton<TenantRedirectPolicy>();
+builder.Services.AddScoped<TenantContextAccessor>();
+builder.Services.AddScoped<ITenantContextAccessor>(services => services.GetRequiredService<TenantContextAccessor>());
 // 签名密钥周期误配会让旧 Access Token 在旧密钥退役后静默验签失败，必须在读取密钥表之前失败关闭。
 authOptions.Keys.Validate();
 authOptions.Mfa.Validate(builder.Environment.IsProduction());
@@ -261,6 +266,8 @@ app.UseForwardedHeaders(new ForwardedHeadersOptions
     ForwardLimit = 1,
     KnownProxies = { IPAddress.Loopback, IPAddress.IPv6Loopback },
 });
+
+app.UseMiddleware<TenantHostMiddleware>();
 
 app.UseMiddleware<SecurityHeadersMiddleware>();
 
