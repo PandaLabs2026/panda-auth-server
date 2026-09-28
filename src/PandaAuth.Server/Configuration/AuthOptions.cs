@@ -23,6 +23,9 @@ public sealed class AuthOptions
     /// <summary>公开 Management API（/mgmt/v1/*）总开关；默认关闭，未启用时管理控制器不进路由模型。</summary>
     public MgmtOptions Mgmt { get; set; } = new();
 
+    /// <summary>租户规范主机与 Fleet route revision；未登记主机默认拒绝。</summary>
+    public TenantRoutingOptions TenantRouting { get; set; } = new();
+
     /// <summary>泄露密码检测（HIBP k-anonymity）；默认关闭——自托管部署可能没有稳定外网出口。</summary>
     public HibpOptions Hibp { get; set; } = new();
 

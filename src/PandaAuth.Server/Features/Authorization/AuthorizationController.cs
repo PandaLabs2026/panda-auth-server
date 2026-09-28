@@ -20,7 +20,9 @@ public sealed class AuthorizationController(
     UserService userManager,
     LoginSessionService signInManager,
     ClaimsPolicyService claimsPolicy,
-    IOpenIddictScopeManager scopeManager) : Controller
+    IOpenIddictScopeManager scopeManager,
+    ITenantContextAccessor tenantContextAccessor,
+    TenantRedirectPolicy tenantRedirectPolicy) : Controller
 {
     [HttpGet("authorize")]
     [Authorize]
@@ -28,6 +30,17 @@ public sealed class AuthorizationController(
     {
         var request = HttpContext.GetOpenIddictServerRequest()
             ?? throw new InvalidOperationException("无法解析 OIDC 授权请求。");
+
+        if (tenantContextAccessor.Current is { } tenant
+            && (!Uri.TryCreate(request.RedirectUri, UriKind.Absolute, out var redirectUri)
+                || !tenantRedirectPolicy.IsAllowed(tenant, redirectUri)))
+        {
+            return Forbid(new AuthenticationProperties(new Dictionary<string, string?>
+            {
+                [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.InvalidRequest,
+                [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = "redirect_uri 必须属于当前租户。",
+            }), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+        }
 
         var authResult = await HttpContext.AuthenticateAsync(LoginSessionService.Scheme);
         if (authResult is not { Succeeded: true })
@@ -174,6 +187,12 @@ public sealed class AuthorizationController(
 
         identity.AddClaim(new Claim(Claims.Subject, user.Id));
         identity.AddClaim(new Claim(Claims.Name, user.UserName ?? user.Id));
+
+        if (tenantContextAccessor.Current is { } tenant)
+        {
+            identity.AddClaim(new Claim(PandaAuthClaims.TenantId, tenant.TenantId.Value));
+            identity.AddClaim(new Claim(PandaAuthClaims.TenantHost, tenant.CanonicalHost));
+        }
 
         // MFA 事实只从已验签的 IDP Cookie 或 OpenIddict 票据继承，绝不读取客户端参数。
         if (mfaSource?.FindFirst(MfaClaimTypes.Method)?.Value is { Length: > 0 } method &&

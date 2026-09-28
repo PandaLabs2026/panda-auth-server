@@ -33,6 +33,8 @@ internal static class TestUserStoreHost
         services.AddDataProtection().UseEphemeralDataProtectionProvider();
         services.AddHttpContextAccessor();
         services.AddSingleton(Options.Create(options ?? new AuthOptions()));
+        services.AddScoped<TenantContextAccessor>();
+        services.AddScoped<ITenantContextAccessor>(serviceProvider => serviceProvider.GetRequiredService<TenantContextAccessor>());
         var databaseName = Guid.NewGuid().ToString("N");
         services.AddDbContext<PandaAuthDbContext>(builder => builder
             .UseInMemoryDatabase(databaseName)
@@ -82,7 +84,9 @@ internal static class TestUserStoreHost
             provider.GetRequiredService<UserService>(),
             provider.GetRequiredService<LoginSessionService>(),
             provider.GetRequiredService<ClaimsPolicyService>(),
-            provider.GetRequiredService<IOpenIddictScopeManager>())
+            provider.GetRequiredService<IOpenIddictScopeManager>(),
+            provider.GetRequiredService<ITenantContextAccessor>(),
+            new TenantRedirectPolicy())
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { RequestServices = provider } },
         };

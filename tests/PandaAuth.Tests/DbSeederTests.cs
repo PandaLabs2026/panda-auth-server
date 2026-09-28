@@ -8,6 +8,7 @@ using OpenIddict.EntityFrameworkCore.Models;
 using PandaAuth.Server.Configuration;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Persistence;
+using PandaAuth.Shared;
 using Xunit;
 using static OpenIddict.Abstractions.OpenIddictConstants;
 
@@ -527,6 +528,39 @@ public class DbSeederTests
         Assert.Equal(ClientTypes.Confidential, await applications.GetClientTypeAsync(adminWeb));
         // 门禁依赖 roles scope：admin-web 注册必须带该 scope 权限。
         Assert.True(await applications.HasPermissionAsync(adminWeb, Permissions.Scopes.Roles));
+    }
+
+    [Fact]
+    public async Task ReadyPandaAuthTenant_AddsTenantHostCallbacksToFirstPartyWhitelists()
+    {
+        var options = ValidOptions();
+        options.TenantRouting.Bindings =
+        [
+            new TenantRouteBindingOptions
+            {
+                TenantId = "t0042",
+                Product = TenantProduct.PandaAuth,
+                State = TenantRouteState.Ready,
+            },
+        ];
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var meWeb = await applications.FindByClientIdAsync("me-web");
+        var adminWeb = await applications.FindByClientIdAsync("admin-web");
+        Assert.NotNull(meWeb);
+        Assert.NotNull(adminWeb);
+
+        Assert.Contains("https://t0042.auth.pandalabs.cn/me/callback/login/pandaauth",
+            await applications.GetRedirectUrisAsync(meWeb));
+        Assert.Contains("https://t0042.auth.pandalabs.cn/me/",
+            await applications.GetPostLogoutRedirectUrisAsync(meWeb));
+        Assert.Contains("https://t0042.auth.pandalabs.cn/admin/callback/login/pandaauth",
+            await applications.GetRedirectUrisAsync(adminWeb));
+        Assert.Contains("https://t0042.auth.pandalabs.cn/admin/",
+            await applications.GetPostLogoutRedirectUrisAsync(adminWeb));
     }
 
     [Fact]
