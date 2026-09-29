@@ -139,6 +139,16 @@ public class LoginMfaChallengeTests
         Assert.Equal(MfaClaimTypes.Totp, ticket.Principal!.FindFirst(MfaClaimTypes.Method)!.Value);
         Assert.NotNull(ticket.Principal.FindFirst(MfaClaimTypes.VerifiedAt));
 
+        // 令牌链闭环：挑战诞生的会话作为 mfaSource 铸出的 OIDC 主体必须携带 amr/panda_mfa_at
+        // （AuthorizationController 发码走同一 CreatePrincipalAsync 路径）。
+        var authorization = TestUserStoreHost.CreateAuthorizationController(provider);
+        var tokenPrincipal = await authorization.CreatePrincipalAsync(
+            (await provider.GetRequiredService<UserService>().FindByIdAsync(user.Id))!,
+            [OpenIddict.Abstractions.OpenIddictConstants.Scopes.OpenId],
+            ticket.Principal!);
+        Assert.Equal(MfaClaimTypes.Totp, tokenPrincipal.FindFirst(MfaClaimTypes.Method)!.Value);
+        Assert.NotNull(tokenPrincipal.FindFirst(MfaClaimTypes.VerifiedAt));
+
         var db = provider.GetRequiredService<PandaAuthDbContext>();
         Assert.Contains(db.SecurityEvents, logEvent =>
             logEvent.EventType == "login.mfa_challenge_succeeded" &&
