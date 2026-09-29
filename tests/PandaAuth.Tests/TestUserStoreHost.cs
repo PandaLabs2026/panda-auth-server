@@ -12,6 +12,7 @@ using PandaAuth.Server.Features.Tokens;
 using PandaAuth.Server.Infrastructure.Persistence;
 using OpenIddict.Abstractions;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Server.Infrastructure.Security.Mfa;
 
 namespace PandaAuth.Tests;
 
@@ -52,6 +53,7 @@ internal static class TestUserStoreHost
         services.AddSingleton<ITokenRevoker, NoopTokenRevoker>();
         services.AddScoped<SessionSecurityService>();
         services.AddSingleton<DummyPasswordHash>();
+        services.AddScoped<LoginMfaChallengeService>();
 
         if (passwordHasher is not null)
         {
@@ -67,16 +69,27 @@ internal static class TestUserStoreHost
     /// 直接命中 !ModelState.IsValid 而提前返回（真实 MVC 每条请求新建控制器）。
     /// </summary>
     internal static AccountController CreateAccountController(
-        ServiceProvider provider, IPasswordHasher passwordHasher)
+        ServiceProvider provider, IPasswordHasher passwordHasher,
+        PandaAuth.Server.Infrastructure.Security.Mfa.MfaService? mfa = null,
+        PandaAuth.Server.Infrastructure.Security.Mfa.LoginMfaChallengeService? loginMfaChallenges = null,
+        SecurityEventWriter? securityEvents = null)
         => new(
             provider.GetRequiredService<UserService>(),
             provider.GetRequiredService<LoginSessionService>(),
             provider.GetRequiredService<LoginRateLimiter>(),
             provider.GetRequiredService<LoginAuditWriter>(),
             passwordHasher,
-            provider.GetRequiredService<DummyPasswordHash>())
+            provider.GetRequiredService<DummyPasswordHash>(),
+            provider.GetRequiredService<IOptions<AuthOptions>>(),
+            mfa,
+            loginMfaChallenges,
+            securityEvents)
         {
-            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { RequestServices = provider } },
+            // Url.IsLocalUrl（登录 MFA 分支）需要完整 ActionContext，仅有 HttpContext 会在 UrlHelper 构造时 NRE。
+            ControllerContext = new ControllerContext(new ActionContext(
+                new DefaultHttpContext { RequestServices = provider },
+                new Microsoft.AspNetCore.Routing.RouteData(),
+                new Microsoft.AspNetCore.Mvc.Controllers.ControllerActionDescriptor())),
         };
 
     internal static AuthorizationController CreateAuthorizationController(ServiceProvider provider)

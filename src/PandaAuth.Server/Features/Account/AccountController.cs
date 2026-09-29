@@ -1,8 +1,11 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using PandaAuth.Shared;
+using PandaAuth.Server.Configuration;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Server.Infrastructure.Security.Mfa;
 
 namespace PandaAuth.Server.Features.Account;
 
@@ -13,7 +16,11 @@ public sealed class AccountController(
     LoginRateLimiter loginRateLimiter,
     LoginAuditWriter loginAudit,
     IPasswordHasher passwordHasher,
-    DummyPasswordHash dummyPasswordHash) : Controller
+    DummyPasswordHash dummyPasswordHash,
+    IOptions<AuthOptions> authOptions,
+    MfaService? mfa = null,
+    LoginMfaChallengeService? loginMfaChallenges = null,
+    SecurityEventWriter? securityEvents = null) : Controller
 {
     /// <summary>dummy 校验用的占位用户；Argon2 校验只依赖哈希与口令，不读取该实例的状态。</summary>
     private static readonly PandaUser DummyUser = new();
@@ -101,8 +108,22 @@ public sealed class AccountController(
                 : "用户名或密码错误。");
         }
 
+        // 登录路径 MFA 挑战：开关开启且已有活跃因子时，签入前先要求第二因子（2026-09-30 拍板）。
+        // 此时只签发自包含的 pending 挑战 cookie，不签发任何已认证身份。
+        if (authOptions.Value.LoginMfa.Enabled &&
+            mfa is not null && loginMfaChallenges is not null &&
+            await mfa.HasActiveFactorAsync(signedInUser!.Id, cancellationToken))
+        {
+            loginMfaChallenges.Issue(HttpContext, signedInUser.Id, signedInUser.SecurityStamp ?? "");
+            await RecordSecurityEventAsync("login.mfa_challenge_required", signedInUser.Id, cancellationToken);
+            return Redirect($"/account/mfa/challenge?returnUrl={Uri.EscapeDataString(SafeReturnUrl(model.ReturnUrl))}");
+        }
+
         await signInManager.SignInAsync(HttpContext, signedInUser!, isPersistent: false);
         return LocalRedirect(string.IsNullOrWhiteSpace(model.ReturnUrl) ? "/" : model.ReturnUrl);
+
+        string SafeReturnUrl(string? returnUrl)
+            => Url.IsLocalUrl(returnUrl) ? returnUrl! : "/";
 
         IActionResult ViewWithError(string message)
         {
@@ -120,6 +141,21 @@ public sealed class AccountController(
             FailureReason = failureReason,
         };
     }
+
+    private Task RecordSecurityEventAsync(string eventType, string userId, CancellationToken cancellationToken)
+        => securityEvents is null
+            ? Task.CompletedTask
+            : securityEvents.RecordAsync(new SecurityEventEntry(
+                eventType,
+                userId,
+                userId,
+                "user",
+                userId,
+                null,
+                null,
+                HttpContext.Connection.RemoteIpAddress?.ToString(),
+                Request.Headers.UserAgent.ToString(),
+                HttpContext.TraceIdentifier), cancellationToken);
 
     [HttpPost("logout")]
     [ValidateAntiForgeryToken]

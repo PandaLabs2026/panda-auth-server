@@ -214,7 +214,8 @@ public sealed class MfaService(
         throw new MfaPolicyException("Recent MFA authentication is required.");
     }
 
-    private async Task<bool> HasActiveFactorAsync(string userId, CancellationToken cancellationToken)
+    /// <summary>是否存在活跃因子（已确认 TOTP 或未撤销 Passkey）——登录路径 MFA 挑战的判定依据。</summary>
+    public async Task<bool> HasActiveFactorAsync(string userId, CancellationToken cancellationToken)
         => await db.TotpFactors.AnyAsync(x => x.UserId == userId && x.RevokedAt == null && x.ConfirmedAt != null, cancellationToken)
             || await db.WebAuthnCredentials.AnyAsync(x => x.UserId == userId && x.RevokedAt == null, cancellationToken);
 
