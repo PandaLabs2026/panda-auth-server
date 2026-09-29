@@ -29,6 +29,9 @@ public sealed class AuthOptions
     /// <summary>泄露密码检测（HIBP k-anonymity）；默认关闭——自托管部署可能没有稳定外网出口。</summary>
     public HibpOptions Hibp { get; set; } = new();
 
+    /// <summary>登录路径 MFA 挑战；默认关闭——开启后已有活跃 TOTP/Passkey 因子的用户登录需完成第二因子挑战（2026-09-30 拍板）。</summary>
+    public LoginMfaOptions LoginMfa { get; set; } = new();
+
     /// <summary>DataProtection 密钥持久化目录；为空时使用临时密钥（仅限开发环境）。</summary>
     public string DataProtectionKeyPath { get; set; } = string.Empty;
 }
@@ -40,6 +43,12 @@ public sealed class RateLimitOptions
 
     /// <summary>同一账号每分钟允许的登录尝试次数。</summary>
     public int AccountPerMinute { get; set; } = 5;
+
+    /// <summary>登录 MFA 挑战：同一 IP 每分钟允许的断言尝试次数（TOTP 六位码暴力破解需要持续多次尝试）。</summary>
+    public int MfaChallengeIpPerMinute { get; set; } = 10;
+
+    /// <summary>登录 MFA 挑战：同一用户每分钟允许的断言尝试次数。</summary>
+    public int MfaChallengeAccountPerMinute { get; set; } = 5;
 }
 
 public sealed class AuditOptions
@@ -188,6 +197,16 @@ public sealed class HibpOptions
 
     /// <summary>外呼超时毫秒；超时按失败策略处理。</summary>
     public int TimeoutMs { get; set; } = 2000;
+}
+
+/// <summary>
+/// 登录路径 MFA 挑战（2026-09-30 拍板，先于微信适配器实施；见设计稿
+/// docs/superpowers/specs/2026-09-30-login-mfa-challenge-design.md）。
+/// </summary>
+public sealed class LoginMfaOptions
+{
+    /// <summary>总开关；默认关闭——与 HIBP/Mgmt 同策略，存量部署升级不突变登录行为。PandaAuth 生产验证后显式开启。</summary>
+    public bool Enabled { get; set; }
 }
 
 public sealed class DemoSeedOptions

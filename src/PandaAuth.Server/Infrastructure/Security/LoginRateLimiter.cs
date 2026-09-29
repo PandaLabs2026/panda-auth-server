@@ -20,6 +20,8 @@ public sealed class LoginRateLimiter : IDisposable
 {
     private static readonly string IpKeyPrefix = "login-ratelimit:ip:";
     private static readonly string AccountKeyPrefix = "login-ratelimit:account:";
+    private static readonly string MfaChallengeIpKeyPrefix = "mfa-challenge-ratelimit:ip:";
+    private static readonly string MfaChallengeUserKeyPrefix = "mfa-challenge-ratelimit:user:";
 
     /// <summary>条目 TTL = 窗口时长 + 余量（保持原内部常量引用，测试断言依赖）。</summary>
     internal static readonly TimeSpan DefaultEntryTimeToLive = FixedWindowLimiterCache.DefaultEntryTimeToLive;
@@ -44,6 +46,16 @@ public sealed class LoginRateLimiter : IDisposable
 
     public RateLimitLease AttemptByAccount(string userName)
         => _limiterCache.Acquire(AccountCacheKey(userName), _options.AccountPerMinute);
+
+    /// <summary>登录 MFA 挑战断言（TOTP 码 / Passkey 完成请求）按 IP 维度限流。</summary>
+    public RateLimitLease AttemptMfaChallengeByIp(string? ipAddress)
+        => _limiterCache.Acquire(
+            MfaChallengeIpKeyPrefix + (string.IsNullOrWhiteSpace(ipAddress) ? "unknown" : ipAddress),
+            _options.MfaChallengeIpPerMinute);
+
+    /// <summary>登录 MFA 挑战断言按用户维度限流——TOTP 六位码可暴力尝试，必须与 IP 维度叠加。</summary>
+    public RateLimitLease AttemptMfaChallengeByUser(string userId)
+        => _limiterCache.Acquire(MfaChallengeUserKeyPrefix + userId, _options.MfaChallengeAccountPerMinute);
 
     internal static string IpCacheKey(string? ipAddress)
         => IpKeyPrefix + (string.IsNullOrWhiteSpace(ipAddress) ? "unknown" : ipAddress);

@@ -1,0 +1,24 @@
+@model PandaAuth.Server.Features.Account.LoginMfaChallengeViewModel
+@{
+    ViewData["Title"] = "安全验证";
+}
+
+<div id="login-mfa-challenge" data-return-url="@Model.ReturnUrl" data-assertion-options-url="/account/mfa/challenge/passkey/options" data-assertion-url="/account/mfa/challenge/passkey/complete">
+    <form asp-action="AssertTotp" asp-controller="LoginMfaChallenge" method="post">
+        <input type="hidden" asp-for="ReturnUrl" />
+        <div asp-validation-summary="All" class="error"></div>
+        @if (Model.HasTotp)
+        {
+            <label for="challenge-totp-code">输入认证器验证码</label>
+            <input id="challenge-totp-code" name="Code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" autofocus />
+            <button type="submit">验证并登录</button>
+        }
+    </form>
+    <div id="login-mfa-message" class="notice" hidden></div>
+    @if (Model.HasPasskey)
+    {
+        <button type="button" id="challenge-passkey">使用 Passkey 验证</button>
+    }
+    <p class="footnote"><a href="/account/login">返回登录</a></p>
+</div>
+<script src="/account/login-mfa-challenge.js" defer></script>

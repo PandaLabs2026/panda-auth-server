@@ -31,19 +31,45 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock)
 
     public async Task SignInAsync(HttpContext context, PandaUser user, bool isPersistent)
     {
+        var principal = await BuildPrincipalAsync(user, method: null);
+        await context.SignInAsync(Scheme, principal, new AuthenticationProperties { IsPersistent = isPersistent });
+    }
+
+    /// <summary>
+    /// 登录路径 MFA 挑战成功后的签入：会话自诞生起携带 MFA 事实（Method/VerifiedAt），
+    /// 不经过「先签入再 MarkMfaAsync 轮换」的两步窗口。
+    /// </summary>
+    public async Task SignInWithMfaAsync(HttpContext context, PandaUser user, string method)
+    {
+        if (method is not (MfaClaimTypes.WebAuthn or MfaClaimTypes.Totp))
+        {
+            throw new ArgumentOutOfRangeException(nameof(method));
+        }
+        var principal = await BuildPrincipalAsync(user, method);
+        await context.SignInAsync(Scheme, principal, new AuthenticationProperties { IsPersistent = false });
+    }
+
+    private async Task<ClaimsPrincipal> BuildPrincipalAsync(PandaUser user, string? method)
+    {
         // Fetch again after optimistic retries; never issue a ticket from stale account state.
         var current = await users.ReloadAsync(user.Id);
         if (current is null || current.Status != UserStatus.Active ||
             current.SecurityStamp != user.SecurityStamp)
             throw new InvalidOperationException("Account changed during sign-in.");
-        var principal = new ClaimsPrincipal(new ClaimsIdentity(
-        [
-            new Claim(ClaimTypes.NameIdentifier, current.Id),
-            new Claim(ClaimTypes.Name, current.UserName ?? current.Id),
-            new Claim(StampClaim, current.SecurityStamp ?? ""),
-            new Claim(AuthenticatedAtClaim, clock.GetUtcNow().ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture)),
-        ], Scheme));
-        await context.SignInAsync(Scheme, principal, new AuthenticationProperties { IsPersistent = isPersistent });
+        var claims = new List<Claim>
+        {
+            new(ClaimTypes.NameIdentifier, current.Id),
+            new(ClaimTypes.Name, current.UserName ?? current.Id),
+            new(StampClaim, current.SecurityStamp ?? ""),
+            new(AuthenticatedAtClaim, clock.GetUtcNow().ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture)),
+        };
+        if (method is not null)
+        {
+            claims.Add(new Claim(MfaClaimTypes.Method, method));
+            claims.Add(new Claim(MfaClaimTypes.VerifiedAt,
+                clock.GetUtcNow().ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        }
+        return new ClaimsPrincipal(new ClaimsIdentity(claims, Scheme));
     }
 
     public Task SignOutAsync(HttpContext context) => context.SignOutAsync(Scheme);

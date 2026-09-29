@@ -202,6 +202,8 @@ builder.Services.AddSingleton(serviceProvider => new TotpSecretProtector(
     authOptions.Mfa.GetEncryptionKey(builder.Environment.IsProduction()), authOptions.Mfa.TotpKeyVersion));
 builder.Services.AddScoped<TotpFactorService>();
 builder.Services.AddScoped<MfaService>();
+// 登录路径 MFA 挑战的 pending cookie（自包含受保护载荷，Auth:LoginMfa 默认关闭）。
+builder.Services.AddScoped<LoginMfaChallengeService>();
 builder.Services.AddSingleton<LoginRateLimiter>();
 // Management API 限流与登录限流共用 FixedWindowLimiterCache 机械；桶配置见 Auth:Mgmt:RateLimit。
 builder.Services.AddSingleton<ManagementRateLimiter>();
