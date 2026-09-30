@@ -23,6 +23,13 @@ using PandaAuth.Shared;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.ForwardLimit = 1;
+    TenantForwardedHeaders.Configure(options, builder.Configuration);
+});
+
 var isMigrateCommand = args.Contains("--migrate", StringComparer.Ordinal);
 var connectionStringName = isMigrateCommand ? "Migration" : "Default";
 var connectionString = builder.Configuration.GetConnectionString(connectionStringName)
@@ -251,10 +258,8 @@ builder.Services.AddHealthChecks().AddDbContextCheck<PandaAuthDbContext>();
 
 var app = builder.Build();
 
-// Caddy 以 HTTP 反代到 127.0.0.1:9004 并终结 TLS，需还原真实 Scheme 与客户端 IP。
-// 仅信任回环代理（Caddy 与容器同 host network，真实代理永远是回环地址）：伪造发生在 XFF 头链而非连接层，
-// 端口绑定 127.0.0.1 不能消除伪造风险，全量网段信任属失败开放配置。
-// ForwardLimit=1：只消费 Caddy 追加的最右一跳真实客户端 IP，攻击者伪造的最左值无法污染 IP 限流与审计。
+// Legacy host-network runtime trusts loopback. Tenant bridge runtime replaces that list with its exact Docker gateway.
+// ForwardLimit=1 only consumes the immediate Caddy hop; a sibling container on the same /24 remains untrusted.
 //
 // ⚠️ 本注册只覆盖「管线末端」的端点（控制器、静态文件等）。最小托管会把 UseAuthentication()
 //    自动插到管线最前端，而 OpenIddict 的 discovery / connect 端点由认证中间件提供——它们在本行
@@ -262,12 +267,7 @@ var app = builder.Build();
 //    ASPNETCORE_FORWARDEDHEADERS_ENABLED=true（更靠前，默认策略同为「仅信任回环 + ForwardLimit=1」）。
 //    2026-09-16 实测：删掉该环境变量后，公网 discovery 的 authorization_endpoint 退化为 http://。
 //    两者是分工而非重复，勿单独删除任何一个。
-app.UseForwardedHeaders(new ForwardedHeadersOptions
-{
-    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
-    ForwardLimit = 1,
-    KnownProxies = { IPAddress.Loopback, IPAddress.IPv6Loopback },
-});
+app.UseForwardedHeaders(app.Services.GetRequiredService<IOptions<ForwardedHeadersOptions>>().Value);
 
 app.UseMiddleware<TenantHostMiddleware>();
 

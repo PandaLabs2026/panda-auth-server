@@ -2,8 +2,10 @@ using System.Net;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using PandaAuth.Server.Infrastructure.Security;
 using Xunit;
 
 namespace PandaAuth.Tests;
@@ -16,6 +18,7 @@ namespace PandaAuth.Tests;
 public class ForwardedHeadersTests
 {
     private const string ForgedIp = "1.2.3.4";
+    private static readonly IPAddress TenantGateway = IPAddress.Parse("100.64.3.1");
 
     private static readonly IPAddress RealClientIp = IPAddress.Parse("203.0.113.9");
 
@@ -61,6 +64,58 @@ public class ForwardedHeadersTests
         Assert.Equal("http", context.Request.Scheme);
     }
 
+    [Fact]
+    public async Task TenantBridge_TrustsOnlyTheConfiguredGateway()
+    {
+        var options = CreateForwardedHeadersOptions(new Dictionary<string, string?>
+        {
+            ["PANDA_AUTH_TENANT_NETWORK_MODE"] = "bridge",
+            ["PANDA_AUTH_TRUSTED_PROXY"] = TenantGateway.ToString(),
+        });
+        var context = CreateContext(TenantGateway, RealClientIp.ToString(), "https");
+
+        await InvokeForwardedHeadersAsync(context, options);
+
+        Assert.Equal(RealClientIp, context.Connection.RemoteIpAddress);
+        Assert.Equal("https", context.Request.Scheme);
+        Assert.Contains(TenantGateway, options.KnownProxies);
+        Assert.DoesNotContain(IPAddress.Loopback, options.KnownProxies);
+    }
+
+    [Theory]
+    [InlineData("100.64.3.2")]
+    [InlineData("127.0.0.1")]
+    public async Task TenantBridge_RejectsForwardedHeadersFromAnyOtherPeer(string peerAddress)
+    {
+        var options = CreateForwardedHeadersOptions(new Dictionary<string, string?>
+        {
+            ["PANDA_AUTH_TENANT_NETWORK_MODE"] = "bridge",
+            ["PANDA_AUTH_TRUSTED_PROXY"] = TenantGateway.ToString(),
+        });
+        var peer = IPAddress.Parse(peerAddress);
+        var context = CreateContext(peer, ForgedIp, "https");
+
+        await InvokeForwardedHeadersAsync(context, options);
+
+        Assert.Equal(peer, context.Connection.RemoteIpAddress);
+        Assert.Equal("http", context.Request.Scheme);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("100.64.3.0/24")]
+    [InlineData("not-an-ip")]
+    public void TenantBridge_RequiresOneValidProxyIp(string? trustedProxy)
+    {
+        var settings = new Dictionary<string, string?>
+        {
+            ["PANDA_AUTH_TENANT_NETWORK_MODE"] = "bridge",
+        };
+        if (trustedProxy is not null) settings["PANDA_AUTH_TRUSTED_PROXY"] = trustedProxy;
+
+        Assert.Throws<InvalidOperationException>(() => CreateForwardedHeadersOptions(settings));
+    }
+
     private static DefaultHttpContext CreateContext(IPAddress remoteIp, string forwardedFor, string? forwardedProto)
     {
         var context = new DefaultHttpContext();
@@ -75,18 +130,26 @@ public class ForwardedHeadersTests
         return context;
     }
 
-    private static Task InvokeForwardedHeadersAsync(HttpContext context)
+    private static Task InvokeForwardedHeadersAsync(HttpContext context, ForwardedHeadersOptions? options = null)
     {
         // 与 Program.cs 的 app.UseForwardedHeaders(...) 配置保持一致（仅回环代理 + ForwardedLimit=1）。
+        options ??= CreateForwardedHeadersOptions(new Dictionary<string, string?>());
         var middleware = new ForwardedHeadersMiddleware(
             static _ => Task.CompletedTask,
             NullLoggerFactory.Instance,
-            Options.Create(new ForwardedHeadersOptions
-            {
-                ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
-                ForwardLimit = 1,
-                KnownProxies = { IPAddress.Loopback, IPAddress.IPv6Loopback },
-            }));
+            Options.Create(options));
         return middleware.Invoke(context);
+    }
+
+    private static ForwardedHeadersOptions CreateForwardedHeadersOptions(IDictionary<string, string?> settings)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+        var options = new ForwardedHeadersOptions
+        {
+            ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+            ForwardLimit = 1,
+        };
+        TenantForwardedHeaders.Configure(options, configuration);
+        return options;
     }
 }
