@@ -97,6 +97,8 @@ public sealed class SeedOptions
 
     public AdminWebSeedOptions AdminWeb { get; set; } = new();
 
+    public OasisWebSeedOptions OasisWeb { get; set; } = new();
+
     public FleetSeedOptions Fleet { get; set; } = new();
 
     public MgmtSeedOptions Mgmt { get; set; } = new();
@@ -115,11 +117,12 @@ public sealed class AdminSeedOptions
 /// <summary>
 /// 第一方机密 Web 客户端（BFF 形态：授权码 + PKCE + 刷新令牌）的共有种子配置。
 /// me-web 与 admin-web 同构，共用 DbSeeder 的 upsert 播种路径；差异只有 clientId/DisplayName 与配置键前缀。
+/// oasis-web 复用同一条 upsert 路径，但默认关闭且权限集更小（见 OasisWebSeedOptions）。
 /// </summary>
 public abstract class FirstPartyWebSeedOptions
 {
-    /// <summary>是否播种/订正该客户端；第一方客户端默认开启。</summary>
-    public bool Enabled { get; set; } = true;
+    /// <summary>是否播种/订正该客户端；PandaAuth 自带面板（me-web/admin-web）默认开启。</summary>
+    public virtual bool Enabled { get; set; } = true;
 
     /// <summary>客户端密钥；生产经环境变量注入（如 Auth__Seed__Me__ClientSecret）。</summary>
     public string ClientSecret { get; set; } = string.Empty;
@@ -137,6 +140,19 @@ public sealed class MeSeedOptions : FirstPartyWebSeedOptions
 
 public sealed class AdminWebSeedOptions : FirstPartyWebSeedOptions
 {
+}
+
+/// <summary>
+/// Oasis 工作台（oasis.pandalabs.cn）的 Web 客户端：机密、授权码 + PKCE + 刷新令牌，
+/// 走与 me-web 相同的 upsert 播种路径，但权限集裁掉 roles scope 与 Introspection 端点
+/// （Oasis 不请求 roles，授权完全在本地；token 只存服务端 cookie，无内省消费方）。
+/// 默认关闭——Oasis 不是 PandaAuth 自带面板，仅以 PandaAuth 为 IDP 的部署显式开启；
+/// 社区自托管默认不播种（开启但缺 ClientSecret 时 migrate 失败关闭，与 Fleet/Mgmt 同策略）。
+/// </summary>
+public sealed class OasisWebSeedOptions : FirstPartyWebSeedOptions
+{
+    /// <summary>默认关闭；生产经 Auth__Seed__OasisWeb__Enabled 显式开启。</summary>
+    public override bool Enabled { get; set; }
 }
 
 public sealed class FleetSeedOptions
