@@ -8,7 +8,7 @@ using static OpenIddict.Abstractions.OpenIddictConstants;
 
 namespace PandaAuth.Server.Infrastructure.Persistence;
 
-/// <summary>幂等种子数据：管理员角色/账号、me-web 与 admin-web 第一方客户端、可选 demo 客户端。</summary>
+/// <summary>幂等种子数据：管理员角色/账号、me-web/admin-web/oasis-web 第一方客户端、可选 fleet/mgmt/demo 客户端。</summary>
 public static class DbSeeder
 {
     public static async Task SeedAsync(IServiceProvider services)
@@ -72,6 +72,15 @@ public static class DbSeeder
         {
             await SeedFirstPartyWebApplicationAsync(
                 applications, "admin-web", "PandaAuth 管理后台", "Auth:Seed:AdminWeb", options.Seed.AdminWeb, options.TenantRouting, "admin");
+        }
+
+        // Oasis 不挂在 PandaAuth 租户路由下（独立产品域），不参与租户回调展开；
+        // 权限集用裁剪版（无 roles scope、无 Introspection 端点）。
+        if (options.Seed.OasisWeb.Enabled)
+        {
+            await SeedFirstPartyWebApplicationAsync(
+                applications, "oasis-web", "Oasis 工作台", "Auth:Seed:OasisWeb", options.Seed.OasisWeb,
+                permissions: OasisWebPermissions());
         }
 
         if (options.Seed.Fleet.Enabled)
@@ -297,8 +306,9 @@ public static class DbSeeder
     }
 
     /// <summary>
-    /// 第一方机密 Web 客户端（me-web / admin-web）的 upsert 播种：不存在则按配置创建，
-    /// 已存在则按配置订正回调白名单与客户端密钥。两者共用本方法，行为一致。
+    /// 第一方机密 Web 客户端（me-web / admin-web / oasis-web）的 upsert 播种：不存在则按配置创建，
+    /// 已存在则按配置订正回调白名单与客户端密钥。共用本方法，行为一致；差异（权限集、租户回调展开）
+    /// 经 permissions / tenantRouting 参数表达。
     /// </summary>
     private static async Task SeedFirstPartyWebApplicationAsync(
         IOpenIddictApplicationManager applications,
@@ -307,8 +317,10 @@ public static class DbSeeder
         string configPrefix,
         FirstPartyWebSeedOptions seed,
         TenantRoutingOptions? tenantRouting = null,
-        string? callbackArea = null)
+        string? callbackArea = null,
+        string[]? permissions = null)
     {
+        permissions ??= FirstPartyWebPermissions();
         var redirectUris = ExpandTenantRedirectUris(seed.RedirectUris, tenantRouting, callbackArea, "callback/login/pandaauth");
         var postLogoutRedirectUris = ExpandTenantRedirectUris(seed.PostLogoutRedirectUris, tenantRouting, callbackArea, "");
         var existing = await applications.FindByClientIdAsync(clientId);
@@ -335,22 +347,12 @@ public static class DbSeeder
                     : seed.ClientSecret,
                 ConsentType = ConsentTypes.Implicit,
                 DisplayName = displayName,
-                Permissions =
-                {
-                    Permissions.Endpoints.Authorization,
-                    Permissions.Endpoints.Token,
-                    Permissions.Endpoints.EndSession,
-                    Permissions.Endpoints.Revocation,
-                    Permissions.GrantTypes.AuthorizationCode,
-                    Permissions.GrantTypes.RefreshToken,
-                    Permissions.ResponseTypes.Code,
-                    Permissions.Scopes.Email,
-                    Permissions.Scopes.Profile,
-                    Permissions.Scopes.Roles,
-                    Permissions.Prefixes.Scope + Scopes.OfflineAccess,
-                    Requirements.Features.ProofKeyForCodeExchange,
-                },
             };
+
+            foreach (var permission in permissions)
+            {
+                descriptor.Permissions.Add(permission);
+            }
 
             foreach (var uri in redirectUris)
             {
@@ -426,6 +428,49 @@ public static class DbSeeder
             await applications.UpdateAsync(existing);
         }
     }
+
+    /// <summary>
+    /// me-web / admin-web 的默认权限集：授权码 + PKCE + 刷新令牌，含 roles scope、
+    /// Revocation 端点（登出时吊销 IdP 令牌）。PandaAuth 自带面板的工作台门禁依赖 roles。
+    /// </summary>
+    private static string[] FirstPartyWebPermissions() =>
+    [
+        Permissions.Endpoints.Authorization,
+        Permissions.Endpoints.Token,
+        Permissions.Endpoints.EndSession,
+        Permissions.Endpoints.Revocation,
+        Permissions.GrantTypes.AuthorizationCode,
+        Permissions.GrantTypes.RefreshToken,
+        Permissions.ResponseTypes.Code,
+        Permissions.Scopes.Email,
+        Permissions.Scopes.Profile,
+        Permissions.Scopes.Roles,
+        Permissions.Prefixes.Scope + Scopes.OfflineAccess,
+        Requirements.Features.ProofKeyForCodeExchange,
+    ];
+
+    /// <summary>
+    /// oasis-web 权限集 = 默认第一方 Web 权限集裁掉两项：
+    /// - roles scope 不授——Oasis 明确不请求 roles，授权完全在 Oasis 本地（镜像于 Oasis 侧
+    ///   registration 的 scopes 注释，避免将来误请求时悄悄把工作台角色带进 token）；
+    /// - Introspection 端点不授——Oasis 不消费内省（token 仅存服务端 cookie）。
+    /// Revocation 端点保留：Oasis 登出走 RP-initiated signout + revoke（me-web 模式），
+    /// 缺该权限会让登出时的令牌吊销在 IdP 侧被拒，只能靠 best-effort 日志发现。
+    /// </summary>
+    private static string[] OasisWebPermissions() =>
+    [
+        Permissions.Endpoints.Authorization,
+        Permissions.Endpoints.Token,
+        Permissions.Endpoints.EndSession,
+        Permissions.Endpoints.Revocation,
+        Permissions.GrantTypes.AuthorizationCode,
+        Permissions.GrantTypes.RefreshToken,
+        Permissions.ResponseTypes.Code,
+        Permissions.Scopes.Email,
+        Permissions.Scopes.Profile,
+        Permissions.Prefixes.Scope + Scopes.OfflineAccess,
+        Requirements.Features.ProofKeyForCodeExchange,
+    ];
 
     private static string[] ExpandTenantRedirectUris(
         string[] configuredUris,

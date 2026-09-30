@@ -14,7 +14,7 @@ using static OpenIddict.Abstractions.OpenIddictConstants;
 
 namespace PandaAuth.Tests;
 
-/// <summary>Seeder 集成测试：EF InMemory + 真实 OpenIddict Core 管理器，验证播种开关与 me-web / admin-web upsert 行为。</summary>
+/// <summary>Seeder 集成测试：EF InMemory + 真实 OpenIddict Core 管理器，验证播种开关与 me-web / admin-web / oasis-web upsert 行为。</summary>
 public class DbSeederTests
 {
     private const string MeRedirectUri = "https://auth.pandalabs.cn/me/callback/login/pandaauth";
@@ -28,6 +28,12 @@ public class DbSeederTests
     private const string AdminWebPostLogoutUri = "https://auth.pandalabs.cn/admin/callback/logout/pandaauth";
 
     private const string AdminWebClientSecret = "admin-web-test-secret";
+
+    private const string OasisWebRedirectUri = "https://oasis.pandalabs.cn/signin-oidc";
+
+    private const string OasisWebPostLogoutUri = "https://oasis.pandalabs.cn/";
+
+    private const string OasisWebClientSecret = "oasis-web-test-secret";
 
     // 密钥对账用例用的存量旧回调：刻意不用已退役域名，避免与域名退役检查的
     // 负断言夹具（`.cn` 命中数基线）重复计数。
@@ -471,6 +477,14 @@ public class DbSeederTests
         Assert.Contains("http://localhost:9006/admin/callback/logout/pandaauth",
             await applications.GetPostLogoutRedirectUrisAsync(adminWeb));
         Assert.True(await applications.ValidateClientSecretAsync(adminWeb, "admin-web-dev-secret"));
+
+        // Development 下 OasisWeb 显式开启（appsettings.json 的默认是 false）：
+        // 本地开发要能直接用 localhost:5000 回调起完整握手。
+        var oasisWeb = await applications.FindByClientIdAsync("oasis-web");
+        Assert.NotNull(oasisWeb);
+        Assert.Contains("http://localhost:5000/signin-oidc",
+            await applications.GetRedirectUrisAsync(oasisWeb));
+        Assert.True(await applications.ValidateClientSecretAsync(oasisWeb, "oasis-web-dev-secret"));
         var userManager = provider.GetRequiredService<UserService>();
         Assert.NotNull(await userManager.FindByNameAsync("admin@example.com"));
     }
@@ -620,6 +634,142 @@ public class DbSeederTests
 
         var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
         Assert.Null(await applications.FindByClientIdAsync("admin-web"));
+    }
+
+    // oasis-web 与 me-web/admin-web 共用 SeedFirstPartyWebApplicationAsync（经 permissions 参数注入裁剪权限集）；
+    // 方法级 upsert 行为（白名单整体替换、密钥幂等对账、明文不得入库）已由 me-web 套件覆盖，
+    // 这里验证 oasis-web 调用点的接线：默认关闭、独立开关、白名单取值、裁剪后的权限集与失败关闭。
+    // Revocation 端点权限刻意保留（Oasis 登出走 RP-initiated signout + revoke，me-web 模式）；
+    // 裁掉的是 roles scope 与 Introspection 端点（Oasis 不请求 roles、不消费内省）。
+
+    [Fact]
+    public async Task OasisWebDisabledByDefault_DoesNotCreateClient()
+    {
+        // OasisWebSeedOptions 默认 Enabled=false（与 Fleet/Mgmt 同策略）：社区自托管默认不播种，
+        // 也不会因缺 ClientSecret 让 migrate 失败。
+        var options = ValidOptions();
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        Assert.Null(await applications.FindByClientIdAsync("oasis-web"));
+
+        // 同轮里 me-web / admin-web 照常播种，证明 Seeder 确实执行过。
+        Assert.NotNull(await applications.FindByClientIdAsync("me-web"));
+        Assert.NotNull(await applications.FindByClientIdAsync("admin-web"));
+    }
+
+    [Fact]
+    public async Task OasisWebEnabled_CreatesConfidentialClientWithTrimmedPermissions()
+    {
+        var options = ValidOptions();
+        options.Seed.OasisWeb = new OasisWebSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = OasisWebClientSecret,
+            RedirectUris = [OasisWebRedirectUri, "http://localhost:5000/signin-oidc"],
+            PostLogoutRedirectUris = [OasisWebPostLogoutUri],
+        };
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var oasisWeb = await applications.FindByClientIdAsync("oasis-web");
+        Assert.NotNull(oasisWeb);
+        Assert.Equal(ClientTypes.Confidential, await applications.GetClientTypeAsync(oasisWeb));
+        Assert.True(await applications.ValidateClientSecretAsync(oasisWeb, OasisWebClientSecret));
+
+        var redirectUris = await applications.GetRedirectUrisAsync(oasisWeb);
+        Assert.Equal(
+            new[] { OasisWebRedirectUri, "http://localhost:5000/signin-oidc" }.OrderBy(x => x),
+            redirectUris.OrderBy(x => x));
+
+        var postLogoutUris = await applications.GetPostLogoutRedirectUrisAsync(oasisWeb);
+        Assert.Equal(new[] { OasisWebPostLogoutUri }, postLogoutUris.OrderBy(x => x));
+
+        // 与 me-web 权限集相同的基础项：授权码 + PKCE + 刷新令牌，openid 侧 email/profile/offline_access。
+        Assert.True(await applications.HasPermissionAsync(oasisWeb, Permissions.Endpoints.Authorization));
+        Assert.True(await applications.HasPermissionAsync(oasisWeb, Permissions.Endpoints.Token));
+        Assert.True(await applications.HasPermissionAsync(oasisWeb, Permissions.Endpoints.EndSession));
+        Assert.True(await applications.HasPermissionAsync(oasisWeb, Permissions.Endpoints.Revocation));
+        Assert.True(await applications.HasPermissionAsync(oasisWeb, Permissions.GrantTypes.AuthorizationCode));
+        Assert.True(await applications.HasPermissionAsync(oasisWeb, Permissions.GrantTypes.RefreshToken));
+        Assert.True(await applications.HasPermissionAsync(oasisWeb, Permissions.ResponseTypes.Code));
+        Assert.True(await applications.HasPermissionAsync(oasisWeb, Permissions.Scopes.Email));
+        Assert.True(await applications.HasPermissionAsync(oasisWeb, Permissions.Scopes.Profile));
+        Assert.True(await applications.HasPermissionAsync(oasisWeb, Permissions.Prefixes.Scope + Scopes.OfflineAccess));
+        // PKCE 条目与 me-web 同形态落在 Permissions 集（HasRequirementAsync 查的是 Requirements 集，恒为 false）；
+        // 实际强制力来自服务端全局 RequireProofKeyForCodeExchange()，此处只是与 me-web seed 块逐字对齐。
+        Assert.True(await applications.HasPermissionAsync(oasisWeb, Requirements.Features.ProofKeyForCodeExchange));
+
+        // 裁剪项：不授 roles scope（Oasis 授权完全在本地），不授 Introspection 端点（无内省消费方）。
+        Assert.False(await applications.HasPermissionAsync(oasisWeb, Permissions.Scopes.Roles));
+        Assert.False(await applications.HasPermissionAsync(oasisWeb, Permissions.Endpoints.Introspection));
+
+        // me-web 权限集不受 oasis-web 接线影响。
+        var meWeb = await applications.FindByClientIdAsync("me-web");
+        Assert.NotNull(meWeb);
+        Assert.True(await applications.HasPermissionAsync(meWeb, Permissions.Scopes.Roles));
+        Assert.True(await applications.HasPermissionAsync(meWeb, Permissions.Endpoints.Revocation));
+    }
+
+    [Fact]
+    public async Task OasisWebEnabledWithoutSecret_FailsClosed()
+    {
+        var options = ValidOptions();
+        options.Seed.OasisWeb = new OasisWebSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "",
+            RedirectUris = [OasisWebRedirectUri],
+            PostLogoutRedirectUris = [OasisWebPostLogoutUri],
+        };
+
+        using var provider = BuildProvider(options);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => DbSeeder.SeedAsync(provider));
+
+        Assert.Contains("Auth:Seed:OasisWeb:ClientSecret", exception.Message);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        Assert.Null(await applications.FindByClientIdAsync("oasis-web"));
+    }
+
+    [Fact]
+    public async Task OasisWebExists_ClientSecretDriftIsReconciledAndWhitelistReplaced()
+    {
+        const string configuredSecret = "oasis-web-configured-secret";
+        var options = ValidOptions();
+        options.Seed.OasisWeb = new OasisWebSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = configuredSecret,
+            RedirectUris = [OasisWebRedirectUri],
+            PostLogoutRedirectUris = [OasisWebPostLogoutUri],
+        };
+
+        using var provider = BuildProvider(options);
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        await CreateFirstPartyWebAsync(applications,
+            "oasis-web",
+            "Oasis 工作台",
+            redirectUris: [LegacyRedirectUri],
+            postLogoutUris: [LegacyPostLogoutUri],
+            clientSecret: "oasis-web-original-secret");
+
+        await DbSeeder.SeedAsync(provider);
+
+        var oasisWeb = await applications.FindByClientIdAsync("oasis-web");
+        Assert.NotNull(oasisWeb);
+        Assert.True(await applications.ValidateClientSecretAsync(oasisWeb, configuredSecret));
+        Assert.False(await applications.ValidateClientSecretAsync(oasisWeb, "oasis-web-original-secret"));
+
+        var redirectUris = await applications.GetRedirectUrisAsync(oasisWeb);
+        Assert.Equal(new[] { OasisWebRedirectUri }, redirectUris.OrderBy(x => x));
+        var postLogoutUris = await applications.GetPostLogoutRedirectUrisAsync(oasisWeb);
+        Assert.Equal(new[] { OasisWebPostLogoutUri }, postLogoutUris.OrderBy(x => x));
     }
 
     /// <summary>构造播种总开关开启、Me 配置齐全、Demo 默认关闭的合法选项。</summary>
