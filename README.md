@@ -2,7 +2,7 @@
 
 **PandaAuth by PandaLabs** · [English](README.en.md)
 
-> 研发阶段，尚无正式受支持发行版；接入采用邀请或申请口径。已有实现不等于已完成发行验证。
+> PandaAuth 套件当前为 **Community Preview 0.2.0-preview.1**：已部署生产、面向早期社区试用；稳定版 Community Release 1.0.0 尚未发布。接入采用邀请或申请口径。
 
 ## 职责与边界
 
@@ -44,7 +44,7 @@ dotnet test tests/PandaAuth.Tests/PandaAuth.Tests.csproj
 
 协议路径：`/connect/authorize`、`/connect/token`、`/connect/userinfo`、`/connect/logout`、`/connect/introspect`、`/connect/revoke`；发现/JWKS 由 OpenIddict 提供，健康路径 `/healthz`。端点配置存在不等于启动或协议测试通过。
 
-[部署说明](deploy/README.md)记录迁移约束和现有初始化限制。生产编排在元仓，不能用常驻启动代替一次性迁移。用户生命周期、验证码和管理 API 为 Phase 1 目标；Redis 和海外部署为后续目标。
+[部署说明](deploy/README.md)记录迁移约束和现有初始化限制。生产编排在元仓，不能用常驻启动代替一次性迁移。验证码自助重置与管理 API 已实现（能力边界见上文）。
 
 ## Roadmap 与治理
 

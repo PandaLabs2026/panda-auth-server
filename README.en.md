@@ -2,7 +2,7 @@
 
 **PandaAuth by PandaLabs** · [简体中文](README.md)
 
-> In development; no formally supported release yet. Access is by invitation or request. Implementation does not imply a verified release.
+> The PandaAuth suite is currently in **Community Preview 0.2.0-preview.1** — deployed in production and open to early community users. The stable Community Release 1.0.0 has not shipped yet. Access is by invitation or request.
 
 ## Responsibility and boundaries
 
@@ -43,7 +43,7 @@ The following existing entry points describe intent and side effects. The startu
 
 Protocol paths: `/connect/authorize`, `/connect/token`, `/connect/userinfo`, `/connect/logout`, `/connect/introspect`, `/connect/revoke`. OpenIddict supplies discovery/JWKS; health path is `/healthz`. Configured endpoints are not evidence of successful startup or protocol tests.
 
-The [deployment guide](deploy/README.md) records migration rules and current initialization limitations. Production orchestration belongs to the coordination repository; normal startup does not replace one-time migration. Account lifecycle, verification codes and administration APIs are Phase 1 targets; Redis and overseas deployment are later targets.
+The [deployment guide](deploy/README.md) records migration rules and current initialization limitations. Production orchestration belongs to the coordination repository; normal startup does not replace one-time migration. Self-service password reset via verification codes and the management API are implemented (see the scope notes above).
 
 ## Roadmap and governance
 
