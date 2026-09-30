@@ -29,7 +29,7 @@ public class DbSeederTests
 
     private const string AdminWebClientSecret = "admin-web-test-secret";
 
-    // 密钥对账用例用的存量旧回调：刻意不用已退役域名，避免与域名退役门禁的
+    // 密钥对账用例用的存量旧回调：刻意不用已退役域名，避免与域名退役检查的
     // 负断言夹具（`.cn` 命中数基线）重复计数。
     private const string LegacyRedirectUri = "http://localhost:9007/callback/login/pandaauth";
 
@@ -472,7 +472,7 @@ public class DbSeederTests
             await applications.GetPostLogoutRedirectUrisAsync(adminWeb));
         Assert.True(await applications.ValidateClientSecretAsync(adminWeb, "admin-web-dev-secret"));
         var userManager = provider.GetRequiredService<UserService>();
-        Assert.NotNull(await userManager.FindByNameAsync("admin@pandalabs.cc"));
+        Assert.NotNull(await userManager.FindByNameAsync("admin@example.com"));
     }
 
     [Fact]
@@ -504,7 +504,7 @@ public class DbSeederTests
     // admin-web 与 me-web 共用 SeedFirstPartyWebApplicationAsync；方法级行为（白名单整体替换、
     // 密钥幂等对账、明文不得入库）已由上面 me-web 套件覆盖，这里只验证 admin-web 调用点的接线：
     // clientId / 配置键前缀 / 白名单取值正确，以及独立开关生效。
-    // 存量旧回调一律用 localhost 值，不新增 .cn 命中（域名退役门禁按文件计数基线卡总量）。
+    // 存量旧回调一律用 localhost 值，不新增 .cn 命中（按文件计数基线卡总量）。
 
     [Fact]
     public async Task AdminWebMissing_CreatedWithWhitelistFromConfig()
@@ -628,7 +628,7 @@ public class DbSeederTests
         Seed = new SeedOptions
         {
             Enabled = true,
-            Admin = new AdminSeedOptions { Email = "admin@pandalabs.cc", Password = "" },
+            Admin = new AdminSeedOptions { Email = "admin@example.com", Password = "" },
             Me = new MeSeedOptions
             {
                 Enabled = true,

@@ -10,7 +10,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- 跨仓共享契约；要求 panda-auth-share 与本仓同级克隆（工作区布局见元仓 WORKSPACE.md） -->
+    <!-- 跨仓共享契约；要求 panda-auth-share 与本仓同级克隆 -->
     <ProjectReference Include="..\..\..\panda-auth-share\src\PandaAuth.Shared\PandaAuth.Shared.csproj" />
   </ItemGroup>
 

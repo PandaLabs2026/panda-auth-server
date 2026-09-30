@@ -19,7 +19,7 @@ public enum OtpVerifyOutcome
 public sealed class OtpRateLimitedException : Exception;
 
 /// <summary>
-/// 邮箱验证码服务：签发与校验。移植自 panda-asst-server 的 OtpService，口径不变：
+/// 邮箱验证码服务：签发与校验。口径：
 /// 6 位 CSPRNG、TTL 5 分钟、频控 1 次/分钟 + 5 次/小时（按邮箱哈希）、
 /// 5 次失败锁定 15 分钟、成功即消费、验证码以 SHA256 哈希入库。
 /// </summary>

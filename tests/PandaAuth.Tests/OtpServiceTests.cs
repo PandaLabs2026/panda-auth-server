@@ -9,7 +9,7 @@ using Xunit;
 namespace PandaAuth.Tests;
 
 /// <summary>
-/// OtpService 全生命周期测试（口径移植自 panda-asst，行为断言在 PandaAuth 重写）：
+/// OtpService 全生命周期测试（行为断言在 PandaAuth 重写）：
 /// 哈希入库、消费、过期、双频控、失败锁定。FakeTimeProvider 控制时间推进。
 /// </summary>
 public class OtpServiceTests

@@ -6,8 +6,8 @@ using Microsoft.Extensions.Options;
 namespace PandaAuth.Server.Infrastructure.Messaging;
 
 /// <summary>
-/// Resend 邮件通道（生产实现）。移植自 panda-asst-server（2026-09-19），改动仅命名空间与品牌。
-/// 发件域名 pandalabs.cc 已在 Resend 账号验证；API key 与发件地址经 compose 环境变量注入，
+/// Resend 邮件通道（生产实现）。
+/// 发件域名需在 Resend 完成验证；API key 与发件地址经 compose 环境变量注入，
 /// 生产缺失即启动失败（见 Program.cs 的 ValidateOnStart）。
 /// </summary>
 public sealed class ResendEmailSender(

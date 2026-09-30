@@ -140,7 +140,7 @@ public static class DbSeeder
     }
 
     /// <summary>
-    /// Management API（M0，设计稿见元仓 docs/superpowers/specs/2026-09-27-management-api-m0-design.md）：
+    /// Management API（M0）：
     /// mgmt.* scope 绑定 panda-mgmt-api 资源；专用机密客户端 mgmt-api 只含管理 scope。
     /// 交互式应用客户端一律不追加管理 scope——Auth0 组织级 M2M 无法访问管理 API 教训的直接落实。
     /// </summary>

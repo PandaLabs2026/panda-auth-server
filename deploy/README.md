@@ -1,8 +1,8 @@
 # PandaAuth.Server 部署与开发说明
 
-生产编排不属于本公开产品仓；本目录只保存 Server 专属脚本和迁移说明。生产发布、Caddy 和宿主机探活必须由受控运维流程另行提供，不能从本文件推断社区用户拥有生产权限。
+生产编排不属于本公开产品仓；本目录只保存 Server 专属脚本和迁移说明。生产发布、反向代理和宿主机探活由各自的运维流程另行提供，不能从本文件推断社区用户拥有生产权限。
 
-> MVC 注册、迁移时 OpenIddict Core 注册、Seed.Enabled 语义和首次签名密钥装配已修复，并在临时 PostgreSQL 18 上验证空库迁移、运行账号启动、健康检查和登录视图。**生产数据库与首次发布已配置并执行**：2026-09-16 的一次性 `--migrate` 已在生产跑通（独立 migrator 角色迁移/播种，常驻服务用无 DDL 的运行角色启动），Seeder 据此 upsert 订正了存量 me-web 的回调/登出白名单。**仍需注意**：下面「数据库与权限」一节里 `signing_keys` 的权限收紧，要在**已迁移的生产库**上重跑一次本脚本才生效。
+> MVC 注册、迁移时 OpenIddict Core 注册、Seed.Enabled 语义和首次签名密钥装配已在一次性 PostgreSQL 18 实例上验证：空库迁移、运行账号启动、健康检查和登录视图均可复现。**注意**：下面「数据库与权限」一节里 `signing_keys` 的权限收紧，要在**已迁移的库**上重跑一次本脚本才生效。
 
 ## 数据库与权限
 
@@ -16,7 +16,7 @@
 
 运行角色对 `signing_keys` 只有 `SELECT/INSERT/UPDATE`，**无 `DELETE`**：代码（`Infrastructure/Security/SigningKeyStore.cs`）只新增密钥、把超期密钥置 `Retired`，从无删除路径，收紧后可消除「运行账号被攻陷即抹除密钥历史」的破坏面。
 
-⚠️ **首次装机要跑两次本脚本**，顺序是：跑本脚本（建角色/库）→ 跑一次性迁移（建表）→ **再跑一次本脚本**（收紧 `signing_keys` 的 `DELETE`）。原因：`ALTER DEFAULT PRIVILEGES` 只作用于此后新建的表，而首次装机时 `signing_keys` 还不存在，第一次运行时 `REVOKE` 是空操作。脚本在这种状态下不会静默通过——结束时会在 stderr 明确打印「未完成：signing_keys 尚不存在…迁移完成后请重跑本脚本」；表存在且权限已收紧时打印「已收紧并自检通过」。脚本内的权限自检（`has_table_privilege`）属**纵深防御**：`REVOKE` 先于自检执行，正常运行中自检预期通过；若 `DELETE` 仍残留（例如授权来自 `PUBLIC` 等非直接路径，`REVOKE … FROM panda_auth` 覆盖不到），自检会以非零退出。已迁移的生产库重跑一次即生效。
+⚠️ **首次装机要跑两次本脚本**，顺序是：跑本脚本（建角色/库）→ 跑一次性迁移（建表）→ **再跑一次本脚本**（收紧 `signing_keys` 的 `DELETE`）。原因：`ALTER DEFAULT PRIVILEGES` 只作用于此后新建的表，而首次装机时 `signing_keys` 还不存在，第一次运行时 `REVOKE` 是空操作。脚本在这种状态下不会静默通过——结束时会在 stderr 明确打印「未完成：signing_keys 尚不存在…迁移完成后请重跑本脚本」；表存在且权限已收紧时打印「已收紧并自检通过」。脚本内的权限自检（`has_table_privilege`）属**纵深防御**：`REVOKE` 先于自检执行，正常运行中自检预期通过；若 `DELETE` 仍残留（例如授权来自 `PUBLIC` 等非直接路径，`REVOKE … FROM panda_auth` 覆盖不到），自检会以非零退出。已迁移的库重跑一次即生效。
 
 `signing_keys` 若被重建（例如迁移中 drop/create）同样会重新带上 `DELETE`（默认权限所致），需再重跑本脚本；本脚本幂等，可反复执行。
 
@@ -24,12 +24,12 @@
 
 每次登录尝试（含失败）都会同步写一行 `login_logs`，该表无分区，因此有明确的保留口径：
 
-- 保留期由 `Auth:Audit:RetentionDays` 配置，默认 **90 天**（生产可在 `.env` 用 `Auth__Audit__RetentionDays` 覆盖）；
+- 保留期由 `Auth:Audit:RetentionDays` 配置，默认 **90 天**（部署环境可用环境变量 `Auth__Audit__RetentionDays` 覆盖）；
 - 清理由常驻服务内的后台任务执行（`Infrastructure/Security/LoginLogRetentionService.cs`）：进程启动后立即清理一次，此后每 24 小时一次，删除 `CreatedAt` 早于「当前时间 − 保留天数」的记录，每批 500 行，避免长事务与长时间持锁；
 - 启动时会打印一条 info 日志说明该口径（保留天数、周期、批大小）；单次失败只记录错误并在下一周期重试，不会让清理任务退出；
 - `RetentionDays ≤ 0` 视为误配：任务拒绝执行并打印 warning（避免把「删光全部审计」当成合法配置）。
 
-查询当前保留口径：`docker compose -p panda-auth logs auth-server | grep 登录审计日志保留策略`。
+查询当前保留口径：在你的编排工具里查看 Server 日志并检索「登录审计日志保留策略」。
 
 ## 迁移与启动
 
@@ -37,13 +37,7 @@
 
 常驻命令 `dotnet run --project src/PandaAuth.Server` 仅使用 `ConnectionStrings:Default` 并在启动前读取密钥表。Development 可执行种子逻辑，不自动迁移；`Auth:Seed:Enabled=false` 会跳过整个 Seeder。不得把新数据库直接正常启动当成初始化流程。
 
-生产一次性迁移的固定命令（只在修复、备份和独立恢复验证完成后，在服务器 `~/app/panda-auth/deploy` 使用）：
-
-```bash
-docker compose -p panda-auth --env-file .env --env-file ~/.config/panda-auth/panda-auth.env --profile migrate run --rm auth-server-migrate
-```
-
-结构变化前用 `pg_dump -Fc` 备份到 `~/app/panda-auth/backups/pre-<变更>-<UTC时间戳>.dump`，并在临时 postgres:18 容器验证可恢复；不得覆盖生产数据库。通过一次性迁移账号执行结构变化，不依赖常驻服务启动迁移，不为运行角色扩大 DDL 权限。
+若以容器编排运行 Server：一次性迁移等价于**用同一镜像执行一次 `--migrate`**（例如 `docker compose --profile migrate run --rm <server-migrate 服务>`，具体项目名与服务名由你的编排定义），通过环境变量提供 `ConnectionStrings:Migration` 与全部种子配置。结构变化前先 `pg_dump -Fc` 备份，并在临时 postgres:18 容器验证可恢复，不得覆盖既有数据库。通过一次性迁移账号执行结构变化，不依赖常驻服务启动迁移，不为运行角色扩大 DDL 权限。
 
 ## 开发构建与验证
 
@@ -60,4 +54,4 @@ EF 工具版本在 [.config/dotnet-tools.json](../.config/dotnet-tools.json)。�
 
 ## 镜像
 
-Server 的 Dockerfile 需要工作区根上下文，以包含同级 Share；本文件不提供生产镜像发布入口。镜像、数据库、Caddy 与探活属于受控运维范围，不通过手工 push 或 scp 交付；社区用户只应使用本仓的本地构建和隔离数据库步骤。
+Server 的 Dockerfile 需要工作区根上下文，以包含同级 Share；本文件不提供生产镜像发布入口。镜像、数据库、反向代理与探活属于各部署方运维范围，不通过手工 push 或 scp 交付；社区用户只应使用本仓的本地构建和隔离数据库步骤。

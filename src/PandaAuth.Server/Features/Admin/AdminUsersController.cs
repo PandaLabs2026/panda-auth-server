@@ -15,7 +15,7 @@ namespace PandaAuth.Server.Features.Admin;
 
 /// <summary>
 /// 用户管理数据 API（admin BFF 专用，Bearer + admin 角色；路径不经公网）。
-/// 冻结/重置/角色变更/注销都联动批量吊销：令牌即时失效是 G06 的生效边界要求。
+/// 冻结/重置/角色变更/注销都联动批量吊销：令牌即时失效是既定的安全边界要求。
 /// </summary>
 [Route("~/admin-api/users")]
 [RequireConfirmedEmail]
@@ -110,7 +110,7 @@ public sealed class AdminUsersController(
         }
 
         // 部分成功也要留痕：账号一旦建成即写入审计；授角色失败时明文初始密码不返回，
-        // 响应里明确指引「重置密码」补救——审计缺失会让 G06 轨迹在第一次操作上就断链。
+        // 响应里明确指引「重置密码」补救——审计缺失会让这条安全轨迹在第一次操作上就断链。
         string? roleGrantError = null;
         if (request.GrantAdminRole)
         {

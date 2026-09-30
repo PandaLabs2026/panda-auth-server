@@ -106,7 +106,7 @@ public sealed class SeedOptions
 
 public sealed class AdminSeedOptions
 {
-    public string Email { get; set; } = "admin@pandalabs.cc";
+    public string Email { get; set; } = "admin@example.com";
 
     /// <summary>管理员初始密码；为空则跳过管理员账号创建。生产环境通过 Auth__Seed__Admin__Password 环境变量注入。</summary>
     public string Password { get; set; } = string.Empty;

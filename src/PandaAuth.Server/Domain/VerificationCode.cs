@@ -1,7 +1,7 @@
 namespace PandaAuth.Server.Domain;
 
 /// <summary>
-/// 邮箱验证码记录（忘记密码自助重置）。移植自 panda-asst-server，表结构照搬。
+/// 邮箱验证码记录（忘记密码自助重置）。
 /// 邮箱与验证码均以 SHA256 哈希入库（键可检索、明文不落库）；TTL 5 分钟；
 /// 5 次失败锁定 15 分钟；成功即消费。
 /// </summary>

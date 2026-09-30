@@ -184,7 +184,7 @@ builder.Services.AddAuthorization(options => options.AddPolicy(AdminApiAuthoriza
     policy.RequireClaim(OpenIddict.Abstractions.OpenIddictConstants.Claims.Role, PandaAuthRoles.Admin)));
 
 // Management API 作用域门禁（M0）：audience + scope 双条件，缺一拒绝；M2M 主体无角色、无 MFA step-up，
-// 替代控制是专用机密客户端、最小 scope、部署面总开关、速率限制与写审计（设计稿见元仓 2026-09-27）。
+// 替代控制是专用机密客户端、最小 scope、部署面总开关、速率限制与写审计。
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy(MgmtApiAuthorization.ClientsReadPolicy, MgmtApiAuthorization.RequireScope(MgmtApiAuthorization.ClientsReadScope));
@@ -221,7 +221,7 @@ builder.Services.AddScoped<ITokenRevoker, TokenRevocationService>();
 // 登录时间侧信道拉平用的 dummy 哈希：必须单例（只算一次哈希），校验仍用 scoped hasher。
 builder.Services.AddSingleton<DummyPasswordHash>();
 
-// ---- 邮件通道（Resend，移植自 panda-asst-server）----
+// ---- 邮件通道（Resend）----
 // 生产：缺 Email:ApiKey / Email:FromAddress 启动即失败（密钥经 compose 注入）；typed client
 // 让 HttpClient 处理器轮换由工厂管理。开发：DevEmailSender 验证码落日志，零外部依赖。
 // 注意：注册在 builder 阶段做环境判断用 builder.Environment（app 变量此时尚未创建）。
@@ -276,8 +276,8 @@ app.UseMiddleware<SecurityHeadersMiddleware>();
 // 品牌静态资源（wwwroot/brand/：登录页 favicon 与 mark），安全头之后挂载使 CSP 等头部同样覆盖静态响应。
 app.UseStaticFiles();
 
-// 公网形态（Caddy 同域分流，见元仓 WORKSPACE.md 路由表）只把 /connect/*、/account/*、/.well-known/*、
-// /healthz 分给 IDP：登录视图引用的 /brand/* 在公网会落到门户 catch-all 而 404（2026-09-19 生产实测
+// 公网形态（反向代理同域分流）只把 /connect/*、/account/*、/.well-known/*、
+// /healthz 分给 IDP：登录视图引用的 /brand/* 在公网会落到门户 catch-all 而 404（曾实测
 // logo 404、破图）。故把 wwwroot/brand 以 /account/brand 前缀再挂一份——路径天然落在 IDP 的路由表内，
 // 视图改引 /account/brand/*，不动 Caddy。本地直连 9004 时两种路径都可用。
 app.UseStaticFiles(new StaticFileOptions

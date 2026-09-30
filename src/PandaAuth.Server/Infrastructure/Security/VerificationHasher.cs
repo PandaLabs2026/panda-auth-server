@@ -4,7 +4,7 @@ using System.Text;
 namespace PandaAuth.Server.Infrastructure.Security;
 
 /// <summary>
-/// 验证码链路的两个哈希口径（移植自 panda-asst-server 的 EmailProtector.Hash / Hasher.Sha256Hex）：
+/// 验证码链路的两个哈希口径：
 /// 邮箱哈希用作频控与检索键（大小写不敏感），验证码哈希用于入库比对（明文不落库）。
 /// 均为无盐 SHA256——键的目的是检索与等值比对（非口令抗暴破），验证码本身有 5 分钟 TTL、
 /// 5 次失败锁定与双频控兜底。
