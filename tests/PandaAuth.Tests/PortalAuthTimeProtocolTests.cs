@@ -226,13 +226,14 @@ public class PortalAuthTimeProtocolTests
     private sealed class ProtocolFactory(string connection, MutableClock clock, string? codeFault, string? refreshFault)
         : WebApplicationFactory<Program>
     {
+        private readonly ProtocolHostContentRoot _root = new(connection, new Dictionary<string, string>
+        {
+            ["Auth:Issuer"] = "http://localhost", ["Auth:HttpsRequired"] = "false", ["Auth:Seed:Enabled"] = "false",
+        });
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Development");
-            builder.UseSetting("ConnectionStrings:Default", connection);
-            builder.UseSetting("Auth:Issuer", "http://localhost");
-            builder.UseSetting("Auth:HttpsRequired", "false");
-            builder.UseSetting("Auth:Seed:Enabled", "false");
+            builder.UseContentRoot(_root.Path);
             builder.ConfigureLogging(logging => logging.ClearProviders());
             builder.ConfigureTestServices(services =>
             {
@@ -260,6 +261,7 @@ public class PortalAuthTimeProtocolTests
                 });
             });
         }
+        protected override void Dispose(bool disposing) { base.Dispose(disposing); _root.Dispose(); }
     }
 
     private static void AlterTime(ClaimsPrincipal principal, string fault)
