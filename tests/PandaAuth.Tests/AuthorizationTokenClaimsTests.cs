@@ -25,7 +25,8 @@ public class AuthorizationTokenClaimsTests
         var controller = TestUserStoreHost.CreateAuthorizationController(provider);
         var user = await SeedUserWithRolesAsync(provider, "admin", "user");
 
-        var principal = await controller.CreatePrincipalAsync(user, [Scopes.OpenId, Scopes.Profile]);
+        var principal = await controller.CreatePrincipalAsync(user, [Scopes.OpenId, Scopes.Profile],
+            await TestUserStoreHost.AuthenticatedPrincipalAsync(provider, user));
 
         Assert.DoesNotContain(principal.Claims, claim => claim.Type == Claims.Role);
     }
@@ -37,7 +38,8 @@ public class AuthorizationTokenClaimsTests
         var controller = TestUserStoreHost.CreateAuthorizationController(provider);
         var user = await SeedUserWithRolesAsync(provider, "admin", "user");
 
-        var principal = await controller.CreatePrincipalAsync(user, [Scopes.OpenId, Scopes.Roles]);
+        var principal = await controller.CreatePrincipalAsync(user, [Scopes.OpenId, Scopes.Roles],
+            await TestUserStoreHost.AuthenticatedPrincipalAsync(provider, user));
 
         Assert.Equal(
             ["admin", "user"],
@@ -54,7 +56,8 @@ public class AuthorizationTokenClaimsTests
         var controller = TestUserStoreHost.CreateAuthorizationController(provider);
         var user = await SeedUserWithRolesAsync(provider, "admin");
 
-        var principal = await controller.CreatePrincipalAsync(user, [Scopes.OpenId]);
+        var principal = await controller.CreatePrincipalAsync(user, [Scopes.OpenId],
+            await TestUserStoreHost.AuthenticatedPrincipalAsync(provider, user));
 
         Assert.Equal(user.Id, principal.GetClaim(Claims.Subject));
         Assert.Equal([Scopes.OpenId], principal.GetScopes().ToArray());
@@ -70,7 +73,8 @@ public class AuthorizationTokenClaimsTests
         var controller = TestUserStoreHost.CreateAuthorizationController(provider);
         var user = await SeedUserWithRolesAsync(provider, "user");
 
-        var principal = await controller.CreatePrincipalAsync(user, [Scopes.OpenId]);
+        var principal = await controller.CreatePrincipalAsync(user, [Scopes.OpenId],
+            await TestUserStoreHost.AuthenticatedPrincipalAsync(provider, user));
 
         Assert.Equal("t0042", principal.GetClaim(PandaAuthClaims.TenantId));
         Assert.Equal("t0042.auth.pandalabs.cn", principal.GetClaim(PandaAuthClaims.TenantHost));
@@ -85,8 +89,9 @@ public class AuthorizationTokenClaimsTests
         var claims = provider.GetRequiredService<ClaimsPolicyService>();
         Assert.True((await claims.AddUserClaimAsync(user.Id, "panda:tenant", "tenant-a", "api")).Succeeded);
 
-        var withoutScope = await controller.CreatePrincipalAsync(user, [Scopes.OpenId]);
-        var withScope = await controller.CreatePrincipalAsync(user, [Scopes.OpenId, "api"]);
+        var source = await TestUserStoreHost.AuthenticatedPrincipalAsync(provider, user);
+        var withoutScope = await controller.CreatePrincipalAsync(user, [Scopes.OpenId], source);
+        var withScope = await controller.CreatePrincipalAsync(user, [Scopes.OpenId, "api"], source);
 
         Assert.DoesNotContain(withoutScope.Claims, claim => claim.Type == "panda:tenant");
         Assert.Contains(withScope.Claims, claim => claim.Type == "panda:tenant" && claim.Value == "tenant-a");

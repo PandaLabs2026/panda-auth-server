@@ -226,16 +226,17 @@ public sealed class RefreshTokenReplayProtocolTests
 
     private sealed class ProtocolFactory(string connectionString) : WebApplicationFactory<Program>
     {
+        private readonly ProtocolHostContentRoot _root = new(connectionString, new Dictionary<string, string>
+        {
+            ["Auth:Issuer"] = "http://localhost/", ["Auth:HttpsRequired"] = "false", ["Auth:Seed:Enabled"] = "false",
+            ["Logging:LogLevel:Default"] = "Warning", ["Logging:LogLevel:Microsoft.AspNetCore"] = "Warning",
+        });
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Development");
-            builder.UseSetting("ConnectionStrings:Default", connectionString);
-            builder.UseSetting("Auth:Issuer", "http://localhost/");
-            builder.UseSetting("Auth:HttpsRequired", "false");
-            builder.UseSetting("Auth:Seed:Enabled", "false");
-            builder.UseSetting("Logging:LogLevel:Default", "Warning");
-            builder.UseSetting("Logging:LogLevel:Microsoft.AspNetCore", "Warning");
+            builder.UseContentRoot(_root.Path);
         }
+        protected override void Dispose(bool disposing) { base.Dispose(disposing); _root.Dispose(); }
     }
 
     private sealed class TestDatabase(string connectionString) : IAsyncDisposable

@@ -61,11 +61,15 @@ public class LoginCookieTests
     [Fact]
     public async Task MarkMfaAsync_ReissuesTicketWithWebAuthnMethodAndTimestamp()
     {
-        using var provider = TestUserStoreHost.Create();
+        var clock = new AuthenticationClock();
+        using var provider = TestUserStoreHost.Create(clock: clock);
         var users = provider.GetRequiredService<UserService>();
         var user = new PandaUser { UserName = "alice" };
         await users.CreateAsync(user, "Strong!Pass123");
         var cookie = await IssueAsync(provider, user);
+
+        var authenticatedAt = clock.GetUtcNow().ToUnixTimeSeconds();
+        clock.Advance(TimeSpan.FromMinutes(2));
 
         using var scope = provider.CreateScope();
         var context = Context(scope.ServiceProvider, cookie);
@@ -79,6 +83,12 @@ public class LoginCookieTests
             .AuthenticateAsync(LoginSessionService.Scheme);
         Assert.Equal(MfaClaimTypes.WebAuthn, verification.Principal!.FindFirst(MfaClaimTypes.Method)!.Value);
         Assert.True(long.TryParse(verification.Principal.FindFirst(MfaClaimTypes.VerifiedAt)!.Value, out _));
+        Assert.Equal(authenticatedAt.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            verification.Principal.FindFirst(LoginSessionService.AuthenticatedAtClaim)!.Value);
+        var principal = await TestUserStoreHost.CreateAuthorizationController(provider)
+            .CreatePrincipalAsync(user, [OpenIddict.Abstractions.OpenIddictConstants.Scopes.OpenId], verification.Principal);
+        Assert.Equal(authenticatedAt.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            principal.FindFirst(OpenIddict.Abstractions.OpenIddictConstants.Claims.AuthenticationTime)!.Value);
     }
 
     [Fact]
@@ -120,5 +130,12 @@ public class LoginCookieTests
         context.Request.Path = "/connect/authorize";
         if (cookie is not null) context.Request.Headers.Cookie = cookie;
         return context;
+    }
+
+    private sealed class AuthenticationClock : TimeProvider
+    {
+        private DateTimeOffset _now = DateTimeOffset.UtcNow.AddMinutes(-3);
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan span) => _now += span;
     }
 }

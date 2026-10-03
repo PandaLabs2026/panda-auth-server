@@ -20,8 +20,21 @@ using PandaAuth.Server.Features.Account;
 using PandaAuth.Server.Infrastructure.Security;
 using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Shared;
+using PandaAuth.Server.Features.PortalClients;
 
-var builder = WebApplication.CreateBuilder(args);
+var commandMode = PortalClientCommand.Mode(args);
+if (commandMode < 0)
+{
+    Console.Error.WriteLine("portal-client-command-closed");
+    Environment.ExitCode = 1;
+    return;
+}
+var builder = WebApplication.CreateBuilder(commandMode > 0 ? [] : args);
+if (commandMode > 0)
+{
+    Environment.ExitCode = await PortalClientCommand.RunAsync(commandMode == 2, builder.Configuration, Console.Out, Console.Error);
+    return;
+}
 
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {

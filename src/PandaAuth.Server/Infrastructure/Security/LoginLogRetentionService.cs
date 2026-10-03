@@ -120,11 +120,14 @@ public sealed class LoginLogRetentionService(
     internal static async Task<int> PurgeAdminAuditAsync(
         PandaAuthDbContext dbContext, DateTimeOffset cutoff, int batchSize, CancellationToken cancellationToken)
     {
+        // Dedicated recovery/terminal records are retained; an expired operation must never become a new create.
         var removed = 0;
         while (true)
         {
             var expired = await dbContext.AdminAuditLogs
-                .Where(log => log.CreatedAt < cutoff)
+                .Where(log => log.CreatedAt < cutoff && !(log.TargetType == Features.PortalClients.PortalClientRegistrationService.TargetType &&
+                    (log.Action == Features.PortalClients.PortalClientRegistrationService.RegisterAction ||
+                     log.Action == Features.PortalClients.PortalClientRegistrationService.UnregisterAction)))
                 .OrderBy(log => log.Id)
                 .Take(batchSize)
                 .ToListAsync(cancellationToken);

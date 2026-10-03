@@ -1,8 +1,6 @@
-using System.Security.Claims;
 using Microsoft.Extensions.DependencyInjection;
 using OpenIddict.Abstractions;
 using PandaAuth.Server.Domain;
-using PandaAuth.Server.Features.Authorization;
 using PandaAuth.Server.Infrastructure.Security.Mfa;
 using Xunit;
 
@@ -18,11 +16,7 @@ public class AuthorizationMfaClaimsTests
         var user = new PandaUser { UserName = "admin" };
         await users.CreateAsync(user, "Strong!Pass123");
         var controller = TestUserStoreHost.CreateAuthorizationController(provider);
-        var source = new ClaimsPrincipal(new ClaimsIdentity(
-        [
-            new Claim(MfaClaimTypes.Method, MfaClaimTypes.WebAuthn),
-            new Claim(MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
-        ], "trusted"));
+        var source = await TestUserStoreHost.AuthenticatedPrincipalAsync(provider, user, MfaClaimTypes.WebAuthn);
 
         var principal = await controller.CreatePrincipalAsync(user, [OpenIddictConstants.Scopes.OpenId], source);
 

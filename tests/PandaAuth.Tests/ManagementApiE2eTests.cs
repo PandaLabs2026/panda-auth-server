@@ -252,22 +252,18 @@ public sealed class ManagementApiE2eTests
 
     private sealed class MgmtFactory(string connectionString, bool mgmtEnabled) : WebApplicationFactory<Program>
     {
+        private readonly ProtocolHostContentRoot _root = new(connectionString, new Dictionary<string, string>
+        {
+            ["Auth:Issuer"] = "http://localhost/", ["Auth:HttpsRequired"] = "false", ["Auth:Seed:Enabled"] = "false",
+            ["Auth:Mgmt:Enabled"] = mgmtEnabled ? "true" : "false", ["Logging:LogLevel:Default"] = "Warning",
+            ["Logging:LogLevel:Microsoft.AspNetCore"] = "Warning", ["Logging:LogLevel:OpenIddict"] = mgmtEnabled ? "Debug" : "Warning",
+        });
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Development");
-            builder.UseSetting("ConnectionStrings:Default", connectionString);
-            builder.UseSetting("Auth:Issuer", "http://localhost/");
-            builder.UseSetting("Auth:HttpsRequired", "false");
-            builder.UseSetting("Auth:Seed:Enabled", "false");
-            builder.UseSetting("Auth:Mgmt:Enabled", mgmtEnabled ? "true" : "false");
-            builder.UseSetting("Logging:LogLevel:Default", "Warning");
-            builder.UseSetting("Logging:LogLevel:Microsoft.AspNetCore", "Warning");
-            if (mgmtEnabled)
-            {
-                // 诊断期：OpenIddict 服务端事件落 Debug，定位 scope/audience 签发路径。
-                builder.UseSetting("Logging:LogLevel:OpenIddict", "Debug");
-            }
+            builder.UseContentRoot(_root.Path);
         }
+        protected override void Dispose(bool disposing) { base.Dispose(disposing); _root.Dispose(); }
     }
 
     private sealed class TestDatabase(string connectionString) : IAsyncDisposable
