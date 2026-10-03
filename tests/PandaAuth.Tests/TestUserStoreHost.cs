@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Authentication;
+using System.Security.Claims;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -25,7 +27,7 @@ namespace PandaAuth.Tests;
 internal static class TestUserStoreHost
 {
     internal static ServiceProvider Create(
-        AuthOptions? options = null, IPasswordHasher? passwordHasher = null)
+        AuthOptions? options = null, IPasswordHasher? passwordHasher = null, TimeProvider? clock = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -59,6 +61,8 @@ internal static class TestUserStoreHost
         {
             services.AddSingleton(passwordHasher);
         }
+
+        if (clock is not null) services.AddSingleton(clock);
 
         return services.BuildServiceProvider();
     }
@@ -103,6 +107,27 @@ internal static class TestUserStoreHost
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { RequestServices = provider } },
         };
+
+    internal static async Task<ClaimsPrincipal> AuthenticatedPrincipalAsync(
+        ServiceProvider provider, PandaUser user, string? mfaMethod = null)
+    {
+        using var issueScope = provider.CreateScope();
+        var context = new DefaultHttpContext { RequestServices = issueScope.ServiceProvider };
+        context.Request.Scheme = "https";
+        context.Request.Host = new HostString("localhost");
+        var sessions = issueScope.ServiceProvider.GetRequiredService<LoginSessionService>();
+        if (mfaMethod is null) await sessions.SignInAsync(context, user, false);
+        else await sessions.SignInWithMfaAsync(context, user, mfaMethod);
+
+        using var verificationScope = provider.CreateScope();
+        var verification = new DefaultHttpContext { RequestServices = verificationScope.ServiceProvider };
+        verification.Request.Scheme = "https";
+        verification.Request.Host = new HostString("localhost");
+        verification.Request.Headers.Cookie = context.Response.Headers.SetCookie.Single()!.Split(';')[0];
+        var ticket = await verification.AuthenticateAsync(LoginSessionService.Scheme);
+        if (!ticket.Succeeded) throw new InvalidOperationException("Test login cookie did not authenticate.");
+        return ticket.Principal!;
+    }
 }
 
 internal sealed class NoopTokenRevoker : ITokenRevoker

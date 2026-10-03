@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Security.Claims;
 using Microsoft.AspNetCore;
 using Microsoft.AspNetCore.Authentication;
@@ -50,6 +51,15 @@ public sealed class AuthorizationController(
                 LoginSessionService.Scheme);
         }
 
+        // Legacy or malformed cookies must establish a new real login, never synthesize "now".
+        if (!TryReadAuthenticationTime(authResult.Principal, LoginSessionService.AuthenticatedAtClaim, out _))
+        {
+            await signInManager.SignOutAsync(HttpContext);
+            return Challenge(
+                new AuthenticationProperties { RedirectUri = Request.Path + Request.QueryString },
+                LoginSessionService.Scheme);
+        }
+
         var user = await userManager.GetUserAsync(authResult.Principal!);
         if (user is null || user.Status != UserStatus.Active)
         {
@@ -94,6 +104,11 @@ public sealed class AuthorizationController(
 
         // 授权码 / 刷新令牌：从票据中恢复用户并校验账号状态（冻结/注销立即失效）。
         var authResult = await HttpContext.AuthenticateAsync(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+        if (!authResult.Succeeded ||
+            !TryReadAuthenticationTime(authResult.Principal, Claims.AuthenticationTime, out _))
+        {
+            return InvalidGrant("授权票据缺少有效的原始认证时间。");
+        }
         var userId = authResult.Principal?.GetClaim(Claims.Subject);
         if (string.IsNullOrEmpty(userId))
         {
@@ -106,7 +121,8 @@ public sealed class AuthorizationController(
             return InvalidGrant("账号不存在或已被冻结。");
         }
 
-        var principal = await CreatePrincipalAsync(user, authResult.Principal!.GetScopes(), authResult.Principal);
+        var principal = await CreatePrincipalAsync(user, authResult.Principal!.GetScopes(), authResult.Principal,
+            Claims.AuthenticationTime);
         return SignIn(principal, OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
     }
 
@@ -180,13 +196,20 @@ public sealed class AuthorizationController(
     }
 
     // internal 而非 private：签发给 AT 的声明集合属对外契约（角色受 roles scope 约束），需要可测。
-    internal async Task<ClaimsPrincipal> CreatePrincipalAsync(PandaUser user, ImmutableArray<string> scopes, ClaimsPrincipal? mfaSource = null)
+    internal async Task<ClaimsPrincipal> CreatePrincipalAsync(PandaUser user, ImmutableArray<string> scopes,
+        ClaimsPrincipal? mfaSource = null, string authenticationTimeClaim = LoginSessionService.AuthenticatedAtClaim)
     {
+        // Callers select only the validated login-cookie or OpenIddict-ticket claim, explicitly.
+        if (!TryReadAuthenticationTime(mfaSource, authenticationTimeClaim, out var authenticatedAt))
+            throw new InvalidOperationException("A valid original authentication time is required.");
+
         var identity = new ClaimsIdentity(
             TokenValidationParameters.DefaultAuthenticationType, Claims.Name, Claims.Role);
 
         identity.AddClaim(new Claim(Claims.Subject, user.Id));
         identity.AddClaim(new Claim(Claims.Name, user.UserName ?? user.Id));
+        identity.AddClaim(new Claim(Claims.AuthenticationTime,
+            authenticatedAt.ToString(CultureInfo.InvariantCulture), ClaimValueTypes.Integer64));
 
         if (tenantContextAccessor.Current is { } tenant)
         {
@@ -230,8 +253,22 @@ public sealed class AuthorizationController(
         identity.SetScopes(scopes);
 
         var principal = new ClaimsPrincipal(identity);
-        principal.SetDestinations(static _ => [Destinations.AccessToken]);
+        principal.SetDestinations(claim => claim.Type switch
+        {
+            Claims.AuthenticationTime => [Destinations.IdentityToken],
+            Claims.Name when principal.HasScope(Scopes.Profile) => [Destinations.AccessToken, Destinations.IdentityToken],
+            _ => [Destinations.AccessToken],
+        });
         return principal;
+    }
+
+    private static bool TryReadAuthenticationTime(ClaimsPrincipal? source, string claimType, out long seconds)
+    {
+        seconds = 0;
+        var claims = source?.FindAll(claimType).Take(2).ToArray();
+        return claims is { Length: 1 } &&
+            long.TryParse(claims[0].Value, NumberStyles.None, CultureInfo.InvariantCulture, out seconds) &&
+            seconds is >= 0 and <= 253_402_300_799;
     }
 
     private IActionResult InvalidGrant(string description)

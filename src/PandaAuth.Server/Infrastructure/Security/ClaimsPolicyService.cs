@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
+using OpenIddict.Abstractions;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Persistence;
 
@@ -11,6 +12,8 @@ public sealed class ClaimsPolicyService(PandaAuthDbContext db)
     [
         "sub", "role", "amr", "panda_mfa_at", LoginSessionService.StampClaim,
         ClaimTypes.NameIdentifier, ClaimTypes.Name, ClaimTypes.Email,
+        OpenIddictConstants.Claims.AuthenticationTime, OpenIddictConstants.Claims.Name,
+        LoginSessionService.AuthenticatedAtClaim,
     ];
 
     public async Task<AccountResult> AddUserClaimAsync(
@@ -95,6 +98,8 @@ public sealed class ClaimsPolicyService(PandaAuthDbContext db)
             .ToListAsync();
 
         return userClaims.Concat(roleClaims)
+            // Historical/imported rows may predate write validation. They cannot supply trusted claims.
+            .Where(claim => !Reserved.Contains(claim.ClaimType))
             .Select(claim => new Claim(claim.ClaimType, claim.ClaimValue))
             .ToArray();
     }
