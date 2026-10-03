@@ -15,11 +15,11 @@
 
 `machine.json` 只读 mount自已登记 HOST `/home/jiayuhu/app/pandalabs/machine.json`；实际 owner1003、nonlink、单 hardlink，禁止 group/other写；允许现有非秘密 marker0644，`machine_id` 必须为 `tcloud-sh-01`。不得 chmod/chown 全局 provider。一次性命令仅挂 protected input和受控 existing Default env；不挂 DP/signing key 或其它应用数据。
 
-JSON为闭合对象，递归拒绝重复键（包括嵌套对象）、未知请求字段、错误类型及深度>8。UTF-8原字节 SHA256覆盖空白/顺序；重试必须保留完整原文件。
+JSON为闭合对象，递归拒绝重复键（包括嵌套对象）、未知请求字段、错误类型及深度>8；所有受控字符串拒绝控制字符，格式检查锚定绝对结束（包括回滚digest）。UTF-8原字节 SHA256覆盖空白/顺序；重试必须保留完整原文件。
 
-共同必需字段：`schemaVersion`（整数1）、`deploymentKind`=`legacy-t0000-portal`、`tenantId`=`t0000`、`zone`=`s001`、`machineId`=`tcloud-sh-01`、`operationId`（canonical lowercase UUID-D）、`authMetaSource`/`authServerSource`（完整40 lowercase SHA）、`planReference`/`executionReference`（安全 ASCII引用）、`executor`=`jiayuhu@tcloud-sh-01`、`maintenanceStartUtc`/`maintenanceEndUtc`/`validUntilUtc`（严格 `yyyy-MM-ddTHH:mm:ssZ`）。维护窗口为正、最多24h，validUntil不早于窗口结束且距开始最多90天。首次写入必须处于窗口；恢复可在窗口后但不能超过请求及原记录有效期。
+共同必需字段：`schemaVersion`（整数1）、`deploymentKind`=`legacy-t0000-portal`、`tenantId`=`t0000`、`zone`=`s001`、`machineId`=`tcloud-sh-01`、`operationId`（非空 canonical lowercase UUID-D）、`authMetaSource`/`authServerSource`（严格非全零的40位小写十六进制 SHA）、`planReference`/`executionReference`（1–128字符安全 ASCII引用）、`executor`=`jiayuhu@tcloud-sh-01`、`maintenanceStartUtc`/`maintenanceEndUtc`/`validUntilUtc`（严格 `yyyy-MM-ddTHH:mm:ssZ`）。维护窗口为正、最多24h，validUntil不早于窗口结束且距开始最多90天。首次写入必须处于窗口；恢复可在窗口后但不能超过请求及原记录有效期。
 
-登记另需 `issuer`=`https://t0000-auth.s001.pandalabs.cn/`、`redirectUri`=`https://t0000.s001.pandalabs.cn/callback`、`postLogoutRedirectUri`=`https://t0000.s001.pandalabs.cn/callback/logout`。`clientId`可省略由产品实际生成，或 owner批准的3–64 ASCII字母/数字/dot/underscore/hyphen。回滚另需原 receipt中的 `clientId`、`requestDigest`、`registrationDigest`，无 issuer/URI字段；请求自己的原字节 digest另行绑定。
+登记另需 `issuer`=`https://t0000-auth.s001.pandalabs.cn/`、`redirectUri`=`https://t0000.s001.pandalabs.cn/callback`、`postLogoutRedirectUri`=`https://t0000.s001.pandalabs.cn/callback/logout`。`clientId`可省略由产品实际生成，或 owner批准的3–64 ASCII字母/数字/dot/underscore/hyphen，首位必须为字母或数字。回滚另需原 receipt中的 `clientId`、`requestDigest`、`registrationDigest`，无 issuer/URI字段；请求自己的原字节 digest另行绑定。
 
 ## 事务、恢复和回滚
 

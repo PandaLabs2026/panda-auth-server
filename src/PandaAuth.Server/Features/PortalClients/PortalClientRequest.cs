@@ -29,7 +29,7 @@ internal sealed record PortalClientRequest(JsonElement Json, string Digest, bool
     { if (!condition) throw new PortalClientClosedException(code); }
     internal static DateTimeOffset Utc(string value)
     {
-        Require(Regex.IsMatch(value, "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", RegexOptions.CultureInvariant));
+        Require(Regex.IsMatch(value, @"\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\z", RegexOptions.CultureInvariant));
         Require(DateTimeOffset.TryParseExact(value, "yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture,
             DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var result));
         return result;
@@ -64,18 +64,23 @@ internal sealed record PortalClientRequest(JsonElement Json, string Digest, bool
         var keys = json.EnumerateObject().Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
         Require(required.IsSubsetOf(keys) && keys.All(k => required.Contains(k) || !unregister && k == "clientId"));
         Require(json.GetProperty("schemaVersion").GetRawText() == "1");
-        foreach (var property in json.EnumerateObject().Where(p => p.Name != "schemaVersion")) Require(property.Value.ValueKind == JsonValueKind.String);
+        foreach (var property in json.EnumerateObject().Where(p => p.Name != "schemaVersion"))
+        {
+            Require(property.Value.ValueKind == JsonValueKind.String);
+            Require(!property.Value.GetString()!.Any(char.IsControl));
+        }
         var request = new PortalClientRequest(json, Hash(raw), unregister);
         Require(request["deploymentKind"] == Kind && request["tenantId"] == "t0000" && request["zone"] == "s001" && request["machineId"] == "tcloud-sh-01");
-        Require(Guid.TryParseExact(request.OperationId, "D", out var operation) && operation.ToString("D") == request.OperationId);
+        Require(Guid.TryParseExact(request.OperationId, "D", out var operation) && operation != Guid.Empty && operation.ToString("D") == request.OperationId);
         Require(request["executor"] == Executor);
-        foreach (var name in new[] { "authMetaSource", "authServerSource" }) Require(Regex.IsMatch(request[name], "^[0-9a-f]{40}$", RegexOptions.CultureInvariant));
-        foreach (var name in new[] { "planReference", "executionReference" }) Require(Regex.IsMatch(request[name], "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$", RegexOptions.CultureInvariant));
-        if (request.ClientId is { } id) Require(Regex.IsMatch(id, "^[A-Za-z0-9._-]{3,64}$", RegexOptions.CultureInvariant));
+        foreach (var name in new[] { "authMetaSource", "authServerSource" })
+            Require(Regex.IsMatch(request[name], @"\A[0-9a-f]{40}\z", RegexOptions.CultureInvariant) && request[name].Any(c => c != '0'));
+        foreach (var name in new[] { "planReference", "executionReference" }) Require(Regex.IsMatch(request[name], @"\A[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\z", RegexOptions.CultureInvariant));
+        if (request.ClientId is { } id) Require(Regex.IsMatch(id, @"\A[A-Za-z0-9][A-Za-z0-9._-]{2,63}\z", RegexOptions.CultureInvariant));
         var start = Utc(request["maintenanceStartUtc"]); var end = Utc(request["maintenanceEndUtc"]); var valid = Utc(request["validUntilUtc"]);
         Require(start < end && end <= valid && end - start <= TimeSpan.FromDays(1) && valid - start <= TimeSpan.FromDays(90) && now <= valid, "expired-request");
         if (unregister)
-            foreach (var name in new[] { "requestDigest", "registrationDigest" }) Require(Regex.IsMatch(request[name], "^[0-9a-f]{64}$", RegexOptions.CultureInvariant));
+            foreach (var name in new[] { "requestDigest", "registrationDigest" }) Require(Regex.IsMatch(request[name], @"\A[0-9a-f]{64}\z", RegexOptions.CultureInvariant));
         else Require(request["issuer"] == Issuer && request["redirectUri"] == Callback && request["postLogoutRedirectUri"] == LogoutCallback);
         return request;
     }

@@ -7,6 +7,74 @@ namespace PandaAuth.Tests;
 
 public class PortalClientRegistrationTests
 {
+    [Theory]
+    [InlineData("clientId", ".portal")]
+    [InlineData("operationId", "00000000-0000-0000-0000-000000000000")]
+    [InlineData("planReference", "long-reference")]
+    [InlineData("executionReference", "long-reference")]
+    [InlineData("authServerSource", "newline-source")]
+    [InlineData("clientId", "owned-public\n")]
+    [InlineData("authMetaSource", "zero-source")]
+    [InlineData("authServerSource", "zero-source")]
+    public void FrozenConsumerValues_RejectBeforeAnyRegistration(string field, string value)
+    {
+        var fields = RequestFields(false);
+        fields[field] = value switch { "long-reference" => new string('a', 129), "newline-source" => new string('b', 40) + "\n", "zero-source" => new string('0', 40), _ => value };
+        Assert.Throws<PortalClientClosedException>(() => PortalClientRequest.Parse(JsonSerializer.SerializeToUtf8Bytes(fields), false, DateTimeOffset.UtcNow));
+    }
+
+    public static IEnumerable<object[]> ControlledStrings()
+    {
+        foreach (var rollback in new[] { false, true })
+            foreach (var field in RequestFields(rollback).Keys.Where(key => key != "schemaVersion"))
+                yield return new object[] { rollback, field };
+    }
+
+    [Theory]
+    [MemberData(nameof(ControlledStrings))]
+    public void EveryControlledString_RegisterAndRollback_RejectsTrailingControl(bool rollback, string field)
+    {
+        var fields = RequestFields(rollback);
+        fields[field] = fields[field]!.ToString() + "\n";
+        Assert.Throws<PortalClientClosedException>(() => PortalClientRequest.Parse(JsonSerializer.SerializeToUtf8Bytes(fields), rollback, DateTimeOffset.UtcNow));
+    }
+
+    [Theory]
+    [InlineData(false, 3, 1)]
+    [InlineData(false, 64, 128)]
+    [InlineData(true, 3, 1)]
+    [InlineData(true, 64, 128)]
+    public void FrozenConsumerValues_AcceptExactBoundariesWithoutChangingRawDigestOrReceipt(bool rollback, int idLength, int referenceLength)
+    {
+        var fields = RequestFields(rollback);
+        fields["clientId"] = "A" + new string('_', idLength - 1);
+        fields["planReference"] = new string('a', referenceLength); fields["executionReference"] = new string('b', referenceLength);
+        fields["operationId"] = "00000000-0000-0000-0000-000000000001";
+        fields["authMetaSource"] = new string('0', 39) + "1"; fields["authServerSource"] = new string('0', 39) + "a";
+        var raw = JsonSerializer.SerializeToUtf8Bytes(fields);
+        var request = PortalClientRequest.Parse(raw, rollback, DateTimeOffset.UtcNow);
+        Assert.Equal(PortalClientRequest.Hash(raw), request.Digest);
+        Assert.Equal(PortalClientRequest.Executor, request["executor"]);
+        if (rollback) return;
+        using var receipt = JsonDocument.Parse(PortalClientRequest.Receipt(request, PortalClientRequest.Descriptor(request.ClientId!), "created", DateTimeOffset.UtcNow));
+        foreach (var name in new[] { "clientId", "operationId", "authMetaSource", "authServerSource", "planReference", "executionReference", "executor" })
+            Assert.Equal(request[name], receipt.RootElement.GetProperty(name).GetString());
+        Assert.Equal(request.Digest, receipt.RootElement.GetProperty("requestDigest").GetString());
+    }
+
+    private static Dictionary<string, object?> RequestFields(bool rollback)
+    {
+        var raw = PortalClientRegistrationPostgresTests.Request("owned-public");
+        var fields = JsonSerializer.Deserialize<Dictionary<string, object?>>(raw)!;
+        if (rollback)
+        {
+            foreach (var field in new[] { "issuer", "redirectUri", "postLogoutRedirectUri" }) fields.Remove(field);
+            fields["requestDigest"] = PortalClientRequest.Hash(raw);
+            fields["registrationDigest"] = PortalClientRequest.RegistrationDigest(PortalClientRequest.Descriptor("owned-public"));
+        }
+        return fields;
+    }
+
     [Fact]
     public void RegistrationDigest_HasExactOrderedAsciiVectorAndNoSecretOrOperationFields()
     {
