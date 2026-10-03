@@ -22,6 +22,13 @@ using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Shared;
 using PandaAuth.Server.Features.PortalClients;
 
+if (args.Length == 1 && args[0] == "--register-website-admin")
+{
+    var registrationBuilder = WebApplication.CreateBuilder([]);
+    Environment.ExitCode = await PandaAuth.Server.Features.WebsiteAdmin.WebsiteAdminClientCommand.RunAsync(registrationBuilder.Configuration);
+    return;
+}
+
 var commandMode = PortalClientCommand.Mode(args);
 if (commandMode < 0)
 {
