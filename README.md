@@ -1,27 +1,26 @@
 # panda-auth-server
 
-**PandaAuth by PandaLabs** · [English](README.en.md)
+**PandaAuth by PandaLabs** · [简体中文](README.zh-CN.md)
 
-**官方主页 [pandalabs.cc](https://pandalabs.cc/products/panda-auth/)** · 中文官网 [pandalabs.cn](https://pandalabs.cn/products/panda-auth/) · [PandaLabs 产品矩阵](https://pandalabs.cc/products/)
+**Official page [pandalabs.cc](https://pandalabs.cc/products/panda-auth/)** · Chinese site [pandalabs.cn](https://pandalabs.cn/products/panda-auth/) · [PandaLabs product suite](https://pandalabs.cc/products/)
 
-> PandaAuth 套件当前为 **Community Preview 0.2.0-preview.1**：已部署生产、面向早期社区试用；稳定版 Community Release 1.0.0 尚未发布。接入采用邀请或申请口径。
+> The PandaAuth suite is currently in **Community Preview 0.2.0-preview.1** — deployed in production and open to early community users. The stable Community Release 1.0.0 has not shipped yet. Access is by invitation or request.
 
-## 职责与边界
+## Responsibility and boundaries
 
-PandaAuth IDP 核心：自研用户与角色存储层、EF Core/PostgreSQL 与 OpenIddict 7.7.0。持久化、迁移、登录控制器和服务测试归本仓；跨进程契约引用同级 [panda-auth-share](https://github.com/PandaLabs2026/panda-auth-share)。ASP.NET Core Identity 不再作为运行时用户存储权威。
+PandaAuth's IDP core uses a self-owned user and role store, EF Core/PostgreSQL and OpenIddict 7.7.0. Persistence, migrations, login controllers and service tests belong here; cross-process contracts come from sibling [panda-auth-share](https://github.com/PandaLabs2026/panda-auth-share). ASP.NET Core Identity is no longer the runtime user-store authority.
 
-## 当前实现与限制
+## Current implementation and limitations
 
-- [协议注册](src/PandaAuth.Server/Program.cs)启用授权码配合 PKCE、客户端凭证和刷新令牌；配置 authorize/token/userinfo/logout/introspect/revoke 端点。
-- [密码哈希](src/PandaAuth.Server/Infrastructure/Security/Argon2idPasswordHasher.cs)采用 Argon2id；[限流](src/PandaAuth.Server/Infrastructure/Security/LoginRateLimiter.cs)为内存 IP/账号双维固定窗口，条目按 TTL 回收；登录审计写入数据库，并由后台任务按默认 90 天的保留期清理（口径见[部署说明](deploy/README.md)）。
-- [密钥存储](src/PandaAuth.Server/Infrastructure/Security/SigningKeyStore.cs)在启动时检查签名密钥轮换，不是运行中的定时轮换；加密密钥仅在缺失时创建。新旧密钥生效需要测试。
-- [批量吊销服务](src/PandaAuth.Server/Features/Tokens/TokenRevocationService.cs)已由 `SessionSecurityService` 接入改密、冻结、角色变更、MFA 重置、外部身份解绑和注销等路径。标准 revoke 处理提交的 token；在线 token-entry validation 可使本服务 API 识别吊销状态，但不代表离线 Access Token、外部资源服务器缓存或所有 Cookie 会话即时失效。
-- [Web DemoClient](samples/PandaAuth.DemoClient)包含登录、profile、刷新、单 token 撤销和 RP 退出代码；[单元测试](tests/PandaAuth.Tests)覆盖哈希、限流（含冷启动并发放大的并发用例）、登录时间侧信道、ForwardedHeaders 取值、Seeder 与登录审计保留期，**59 例**，但不是完整协议验证。
-- [公开 Management API（M0，实施中）](src/PandaAuth.Server/Features/Management/MgmtApiAuthorization.cs)：scope 化管理面已落作用域模型（`mgmt-api` 专用机密客户端 + `mgmt.clients.read/write`、`mgmt.users.read`，绑定 `panda-mgmt-api` audience）、用户只读查询（`/mgmt/v1/users`）、客户端 CRUD（`/mgmt/v1/clients`，密钥明文仅响应一次、写审计走 `mgmt.client.*` 前缀、第一方保留客户端只读）与双维限流（[ManagementRateLimiter](src/PandaAuth.Server/Features/Management/ManagementRateLimiter.cs)：clientId+IP，读 60/写 10/密钥 6 每分钟起步，429 + Retry-After，与登录限流共用 [FixedWindowLimiterCache](src/PandaAuth.Server/Infrastructure/Security/FixedWindowLimiterCache.cs) 机械）；`Auth:Mgmt:Enabled` 默认关闭（未启用时端点对外 404），交互式客户端不得持有管理 scope。公开文档与 e2e 验证待续；端到端验证完成前不宣称公开可用。
+- [Protocol registration](src/PandaAuth.Server/Program.cs) enables Authorization Code with PKCE, Client Credentials and refresh tokens, with authorize/token/userinfo/logout/introspect/revoke endpoints configured.
+- [Password hashing](src/PandaAuth.Server/Infrastructure/Security/Argon2idPasswordHasher.cs) uses Argon2id. [Rate limiting](src/PandaAuth.Server/Infrastructure/Security/LoginRateLimiter.cs) uses in-memory IP/account fixed windows; login audits are persisted to the database.
+- [Key storage](src/PandaAuth.Server/Infrastructure/Security/SigningKeyStore.cs) checks signing-key rotation at startup, not periodically while running. Encryption keys are created only when missing; new/old key behavior needs testing.
+- A [bulk revocation service](src/PandaAuth.Server/Features/Tokens/TokenRevocationService.cs) is connected through `SessionSecurityService` to password changes, suspension, role changes, MFA reset, external-identity unlink and deletion paths. Standard revocation handles submitted tokens; online token-entry validation makes revocation effective for this service's APIs, but it does not guarantee immediate invalidation of offline access tokens, external-resource-server caches or every Cookie session.
+- The [Web DemoClient](samples/PandaAuth.DemoClient) contains login, profile, refresh, single-token revocation and RP logout code. [Unit tests](tests/PandaAuth.Tests) cover hashing, rate limiting (including a concurrent cold-start amplification case), login timing, ForwardedHeaders values, the Seeder and login-audit retention — **59 tests** — but they are not full protocol compliance.
 
-## 前置条件与构建运行
+## Prerequisites, build and run entry points
 
-需要 .NET SDK，版本选择见本仓 [global.json](global.json)（当前请求 10.0.112，允许 latestFeature roll-forward）。本仓可脱离私有元仓构建，但需将公开 Share 仓同级克隆。以下命令在本仓根目录执行。
+Use the .NET SDK selected by [global.json](global.json) (currently 10.0.112 with latestFeature roll-forward). This repository can be built without the private coordination repository, but the public Share repository must be cloned beside it. Commands below run from this repository root.
 
 ```bash
 git clone https://github.com/PandaLabs2026/panda-auth-server.git
@@ -29,30 +28,29 @@ git clone https://github.com/PandaLabs2026/panda-auth-share.git
 cd panda-auth-server
 ```
 
-需要同级 Share。运行需要独立的开发 PostgreSQL 数据库和对应权限；默认开发配置见 [appsettings.Development.json](src/PandaAuth.Server/appsettings.Development.json)。其中演示凭据仅用于隔离开发，不复制到生产或公开交付记录。
+Share must be a sibling. Running requires an isolated development PostgreSQL database and suitable privileges; defaults are in [appsettings.Development.json](src/PandaAuth.Server/appsettings.Development.json). Demo credentials are for isolated development only, not production or public delivery records.
 
 ```bash
 dotnet build PandaAuth.Server.slnx
 dotnet test tests/PandaAuth.Tests/PandaAuth.Tests.csproj
 ```
 
-以下为源码已有入口及其用途。启动阻断项已修复，但这些命令仍**不是已验收的安装步骤**（认证闭环的端到端验收未完成）：
+The following existing entry points describe intent and side effects. The startup blockers are fixed, but these commands are still **not an accepted installation sequence** (end-to-end acceptance of the authentication flow is incomplete):
 
-| 命令 | 用途与副作用 |
+| Command | Purpose and side effects |
 | --- | --- |
-| `dotnet run --project src/PandaAuth.Server -- --migrate` | 一次性迁移与种子入口；会修改数据库，失败不能推断数据库未改变。批量播种是 **upsert 对账**：会订正存量客户端（例如 me-web 的回调/登出白名单与缺省白名单不一致时会被整体替换），客户端密钥仅在库内现有哈希校验不通过时才重写 |
-| `dotnet run --project src/PandaAuth.Server` | 常驻服务，开发监听 http://localhost:9004；结构需先准备 |
-| `dotnet run --project samples/PandaAuth.DemoClient` | Web 示例，http://localhost:5201；需可用 IDP，通常在另一终端运行 |
+| `dotnet run --project src/PandaAuth.Server -- --migrate` | One-time migration/seed entry point; mutates the database. Failure does not mean the database was unchanged. Seeding is an **upsert reconciliation**: existing clients are corrected (for example me-web's redirect/post-logout whitelists are replaced wholesale when they differ from configuration), and a client secret is rewritten only when the stored hash no longer validates |
+| `dotnet run --project src/PandaAuth.Server` | Long-running server, development address http://localhost:9004; schema must already be prepared |
+| `dotnet run --project samples/PandaAuth.DemoClient` | Web sample at http://localhost:5201; requires a working IDP, normally run in another terminal |
 
-协议路径：`/connect/authorize`、`/connect/token`、`/connect/userinfo`、`/connect/logout`、`/connect/introspect`、`/connect/revoke`；发现/JWKS 由 OpenIddict 提供，健康路径 `/healthz`。端点配置存在不等于启动或协议测试通过。
+Protocol paths: `/connect/authorize`, `/connect/token`, `/connect/userinfo`, `/connect/logout`, `/connect/introspect`, `/connect/revoke`. OpenIddict supplies discovery/JWKS; health path is `/healthz`. Configured endpoints are not evidence of successful startup or protocol tests.
 
-[部署说明](deploy/README.md)记录迁移约束和现有初始化限制。生产编排在元仓，不能用常驻启动代替一次性迁移。验证码自助重置与管理 API 已实现（能力边界见上文）。
+The [deployment guide](deploy/README.md) records migration rules and current initialization limitations. Production orchestration belongs to the coordination repository; normal startup does not replace one-time migration. Self-service password reset via verification codes and the management API are implemented (see the scope notes above).
 
-## Roadmap 与治理
+## Roadmap and governance
 
-产品级路线图、发行门禁和社区/商业边界在正式公开发行前仍由维护者治理；本 README 只描述可独立复现的 Server 构建与运行边界。
+Product roadmap, release gates and community/commercial boundaries remain maintainer-governed until a formal public release. This README documents only the independently reproducible Server build and runtime boundary.
 
-- [安全政策](SECURITY.md)：选定私密报告渠道，启用状态未核验；不公开提交漏洞细节。
-- [调试材料卫生](docs/debug-material-hygiene.md)：HAR/调试输出会携带会话 Cookie 与令牌，报告问题前先脱敏；含服务端日志默认行为说明。
-- [贡献指南](CONTRIBUTING.md)：本仓检查与统一贡献规则。
-- [MIT License](LICENSE)：适用于自有代码和文档，具体范围见[许可说明](LICENSING.md)；第三方许可仍适用，品牌图片除外。
+- [Security](SECURITY.md): selected private reporting channel, enablement unverified; no public vulnerability details.
+- [Contributing](CONTRIBUTING.md): repository-specific checks and the shared contribution policy.
+- [MIT License](LICENSE) for project-owned code/documentation, subject to [license scope](LICENSING.md); third-party terms remain applicable and brand images are excluded.
