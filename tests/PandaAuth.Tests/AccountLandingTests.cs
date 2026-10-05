@@ -125,48 +125,9 @@ public class AccountLandingTests
         Assert.Equal("/me/", landed.Url);
     }
 
-    /// <summary>
-    /// 登录连续失败 5 次→锁定的端到端回归：第 5 次失败即触发锁定，锁定期内即使口令正确也被拒；
-    /// login_logs 逐次记录 failureReason，锁定次起为 locked_out。用户可见文案统一为
-    /// 「用户名或密码错误。」（文案卫生 PR 定稿：锁定文案区分度即账号存在性预言）。
-    /// </summary>
-    [Fact]
-    public async Task FiveConsecutiveFailures_LockAccountWithLockedOutAuditAndUserMessage()
-    {
-        var options = new AuthOptions();
-        // 抬高 IP/账号限流阈值：本用例聚焦 AccessFailedCount>=5 的账号锁定，别让固定窗口限流先挡住第 6 次尝试。
-        options.RateLimit.IpPerMinute = 30;
-        options.RateLimit.AccountPerMinute = 30;
-        using var provider = TestUserStoreHost.Create(options);
-        var users = provider.GetRequiredService<UserService>();
-        var user = new PandaUser { UserName = "lockout-target" };
-        await users.CreateAsync(user, CorrectPassword);
-
-        for (var attempt = 1; attempt <= 5; attempt++)
-        {
-            var view = Assert.IsType<ViewResult>(await Controller(provider).Login(
-                new LoginViewModel { UserName = user.UserName!, Password = "Wrong!Pass123" }, CancellationToken.None));
-            // 文案不区分锁定与口令错误；真实原因只落 login_logs。
-            Assert.Equal("用户名或密码错误。", ViewError(view));
-        }
-
-        // 锁定未过期时，正确口令也必须被拒（锁定检查先决于口令结果）。
-        var lockedView = Assert.IsType<ViewResult>(await Controller(provider).Login(
-            new LoginViewModel { UserName = user.UserName!, Password = CorrectPassword }, CancellationToken.None));
-        Assert.Equal("用户名或密码错误。", ViewError(lockedView));
-
-        var locked = await provider.GetRequiredService<UserService>().FindByNameAsync(user.UserName!);
-        Assert.NotNull(locked!.LockoutEnd);
-        Assert.True(locked.LockoutEnd > DateTimeOffset.UtcNow, "lockout must outlive the failing sequence");
-
-        var logs = await provider.GetRequiredService<PandaAuthDbContext>().LoginLogs
-            .OrderBy(log => log.Id).ToListAsync();
-        Assert.Equal(6, logs.Count);
-        Assert.All(logs, log => Assert.False(log.Succeeded));
-        Assert.All(logs.Take(4), log => Assert.Equal("wrong_password", log.FailureReason));
-        Assert.Equal("locked_out", logs[4].FailureReason);
-        Assert.Equal("locked_out", logs[5].FailureReason);
-    }
+    // 锁定端到端用例（5 次失败触发、锁定期内正确口令被拒、login_logs 记 locked_out）已移交
+    // fix/login-hygiene 分支的 LoginHygieneTests——其用户可见文案随该分支的文案统一改动定稿，
+    // 放在本分支会把对合并顺序的依赖（及先合并时必然失败的断言）带进本 PR。本分支只覆盖落点。
 
     // ---- 基建（与 LoginMfaChallengeTests 同构：真实服务 + InMemory 存储，逐请求新建控制器） ----
 
@@ -182,9 +143,6 @@ public class AccountLandingTests
         controller.TempData = new TempDataDictionary(controller.HttpContext, new NullTempDataProvider());
         return controller;
     }
-
-    private static string ViewError(ViewResult view)
-        => view.ViewData.ModelState[string.Empty]!.Errors.Single().ErrorMessage;
 
     /// <summary>取 MVC 管道实际使用的 TempData provider（AddControllersWithViews 注册的 Cookie 实现），
     /// 序列化细节（serializer/cookie 名）与其保持一致，round-trip 才等价于真实浏览器往返。</summary>
