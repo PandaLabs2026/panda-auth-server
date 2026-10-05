@@ -19,6 +19,7 @@ public sealed class MfaController(
     LoginSessionService sessions,
     PandaAuthDbContext db,
     ILogger<MfaController> logger,
+    LoginRateLimiter loginRateLimiter,
     MfaService? mfa = null,
     SecurityEventWriter? securityEvents = null) : Controller
 {
@@ -51,10 +52,12 @@ public sealed class MfaController(
     [HttpPost("user/reconfigure/totp/confirm")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> ConfirmLegacyTotpReconfiguration(
-        [FromBody] ConfirmTotpRequest request, CancellationToken cancellationToken)
+        [FromBody] ConfirmTotpRequest? request, CancellationToken cancellationToken)
     {
         var user = await sessions.GetReconfigurationUserAsync(HttpContext);
         if (user is null || mfa is null) return Forbid();
+        // 空 body 直接 400，而不是解引用跌成 500（与 CompleteUserPasskeyEnrollment 的既有模式一致）。
+        if (request is null) return BadRequest(new { error = "请求体缺失。" });
         try
         {
             if (!await mfa.ConfirmLegacyReconfigurationAsync(user.Id, request.FactorId, request.Code, cancellationToken))
@@ -163,6 +166,8 @@ public sealed class MfaController(
         var user = await CurrentAsync();
         if (user is null) return Forbid();
         if (request is null || request.Response is null) return BadRequest(new { error = "缺少 Passkey 响应。" });
+        // step-up 断言限流（IP+用户双维）：会话劫持下 Passkey 断言可被脚本化重试，必须先于 ceremony 消费。
+        if (RateGate(user.Id) is { } limited) return limited;
         try
         {
             await ceremonies.CompleteAssertionAsync(user, request.CeremonyId, request.Response, cancellationToken);
@@ -193,10 +198,11 @@ public sealed class MfaController(
 
     [HttpPost("user/totp/confirm")]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> ConfirmUserTotp([FromBody] ConfirmTotpRequest request, CancellationToken cancellationToken)
+    public async Task<IActionResult> ConfirmUserTotp([FromBody] ConfirmTotpRequest? request, CancellationToken cancellationToken)
     {
         var user = await CurrentAsync();
         if (user is null || mfa is null) return Forbid();
+        if (request is null) return BadRequest(new { error = "请求体缺失。" });
         if (!await mfa.ConfirmEnrollmentAsync(user.Id, User, request.FactorId, request.Code, cancellationToken))
             return BadRequest(new { error = "验证码错误或已过期。" });
         await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.Totp);
@@ -206,10 +212,14 @@ public sealed class MfaController(
 
     [HttpPost("user/totp/assert")]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> AssertUserTotp([FromBody] ConfirmTotpRequest request, CancellationToken cancellationToken)
+    public async Task<IActionResult> AssertUserTotp([FromBody] ConfirmTotpRequest? request, CancellationToken cancellationToken)
     {
         var user = await CurrentAsync();
         if (user is null || mfa is null) return Forbid();
+        if (request is null) return BadRequest(new { error = "请求体缺失。" });
+        // step-up 断言限流（IP+用户双维，与登录 MFA 挑战同策略）：六位码可暴力尝试，
+        // 会话劫持下必须先于校验拒绝；与登录挑战共用同一限流器与窗口配额。
+        if (RateGate(user.Id) is { } limited) return limited;
         if (!await mfa.VerifyAsync(user.Id, request.Code, cancellationToken))
             return BadRequest(new { error = "验证码错误、已过期或已被使用。" });
         await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.Totp);
@@ -219,10 +229,11 @@ public sealed class MfaController(
 
     [HttpPost("user/factors/revoke")]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> RevokeUserFactor([FromBody] RevokeMfaFactorRequest request, CancellationToken cancellationToken)
+    public async Task<IActionResult> RevokeUserFactor([FromBody] RevokeMfaFactorRequest? request, CancellationToken cancellationToken)
     {
         var user = await CurrentAsync();
         if (user is null || mfa is null) return Forbid();
+        if (request is null) return BadRequest(new { error = "请求体缺失。" });
         try
         {
             await mfa.RevokeFactorAsync(user.Id, request.FactorId, User, cancellationToken);
@@ -234,10 +245,11 @@ public sealed class MfaController(
 
     [HttpPost("user/recovery-codes/consume")]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> ConsumeUserRecoveryCode([FromBody] ConsumeRecoveryCodeRequest request, CancellationToken cancellationToken)
+    public async Task<IActionResult> ConsumeUserRecoveryCode([FromBody] ConsumeRecoveryCodeRequest? request, CancellationToken cancellationToken)
     {
         var user = await CurrentAsync();
         if (user is null || mfa is null) return Forbid();
+        if (request is null) return BadRequest(new { error = "请求体缺失。" });
         if (!await mfa.ConsumeRecoveryCodeAsync(user.Id, request.Code, cancellationToken))
             return BadRequest(new { error = "恢复码无效或已使用。" });
         await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.RecoveryCode);
@@ -304,11 +316,11 @@ public sealed class MfaController(
 
     [HttpPost("assertion/complete")]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> CompleteAssertion([FromBody] CompletePasskeyAssertionRequest request, CancellationToken cancellationToken)
+    public async Task<IActionResult> CompleteAssertion([FromBody] CompletePasskeyAssertionRequest? request, CancellationToken cancellationToken)
     {
         var user = await AdminAsync();
         if (user is null) return Forbid();
-        if (request.Response is null) return BadRequest(new { error = "缺少 Passkey 响应。" });
+        if (request is null || request.Response is null) return BadRequest(new { error = "缺少 Passkey 响应。" });
         try
         {
             await ceremonies.CompleteAssertionAsync(user, request.CeremonyId, request.Response, cancellationToken);
@@ -341,11 +353,12 @@ public sealed class MfaController(
 
     [HttpPost("totp/confirm")]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> ConfirmTotp([FromBody] ConfirmTotpRequest request, CancellationToken cancellationToken)
+    public async Task<IActionResult> ConfirmTotp([FromBody] ConfirmTotpRequest? request, CancellationToken cancellationToken)
     {
         var user = await AdminAsync();
         if (user is null) return Forbid();
         if (!user.EmailConfirmed) return Forbid();
+        if (request is null) return BadRequest(new { error = "请求体缺失。" });
         if (!await totpFactors.ConfirmAsync(user.Id, request.FactorId, request.Code, cancellationToken))
             return BadRequest(new { error = "验证码错误或已过期。" });
         await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.Totp);
@@ -373,6 +386,21 @@ public sealed class MfaController(
         var user = await users.GetUserAsync(User);
         return user is not null && (await users.GetRolesAsync(user)).Contains(PandaUser.AdminRole, StringComparer.OrdinalIgnoreCase)
             ? user : null;
+    }
+
+    /// <summary>
+    /// step-up 断言限流门（IP+用户双维，与 LoginMfaChallengeController 同一限流器与配额）：
+    /// 通过返回 null，被拒返回 429 + 文案。TOTP 六位码与 Passkey 断言都可脚本化重试，
+    /// 会话劫持场景必须先于业务校验拒绝。
+    /// </summary>
+    private IActionResult? RateGate(string userId)
+    {
+        using var ipLease = loginRateLimiter.AttemptMfaChallengeByIp(
+            HttpContext.Connection.RemoteIpAddress?.ToString());
+        using var userLease = loginRateLimiter.AttemptMfaChallengeByUser(userId);
+        return ipLease.IsAcquired && userLease.IsAcquired
+            ? null
+            : StatusCode(StatusCodes.Status429TooManyRequests, new { error = "尝试过于频繁，请稍后再试。" });
     }
 
     private Task<PandaUser?> CurrentAsync() => users.GetUserAsync(User);
