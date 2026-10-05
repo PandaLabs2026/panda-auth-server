@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Npgsql;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Persistence;
@@ -14,17 +15,24 @@ public sealed record AccountResult(bool Succeeded, params AccountError[] Errors)
     public static AccountResult Fail(string code, string description) => new(false, new AccountError(code, description));
 }
 
-/// <summary>Account persistence and credentials. Every mutation uses an optimistic concurrency stamp.</summary>
-public sealed class UserService(PandaAuthDbContext db, IPasswordHasher hasher, TimeProvider clock)
+/// <summary>
+/// Account persistence and credentials. Every mutation uses an optimistic concurrency stamp.
+/// 只读查找（ById/ByName）走 AsNoTracking：cookie 校验等热路径每请求一查，无变更跟踪负担；
+/// 所有变更路径都经 <see cref="UpdateAsync"/>（对游离实体显式 Attach+Modified），不受影响。
+/// 非 sealed 且查找方法 virtual：stamp 缓存行为测试以可数桩子类观测查库次数。
+/// </summary>
+public class UserService(
+    PandaAuthDbContext db, IPasswordHasher hasher, TimeProvider clock, IMemoryCache? stampCache = null)
 {
     public IQueryable<PandaUser> Users => db.Users;
     internal static string? Normalize(string? value) => value?.Normalize().ToUpperInvariant();
     public string? NormalizeEmail(string? email) => Normalize(email);
-    public Task<PandaUser?> FindByIdAsync(string id) => db.Users.SingleOrDefaultAsync(x => x.Id == id);
-    public Task<PandaUser?> FindByNameAsync(string name)
+    public virtual Task<PandaUser?> FindByIdAsync(string id)
+        => db.Users.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id);
+    public virtual Task<PandaUser?> FindByNameAsync(string name)
     {
         var normalized = Normalize(name);
-        return db.Users.SingleOrDefaultAsync(x => x.NormalizedUserName == normalized);
+        return db.Users.AsNoTracking().SingleOrDefaultAsync(x => x.NormalizedUserName == normalized);
     }
     public Task<PandaUser?> FindByEmailAsync(string email)
     {
@@ -52,11 +60,31 @@ public sealed class UserService(PandaAuthDbContext db, IPasswordHasher hasher, T
     {
         var validation = await ValidateAsync(user);
         if (!validation.Succeeded) return validation;
+        // 只读查找已改 AsNoTracking：同一作用域内「已附着旧实例 → 再更新新取的游离实例」会撞键
+        // （IdentityMap 冲突）。不可用 Detach 让旧实例出局——Detach 会级联分离其依赖实体，
+        // 把 AddRange 尚未保存的角色成员等 pending 变更一并丢弃（实测）。改为把调用方实例的
+        // 当前值转移到已跟踪实例上，后续更新以跟踪实例执行。
+        var caller = user;
+        var tracked = db.Users.Local.FirstOrDefault(existing => existing.Id == user.Id);
+        if (tracked is not null && !ReferenceEquals(tracked, user))
+        {
+            db.Entry(tracked).CurrentValues.SetValues(user);
+            user = tracked;
+        }
         db.Entry(user).Property(x => x.ConcurrencyStamp).OriginalValue = user.ConcurrencyStamp;
         user.ConcurrencyStamp = Guid.NewGuid().ToString();
         user.UpdatedAt = clock.GetUtcNow();
         db.Users.Update(user);
-        return await SaveAsync();
+        var result = await SaveAsync();
+        // 值转移到跟踪实例后，调用方实例仍是旧令牌：同请求内对同一游离实例连续两次 UpdateAsync
+        // 的既有流（如 Unlock 的清锁+清计数）会把旧令牌当 OriginalValue 重放而并发失败——
+        // 成功后把新令牌回写调用方实例，保持与旧 tracked 别名等价的语义。
+        if (result.Succeeded && !ReferenceEquals(user, caller))
+        {
+            caller.ConcurrencyStamp = user.ConcurrencyStamp;
+            caller.UpdatedAt = user.UpdatedAt;
+        }
+        return result;
     }
 
     private async Task<AccountResult> ValidateAsync(PandaUser user)
@@ -87,18 +115,34 @@ public sealed class UserService(PandaAuthDbContext db, IPasswordHasher hasher, T
     {
         var result = ValidatePassword(password);
         if (!result.Succeeded) return result;
+        var previousStamp = user.SecurityStamp;
         user.PasswordHash = hasher.Hash(password);
         user.SecurityStamp = Guid.NewGuid().ToString();
-        return await UpdateAsync(user);
+        var update = await UpdateAsync(user);
+        // 改密的契约是「旧会话立即作废」（LoginCookieTests 钉住）：stamp 短缓存里的旧键必须同步失效，
+        // 否则被偷的 cookie 在 TTL 内多活 60 秒。
+        if (update.Succeeded) InvalidateStampCache(user.Id, previousStamp);
+        return update;
     }
 
     public Task<bool> CheckPasswordAsync(PandaUser user, string password)
         => Task.FromResult(hasher.Verify(user.PasswordHash, password) != PasswordVerificationOutcome.Failed);
 
-    public Task<AccountResult> UpdateSecurityStampAsync(PandaUser user)
+    public async Task<AccountResult> UpdateSecurityStampAsync(PandaUser user)
     {
+        var previousStamp = user.SecurityStamp;
         user.SecurityStamp = Guid.NewGuid().ToString();
-        return UpdateAsync(user);
+        var update = await UpdateAsync(user);
+        // stamp 轮换即踢会话：同步作废旧 stamp 的缓存键（见 ReplacePasswordAsync 注释）。
+        if (update.Succeeded) InvalidateStampCache(user.Id, previousStamp);
+        return update;
+    }
+
+    /// <summary>stamp 轮换路径共用：旧 stamp 的 cookie 校验缓存键即时失效（无缓存宿主为 no-op）。</summary>
+    private void InvalidateStampCache(string userId, string? previousStamp)
+    {
+        if (stampCache is null || string.IsNullOrEmpty(previousStamp)) return;
+        stampCache.Remove(LoginSessionService.StampCacheKeyPrefix + userId + ":" + previousStamp);
     }
 
     public Task<AccountResult> SetLockoutEndDateAsync(PandaUser user, DateTimeOffset? end)
@@ -130,8 +174,11 @@ public sealed class UserService(PandaAuthDbContext db, IPasswordHasher hasher, T
         var current = await db.UserRoles.Where(x => x.UserId == user.Id).Select(x => x.RoleId).ToListAsync();
         db.UserRoles.AddRange(found.Where(x => !current.Contains(x.Id))
             .Select(x => new PandaUserRole { UserId = user.Id, RoleId = x.Id }));
+        var previousStamp = user.SecurityStamp;
         user.SecurityStamp = Guid.NewGuid().ToString();
-        return await UpdateAsync(user);
+        var update = await UpdateAsync(user);
+        if (update.Succeeded) InvalidateStampCache(user.Id, previousStamp);
+        return update;
     }
 
     public async Task<AccountResult> RemoveFromRoleAsync(PandaUser user, string role)
@@ -139,8 +186,11 @@ public sealed class UserService(PandaAuthDbContext db, IPasswordHasher hasher, T
         var normalized = Normalize(role);
         var ids = db.Roles.Where(x => x.NormalizedName == normalized).Select(x => x.Id);
         db.UserRoles.RemoveRange(await db.UserRoles.Where(x => x.UserId == user.Id && ids.Contains(x.RoleId)).ToListAsync());
+        var previousStamp = user.SecurityStamp;
         user.SecurityStamp = Guid.NewGuid().ToString();
-        return await UpdateAsync(user);
+        var update = await UpdateAsync(user);
+        if (update.Succeeded) InvalidateStampCache(user.Id, previousStamp);
+        return update;
     }
 
     internal async Task<AccountResult> SaveAsync()

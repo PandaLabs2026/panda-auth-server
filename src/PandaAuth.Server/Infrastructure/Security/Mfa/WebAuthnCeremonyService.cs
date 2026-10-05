@@ -76,9 +76,10 @@ public sealed class WebAuthnCeremonyService(IFido2 fido2, PandaAuthDbContext db,
         {
             AttestationResponse = response,
             OriginalOptions = options,
-            IsCredentialIdUniqueToUserCallback = async (args, ct) => !(await db.WebAuthnCredentials
-                .Select(credential => credential.CredentialId)
-                .ToListAsync(ct)).Any(credentialId => credentialId.SequenceEqual(args.CredentialId)),
+            // 唯一性判定下推为 DB 存在性查询（bytea 等值）：旧实现把整表 CredentialId 拉进内存
+            // 逐条 SequenceEqual，凭据量增长后是注册路径的隐性全表扫描。
+            IsCredentialIdUniqueToUserCallback = async (args, ct) => !await db.WebAuthnCredentials
+                .AnyAsync(credential => credential.CredentialId == args.CredentialId, ct),
         }, cancellationToken);
         var now = DateTimeOffset.UtcNow;
         var credential = new MfaWebAuthnCredential
