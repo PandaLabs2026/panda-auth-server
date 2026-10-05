@@ -64,6 +64,28 @@ public class AuthorizationTokenClaimsTests
     }
 
     [Fact]
+    public async Task Principal_WithFleetScope_CarriesScopeResourceAsAudience()
+    {
+        // 资源服务器(Fleet Server)经内省校验受众:人类令牌若不含 scope 绑定的 Resources
+        // (fleet.* → fleet-api),内省结果无 aud,OpenIddict 校验即 ID2093 一律 401。
+        using var provider = TestUserStoreHost.Create();
+        var controller = TestUserStoreHost.CreateAuthorizationController(provider);
+        var user = await SeedUserWithRolesAsync(provider, "admin");
+
+        var scopeManager = provider.GetRequiredService<IOpenIddictScopeManager>();
+        await scopeManager.CreateAsync(new OpenIddictScopeDescriptor
+        {
+            Name = "fleet.read",
+            Resources = { "fleet-api" },
+        });
+
+        var principal = await controller.CreatePrincipalAsync(user, [Scopes.OpenId, "fleet.read"],
+            await TestUserStoreHost.AuthenticatedPrincipalAsync(provider, user));
+
+        Assert.Contains("fleet-api", principal.GetResources());
+    }
+
+    [Fact]
     public async Task Principal_Carries_verified_tenant_claims_only_from_request_context()
     {
         using var provider = TestUserStoreHost.Create();

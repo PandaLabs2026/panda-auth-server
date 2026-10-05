@@ -251,6 +251,10 @@ public sealed class AuthorizationController(
         identity.AddClaims(await claimsPolicy.GetClaimsAsync(user, scopes.ToHashSet(StringComparer.Ordinal)));
 
         identity.SetScopes(scopes);
+        // audience 与机器主体同规:scope 实体的 Resources(fleet.* → fleet-api、mgmt.* → panda-mgmt-api)
+        // 随令牌投影,资源服务器据此校验受众;缺失会让人类令牌内省结果不含 aud
+        // (OpenIddict ID2093「doesn't contain any audience」),资源服务器一律 401。
+        identity.SetResources(await scopeManager.ListResourcesAsync(scopes, HttpContext.RequestAborted).ToListAsync(HttpContext.RequestAborted));
 
         var principal = new ClaimsPrincipal(identity);
         principal.SetDestinations(claim => claim.Type switch
