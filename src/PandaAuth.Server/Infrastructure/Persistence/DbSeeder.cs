@@ -83,6 +83,14 @@ public static class DbSeeder
                 permissions: OasisWebPermissions());
         }
 
+        // Fleet 管理台只部署在 Fleet 控制面（专用 PandaAuth 实例）；回调不参与租户路由展开。
+        if (options.Seed.FleetAdminWeb.Enabled)
+        {
+            await SeedFirstPartyWebApplicationAsync(
+                applications, "fleet-admin-web", "Panda Fleet 管理台", "Auth:Seed:FleetAdminWeb", options.Seed.FleetAdminWeb,
+                permissions: FleetAdminWebPermissions());
+        }
+
         if (options.Seed.Fleet.Enabled)
         {
             await SeedFleetScopesAsync(scopes);
@@ -469,6 +477,32 @@ public static class DbSeeder
         Permissions.Scopes.Email,
         Permissions.Scopes.Profile,
         Permissions.Prefixes.Scope + Scopes.OfflineAccess,
+        Requirements.Features.ProofKeyForCodeExchange,
+    ];
+
+    /// <summary>
+    /// fleet-admin-web 权限集 = 第一方 Web 基础集（含 roles scope 与 Introspection/Revocation 端点）
+    /// + fleet.* 委托作用域四项：管理台以 BFF 形态代表操作者调用 Fleet Server，
+    /// scope 的 Resources 指向 fleet-api（SeedFleetScopesAsync），token 受众由此落到 fleet-api。
+    /// roles 保留：Fleet 操作审计的 actor 断言需要角色声明。
+    /// </summary>
+    private static string[] FleetAdminWebPermissions() =>
+    [
+        Permissions.Endpoints.Authorization,
+        Permissions.Endpoints.Token,
+        Permissions.Endpoints.EndSession,
+        Permissions.Endpoints.Revocation,
+        Permissions.GrantTypes.AuthorizationCode,
+        Permissions.GrantTypes.RefreshToken,
+        Permissions.ResponseTypes.Code,
+        Permissions.Scopes.Email,
+        Permissions.Scopes.Profile,
+        Permissions.Scopes.Roles,
+        Permissions.Prefixes.Scope + Scopes.OfflineAccess,
+        Permissions.Prefixes.Scope + "fleet.read",
+        Permissions.Prefixes.Scope + "fleet.allocate",
+        Permissions.Prefixes.Scope + "fleet.apply",
+        Permissions.Prefixes.Scope + "fleet.server.manage",
         Requirements.Features.ProofKeyForCodeExchange,
     ];
 
