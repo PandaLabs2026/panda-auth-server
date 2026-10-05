@@ -177,7 +177,7 @@ public sealed class LoginMfaChallengeController(
         });
     }
 
-    private string SafeReturnUrl(string? returnUrl) => Url.IsLocalUrl(returnUrl) ? returnUrl! : "/";
+    private string SafeReturnUrl(string? returnUrl) => Url.IsLocalUrl(returnUrl) ? returnUrl! : "/me/";
 
     private Task RecordSecurityEventAsync(
         string eventType, string userId, string authenticationMethod, CancellationToken cancellationToken)
