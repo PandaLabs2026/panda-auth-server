@@ -170,14 +170,20 @@ public class ManagementClientsControllerTests
     [Fact]
     public async Task ReservedClients_ReadOnlyThroughManagementApi()
     {
-        var (controller, _, _) = Create();
-
-        Assert.Equal(StatusCodes.Status400BadRequest,
-            ((ObjectResult)await controller.Update("mgmt-api", new ManagementUpdateClientRequest("x", null, null), CancellationToken.None)).StatusCode);
-        Assert.Equal(StatusCodes.Status400BadRequest,
-            ((ObjectResult)await controller.ResetSecret("admin-web", CancellationToken.None)).StatusCode);
-        Assert.Equal(StatusCodes.Status400BadRequest,
-            ((ObjectResult)await controller.Delete("me-web", CancellationToken.None)).StatusCode);
+        // 对第一方保留名单（FirstPartyClients.All，与 DbSeeder 共引）逐 id 断言三个写路径全部 4xx，
+        // 防止播种清单扩张后保护名单漏项（PR 前 oasis-web/asst 族/website-admin 均可被写入）。
+        // 每 id 新建控制器：限流器随之新建（真实部署各调用方各自有窗额），逐 id 断言不被 429 掩盖。
+        foreach (var clientId in FirstPartyClients.All)
+        {
+            var (controller, _, _) = Create();
+            Assert.Equal(StatusCodes.Status400BadRequest,
+                ((ObjectResult)await controller.Update(
+                    clientId, new ManagementUpdateClientRequest("x", null, null), CancellationToken.None)).StatusCode);
+            Assert.Equal(StatusCodes.Status400BadRequest,
+                ((ObjectResult)await controller.ResetSecret(clientId, CancellationToken.None)).StatusCode);
+            Assert.Equal(StatusCodes.Status400BadRequest,
+                ((ObjectResult)await controller.Delete(clientId, CancellationToken.None)).StatusCode);
+        }
     }
 
     [Fact]

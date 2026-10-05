@@ -33,11 +33,12 @@ public sealed partial class ManagementClientsController(
     internal const int MaxPageSize = 50;
     internal const int DefaultPageSize = 20;
 
-    /// <summary>第一方/平台级客户端：管理 API 一律拒绝写入（与种子对账职责冲突）。</summary>
-    private static readonly HashSet<string> ReservedClientIds = new(StringComparer.Ordinal)
-    {
-        "me-web", "admin-web", "mgmt-api", "fleet-api",
-    };
+    /// <summary>
+    /// 第一方/平台级客户端：管理 API 一律拒绝写入（与种子对账职责冲突）。
+    /// 单一事实源在 <see cref="FirstPartyClients"/>（与 DbSeeder 共引）——DbSeeder/宿主命令
+    /// 播种与注册的全部第一方 clientId 都必须在此，防止播种清单与保护名单漂移。
+    /// </summary>
+    private static readonly HashSet<string> ReservedClientIds = new(FirstPartyClients.All, StringComparer.Ordinal);
 
     [HttpGet]
     [Authorize(Policy = MgmtApiAuthorization.ClientsReadPolicy)]
