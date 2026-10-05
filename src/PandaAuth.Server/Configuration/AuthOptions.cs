@@ -101,6 +101,14 @@ public sealed class SeedOptions
 
     public FleetAdminWebSeedOptions FleetAdminWeb { get; set; } = new();
 
+    public AsstWebSeedOptions AsstWeb { get; set; } = new();
+
+    public AsstAdminSeedOptions AsstAdmin { get; set; } = new();
+
+    public AsstMobileSeedOptions AsstMobile { get; set; } = new();
+
+    public AsstServerSeedOptions AsstServer { get; set; } = new();
+
     public FleetSeedOptions Fleet { get; set; } = new();
 
     public MgmtSeedOptions Mgmt { get; set; } = new();
@@ -167,6 +175,54 @@ public sealed class FleetAdminWebSeedOptions : FirstPartyWebSeedOptions
 {
     /// <summary>默认关闭；生产经 Auth__Seed__FleetAdminWeb__Enabled 显式开启。</summary>
     public override bool Enabled { get; set; }
+}
+
+// ---- Panda Assistant 客户端族（PANDA-INFRA-R1，panda-asst ADR 0095）----
+// 默认全部关闭：仅以 PandaAuth 为租户 IdP 的 panda-asst 实例（t####-auth）显式开启。
+
+/// <summary>
+/// asst-web（panda-asst-webapp BFF）：机密客户端，授权码 + PKCE + 刷新令牌；
+/// 回调租户展开按 TenantProduct.PandaAssistant 绑定（t####-asst.sNNN 主机，callbackArea=app）。
+/// 权限集同 oasis-web 形态：无 roles（授权在 asst 本地）、无内省端点。
+/// </summary>
+public sealed class AsstWebSeedOptions : FirstPartyWebSeedOptions
+{
+    /// <summary>默认关闭；panda-asst 租户实例经 Auth__Seed__AsstWeb__Enabled 显式开启。</summary>
+    public override bool Enabled { get; set; }
+}
+
+/// <summary>asst-admin（panda-asst-admin BFF）：同 asst-web，callbackArea=admin。</summary>
+public sealed class AsstAdminSeedOptions : FirstPartyWebSeedOptions
+{
+    /// <summary>默认关闭；panda-asst 租户实例经 Auth__Seed__AsstAdmin__Enabled 显式开启。</summary>
+    public override bool Enabled { get; set; }
+}
+
+/// <summary>
+/// asst-mobile（panda-asst-mobile）：公共客户端（无密钥），授权码 + 强制 PKCE + 刷新令牌；
+/// 回调为 App Links（https://t####-asst.sNNN.pandalabs.cn/app/callback/mobile），经配置注入，
+/// 不做租户展开（移动端回调域随部署配置走）。
+/// </summary>
+public sealed class AsstMobileSeedOptions
+{
+    /// <summary>默认关闭；panda-asst 租户实例经 Auth__Seed__AsstMobile__Enabled 显式开启。</summary>
+    public bool Enabled { get; set; }
+
+    public string[] RedirectUris { get; set; } = [];
+
+    public string[] PostLogoutRedirectUris { get; set; } = [];
+}
+
+/// <summary>
+/// asst-server（panda-asst-server 资源方）：机密客户端，仅内省端点权限——
+/// 换发端点 POST /api/v1/auth/oidc/exchange 以本客户端凭据对用户令牌做一次性 introspection。
+/// </summary>
+public sealed class AsstServerSeedOptions
+{
+    /// <summary>默认关闭；panda-asst 租户实例经 Auth__Seed__AsstServer__Enabled 显式开启。</summary>
+    public bool Enabled { get; set; }
+
+    public string ClientSecret { get; set; } = string.Empty;
 }
 
 public sealed class FleetSeedOptions

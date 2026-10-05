@@ -91,6 +91,32 @@ public static class DbSeeder
                 permissions: FleetAdminWebPermissions());
         }
 
+        // Panda Assistant 客户端族（PANDA-INFRA-R1，panda-asst ADR 0095）：默认关闭，
+        // 仅 panda-asst 租户实例（t####-auth）显式开启；asst 回调展开按 PandaAssistant 绑定。
+        if (options.Seed.AsstWeb.Enabled)
+        {
+            await SeedFirstPartyWebApplicationAsync(
+                applications, "asst-web", "熊猫助理工作台", "Auth:Seed:AsstWeb", options.Seed.AsstWeb,
+                options.TenantRouting, "app", AsstClientPermissions(), TenantProduct.PandaAssistant);
+        }
+
+        if (options.Seed.AsstAdmin.Enabled)
+        {
+            await SeedFirstPartyWebApplicationAsync(
+                applications, "asst-admin", "熊猫助理管理后台", "Auth:Seed:AsstAdmin", options.Seed.AsstAdmin,
+                options.TenantRouting, "admin", AsstClientPermissions(), TenantProduct.PandaAssistant);
+        }
+
+        if (options.Seed.AsstMobile.Enabled)
+        {
+            await SeedAsstMobileApplicationAsync(applications, options.Seed.AsstMobile);
+        }
+
+        if (options.Seed.AsstServer.Enabled)
+        {
+            await SeedAsstServerApplicationAsync(applications, options.Seed.AsstServer);
+        }
+
         if (options.Seed.Fleet.Enabled)
         {
             await SeedFleetScopesAsync(scopes);
@@ -326,11 +352,12 @@ public static class DbSeeder
         FirstPartyWebSeedOptions seed,
         TenantRoutingOptions? tenantRouting = null,
         string? callbackArea = null,
-        string[]? permissions = null)
+        string[]? permissions = null,
+        TenantProduct tenantHostProduct = TenantProduct.PandaAuth)
     {
         permissions ??= FirstPartyWebPermissions();
-        var redirectUris = ExpandTenantRedirectUris(seed.RedirectUris, tenantRouting, callbackArea, "callback/login/pandaauth");
-        var postLogoutRedirectUris = ExpandTenantRedirectUris(seed.PostLogoutRedirectUris, tenantRouting, callbackArea, "");
+        var redirectUris = ExpandTenantRedirectUris(seed.RedirectUris, tenantRouting, callbackArea, "callback/login/pandaauth", tenantHostProduct);
+        var postLogoutRedirectUris = ExpandTenantRedirectUris(seed.PostLogoutRedirectUris, tenantRouting, callbackArea, "", tenantHostProduct);
         var existing = await applications.FindByClientIdAsync(clientId);
         if (existing is null)
         {
@@ -481,6 +508,27 @@ public static class DbSeeder
     ];
 
     /// <summary>
+    /// asst-web / asst-admin / asst-mobile 权限集 = oasis-web 同款裁剪：
+    /// - roles scope 不授——Panda Assistant 授权完全在 asst 本地（Admin:Emails / AccessGrant），不得制造第二套授权来源；
+    /// - Introspection 端点不授——内省只属于 asst-server（资源方）。
+    /// Revocation 端点保留：BFF 登出走 RP-initiated signout + revoke。
+    /// </summary>
+    private static string[] AsstClientPermissions() =>
+    [
+        Permissions.Endpoints.Authorization,
+        Permissions.Endpoints.Token,
+        Permissions.Endpoints.EndSession,
+        Permissions.Endpoints.Revocation,
+        Permissions.GrantTypes.AuthorizationCode,
+        Permissions.GrantTypes.RefreshToken,
+        Permissions.ResponseTypes.Code,
+        Permissions.Scopes.Email,
+        Permissions.Scopes.Profile,
+        Permissions.Prefixes.Scope + Scopes.OfflineAccess,
+        Requirements.Features.ProofKeyForCodeExchange,
+    ];
+
+    /// <summary>
     /// fleet-admin-web 权限集 = 第一方 Web 基础集（含 roles scope 与 Introspection/Revocation 端点）
     /// + fleet.* 委托作用域四项：管理台以 BFF 形态代表操作者调用 Fleet Server，
     /// scope 的 Resources 指向 fleet-api（SeedFleetScopesAsync），token 受众由此落到 fleet-api。
@@ -510,21 +558,122 @@ public static class DbSeeder
         string[] configuredUris,
         TenantRoutingOptions? tenantRouting,
         string? callbackArea,
-        string suffix)
+        string suffix,
+        TenantProduct hostProduct = TenantProduct.PandaAuth)
     {
         if (tenantRouting is null || callbackArea is null)
             return configuredUris;
 
         var tenantUris = tenantRouting.Bindings
-            .Where(binding => binding.Product == TenantProduct.PandaAuth && binding.State == TenantRouteState.Ready)
+            .Where(binding => binding.Product == hostProduct && binding.State == TenantRouteState.Ready)
             .Select(binding =>
             {
-                var host = TenantCanonicalHost.For(TenantId.Parse(binding.TenantId), TenantProduct.PandaAuth);
+                var host = TenantCanonicalHost.For(TenantId.Parse(binding.TenantId), hostProduct, binding.Zone);
                 return suffix.Length == 0
                     ? $"https://{host}/{callbackArea}/"
                     : $"https://{host}/{callbackArea}/{suffix}";
             });
 
         return configuredUris.Concat(tenantUris).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    /// <summary>
+    /// asst-mobile（公共客户端 / PKCE）的 upsert 播种：无密钥，仅回调白名单订正；
+    /// 回调为 App Links（https://t####-asst.sNNN.../app/callback/mobile），全部经配置注入。
+    /// </summary>
+    private static async Task SeedAsstMobileApplicationAsync(IOpenIddictApplicationManager applications, AsstMobileSeedOptions seed)
+    {
+        var existing = await applications.FindByClientIdAsync("asst-mobile");
+        if (existing is null)
+        {
+            if (seed.RedirectUris.Length == 0)
+            {
+                throw new InvalidOperationException("缺少 Auth:Seed:AsstMobile:RedirectUris 配置（asst-mobile 为 App Links 公共客户端）。");
+            }
+
+            var descriptor = new OpenIddictApplicationDescriptor
+            {
+                ClientId = "asst-mobile",
+                ClientType = ClientTypes.Public,
+                ConsentType = ConsentTypes.Implicit,
+                DisplayName = "熊猫助理 App（公共客户端 / PKCE）",
+            };
+            foreach (var permission in AsstClientPermissions())
+            {
+                descriptor.Permissions.Add(permission);
+            }
+            foreach (var uri in seed.RedirectUris)
+            {
+                descriptor.RedirectUris.Add(new Uri(uri, UriKind.Absolute));
+            }
+            foreach (var uri in seed.PostLogoutRedirectUris)
+            {
+                descriptor.PostLogoutRedirectUris.Add(new Uri(uri, UriKind.Absolute));
+            }
+
+            await applications.CreateAsync(descriptor);
+            return;
+        }
+
+        var replaceRedirectUris = seed.RedirectUris.Length > 0;
+        var replacePostLogout = seed.PostLogoutRedirectUris.Length > 0;
+        if (!replaceRedirectUris && !replacePostLogout)
+            return;
+
+        var updated = new OpenIddictApplicationDescriptor();
+        await applications.PopulateAsync(updated, existing);
+        if (replaceRedirectUris)
+        {
+            updated.RedirectUris.Clear();
+            foreach (var uri in seed.RedirectUris)
+            {
+                updated.RedirectUris.Add(new Uri(uri, UriKind.Absolute));
+            }
+        }
+        if (replacePostLogout)
+        {
+            updated.PostLogoutRedirectUris.Clear();
+            foreach (var uri in seed.PostLogoutRedirectUris)
+            {
+                updated.PostLogoutRedirectUris.Add(new Uri(uri, UriKind.Absolute));
+            }
+        }
+        await applications.PopulateAsync(existing, updated);
+        await applications.UpdateAsync(existing);
+    }
+
+    /// <summary>
+    /// asst-server（资源方机密客户端）：仅内省端点权限——换发端点（panda-asst /auth/oidc/exchange）
+    /// 以本客户端凭据对用户令牌做一次性 introspection；无回调、无授权码面。
+    /// </summary>
+    private static async Task SeedAsstServerApplicationAsync(IOpenIddictApplicationManager applications, AsstServerSeedOptions seed)
+    {
+        if (string.IsNullOrWhiteSpace(seed.ClientSecret))
+        {
+            throw new InvalidOperationException("缺少 Auth:Seed:AsstServer:ClientSecret 配置（asst-server 内省客户端密钥）。");
+        }
+
+        var existing = await applications.FindByClientIdAsync("asst-server");
+        if (existing is null)
+        {
+            await applications.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "asst-server",
+                ClientType = ClientTypes.Confidential,
+                ClientSecret = seed.ClientSecret,
+                ConsentType = ConsentTypes.Implicit,
+                DisplayName = "熊猫助理 API（内省客户端）",
+                Permissions =
+                {
+                    Permissions.Endpoints.Introspection,
+                },
+            });
+            return;
+        }
+
+        if (!await applications.ValidateClientSecretAsync(existing, seed.ClientSecret))
+        {
+            await applications.UpdateAsync(existing, seed.ClientSecret);
+        }
     }
 }
