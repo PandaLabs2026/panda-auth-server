@@ -138,8 +138,17 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock)
 
 public static class UserStoreRegistration
 {
-    public static IServiceCollection AddUserStore(this IServiceCollection services, bool httpsRequired = false)
+    /// <param name="cookieSecure">会话 cookie 的 Secure 属性策略（Auth:CookieSecure）。</param>
+    public static IServiceCollection AddUserStore(
+        this IServiceCollection services,
+        PandaAuth.Server.Configuration.CookieSecurePolicy cookieSecure = PandaAuth.Server.Configuration.CookieSecurePolicy.SameAsRequest)
     {
+        // CookieSecure 与 HttpsRequired（OpenIddict transport requirement）解耦：网关终止 TLS 后
+        // 回源为 http 的部署（fleet 控制面等，HttpsRequired=false）下，Secure 若跟随回源协议
+        // （SameAsRequest）会被网关链路剥离（auth.appliket.com 实测），需单独收紧为 Always。
+        var securePolicy = cookieSecure == PandaAuth.Server.Configuration.CookieSecurePolicy.Always
+            ? CookieSecurePolicy.Always
+            : CookieSecurePolicy.SameAsRequest;
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddScoped<IPasswordHasher, Argon2idPasswordHasher>();
         services.AddScoped<UserService>();
@@ -152,7 +161,7 @@ public static class UserStoreRegistration
                 options.Cookie.Name = LoginSessionService.Scheme;
                 options.Cookie.HttpOnly = true;
                 options.Cookie.SameSite = SameSiteMode.Lax;
-                options.Cookie.SecurePolicy = httpsRequired ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
+                options.Cookie.SecurePolicy = securePolicy;
                 options.Events.OnValidatePrincipal = LoginSessionService.ValidateCookieAsync;
             })
             .AddCookie(LoginSessionService.ReconfigurationScheme, options =>
@@ -160,7 +169,7 @@ public static class UserStoreRegistration
                 options.Cookie.Name = LoginSessionService.ReconfigurationScheme;
                 options.Cookie.HttpOnly = true;
                 options.Cookie.SameSite = SameSiteMode.Lax;
-                options.Cookie.SecurePolicy = httpsRequired ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
+                options.Cookie.SecurePolicy = securePolicy;
                 options.Events.OnValidatePrincipal = LoginSessionService.ValidateCookieAsync;
             });
         return services;
