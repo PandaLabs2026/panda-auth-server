@@ -134,7 +134,7 @@ public static class DbSeeder
 
     private static async Task SeedFleetScopesAsync(IOpenIddictScopeManager scopes)
     {
-        foreach (var name in new[] { "fleet.read", "fleet.allocate", "fleet.apply", "fleet.server.manage" })
+        foreach (var name in PandaAuthScopes.FleetAll)
         {
             if (await scopes.FindByNameAsync(name) is not null) continue;
 
@@ -142,7 +142,7 @@ public static class DbSeeder
             {
                 Name = name,
                 DisplayName = $"PandaLabs Fleet {name[6..]}",
-                Resources = { "fleet-api" },
+                Resources = { PandaAuthScopes.FleetApi },
             });
         }
     }
@@ -157,7 +157,7 @@ public static class DbSeeder
         var existing = await applications.FindByClientIdAsync("fleet-api");
         if (existing is null)
         {
-            await applications.CreateAsync(new OpenIddictApplicationDescriptor
+            var descriptor = new OpenIddictApplicationDescriptor
             {
                 ClientId = "fleet-api",
                 ClientType = ClientTypes.Confidential,
@@ -169,12 +169,13 @@ public static class DbSeeder
                     Permissions.Endpoints.Token,
                     Permissions.Endpoints.Introspection,
                     Permissions.GrantTypes.ClientCredentials,
-                    Permissions.Prefixes.Scope + "fleet.read",
-                    Permissions.Prefixes.Scope + "fleet.allocate",
-                    Permissions.Prefixes.Scope + "fleet.apply",
-                    Permissions.Prefixes.Scope + "fleet.server.manage",
                 },
-            });
+            };
+            foreach (var scope in PandaAuthScopes.FleetAll)
+            {
+                descriptor.Permissions.Add(Permissions.Prefixes.Scope + scope);
+            }
+            await applications.CreateAsync(descriptor);
             return;
         }
 
@@ -552,10 +553,7 @@ public static class DbSeeder
         Permissions.Scopes.Profile,
         Permissions.Scopes.Roles,
         Permissions.Prefixes.Scope + Scopes.OfflineAccess,
-        Permissions.Prefixes.Scope + "fleet.read",
-        Permissions.Prefixes.Scope + "fleet.allocate",
-        Permissions.Prefixes.Scope + "fleet.apply",
-        Permissions.Prefixes.Scope + "fleet.server.manage",
+        ..PandaAuthScopes.FleetAll.Select(scope => Permissions.Prefixes.Scope + scope),
         Requirements.Features.ProofKeyForCodeExchange,
     ];
 

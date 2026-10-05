@@ -52,7 +52,7 @@ public sealed class AuthorizationController(
         }
 
         // Legacy or malformed cookies must establish a new real login, never synthesize "now".
-        if (!TryReadAuthenticationTime(authResult.Principal, LoginSessionService.AuthenticatedAtClaim, out _))
+        if (!FleetHumanPrincipalClaims.TryReadAuthenticationTime(authResult.Principal, LoginSessionService.AuthenticatedAtClaim, out _))
         {
             await signInManager.SignOutAsync(HttpContext);
             return Challenge(
@@ -91,6 +91,8 @@ public sealed class AuthorizationController(
             clientIdentity.AddClaim(new Claim(Claims.Subject, request.ClientId!));
             clientIdentity.AddClaim(new Claim(Claims.Name, request.ClientId!));
             clientIdentity.AddClaim(new Claim(Claims.ClientId, request.ClientId!));
+            // 控制面契约：client_credentials 永远是机器主体，绝不冒充人类审批身份。
+            clientIdentity.AddClaim(new Claim(PandaAuthClaims.SubjectType, PandaAuthClaims.SubjectTypes.Machine));
             clientIdentity.SetScopes(request.GetScopes());
             // audience 来自 scope 实体的资源绑定（fleet.* → fleet-api、mgmt.* → panda-mgmt-api），
             // 不在控制器里硬编码资源名——新 scope 绑定资源后令牌自动携带对应 audience。
@@ -105,7 +107,7 @@ public sealed class AuthorizationController(
         // 授权码 / 刷新令牌：从票据中恢复用户并校验账号状态（冻结/注销立即失效）。
         var authResult = await HttpContext.AuthenticateAsync(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
         if (!authResult.Succeeded ||
-            !TryReadAuthenticationTime(authResult.Principal, Claims.AuthenticationTime, out _))
+            !FleetHumanPrincipalClaims.TryReadAuthenticationTime(authResult.Principal, Claims.AuthenticationTime, out _))
         {
             return InvalidGrant("授权票据缺少有效的原始认证时间。");
         }
@@ -200,16 +202,14 @@ public sealed class AuthorizationController(
         ClaimsPrincipal? mfaSource = null, string authenticationTimeClaim = LoginSessionService.AuthenticatedAtClaim)
     {
         // Callers select only the validated login-cookie or OpenIddict-ticket claim, explicitly.
-        if (!TryReadAuthenticationTime(mfaSource, authenticationTimeClaim, out var authenticatedAt))
-            throw new InvalidOperationException("A valid original authentication time is required.");
-
         var identity = new ClaimsIdentity(
             TokenValidationParameters.DefaultAuthenticationType, Claims.Name, Claims.Role);
 
         identity.AddClaim(new Claim(Claims.Subject, user.Id));
         identity.AddClaim(new Claim(Claims.Name, user.UserName ?? user.Id));
-        identity.AddClaim(new Claim(Claims.AuthenticationTime,
-            authenticatedAt.ToString(CultureInfo.InvariantCulture), ClaimValueTypes.Integer64));
+        // 人类主体事实（subject_type=human + 标准 auth_time 整秒）经 FleetHumanPrincipalClaims 从
+        // 受信登录凭据继承；缺失/畸形/重复即抛出（上层转 invalid grant），绝不回退合成 "now"。
+        identity.AddClaims(FleetHumanPrincipalClaims.Build(mfaSource, authenticationTimeClaim));
 
         if (tenantContextAccessor.Current is { } tenant)
         {
@@ -255,20 +255,12 @@ public sealed class AuthorizationController(
         var principal = new ClaimsPrincipal(identity);
         principal.SetDestinations(claim => claim.Type switch
         {
-            Claims.AuthenticationTime => [Destinations.IdentityToken],
+            // auth_time 与 subject_type 是控制面 introspection 契约面：必须随 AT 投影到内省结果。
+            Claims.AuthenticationTime or PandaAuthClaims.SubjectType => [Destinations.AccessToken, Destinations.IdentityToken],
             Claims.Name when principal.HasScope(Scopes.Profile) => [Destinations.AccessToken, Destinations.IdentityToken],
             _ => [Destinations.AccessToken],
         });
         return principal;
-    }
-
-    private static bool TryReadAuthenticationTime(ClaimsPrincipal? source, string claimType, out long seconds)
-    {
-        seconds = 0;
-        var claims = source?.FindAll(claimType).Take(2).ToArray();
-        return claims is { Length: 1 } &&
-            long.TryParse(claims[0].Value, NumberStyles.None, CultureInfo.InvariantCulture, out seconds) &&
-            seconds is >= 0 and <= 253_402_300_799;
     }
 
     private IActionResult InvalidGrant(string description)

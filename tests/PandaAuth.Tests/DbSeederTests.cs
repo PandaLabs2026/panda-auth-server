@@ -201,6 +201,58 @@ public class DbSeederTests
     }
 
     [Fact]
+    public async Task FleetEnabled_RegistersAllSevenControlPlaneScopesAndGrantsThemToFleetApi()
+    {
+        var options = ValidOptions();
+        options.Seed.Fleet = new FleetSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "fleet-api-test-secret",
+        };
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var scopes = provider.GetRequiredService<IOpenIddictScopeManager>();
+        foreach (var name in PandaAuthScopes.FleetAll)
+        {
+            var scope = await scopes.FindByNameAsync(name);
+            Assert.NotNull(scope);
+            Assert.Contains(PandaAuthScopes.FleetApi, await scopes.GetResourcesAsync(scope));
+        }
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var fleet = await applications.FindByClientIdAsync("fleet-api");
+        Assert.NotNull(fleet);
+        foreach (var name in PandaAuthScopes.FleetAll)
+            Assert.True(await applications.HasPermissionAsync(fleet, Permissions.Prefixes.Scope + name),
+                $"fleet-api 缺少控制面 scope 授权：{name}");
+    }
+
+    [Fact]
+    public async Task FleetAdminWebEnabled_GrantsAllSevenControlPlaneScopes()
+    {
+        var options = ValidOptions();
+        options.Seed.FleetAdminWeb = new FleetAdminWebSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = FleetAdminWebClientSecret,
+            RedirectUris = [FleetAdminWebRedirectUri],
+            PostLogoutRedirectUris = [FleetAdminWebPostLogoutUri],
+        };
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var fleetAdmin = await applications.FindByClientIdAsync("fleet-admin-web");
+        Assert.NotNull(fleetAdmin);
+        foreach (var name in PandaAuthScopes.FleetAll)
+            Assert.True(await applications.HasPermissionAsync(fleetAdmin, Permissions.Prefixes.Scope + name),
+                $"fleet-admin-web 缺少控制面 scope 授权：{name}");
+    }
+
+    [Fact]
     public async Task MgmtEnabled_CreatesConfidentialClientWithMgmtScopes()
     {
         var options = ValidOptions();
