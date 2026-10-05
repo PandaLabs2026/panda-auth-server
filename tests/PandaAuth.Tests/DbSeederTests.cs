@@ -685,10 +685,13 @@ public class DbSeederTests
         // 且不污染 me-web/admin-web 的 auth 主机白名单口径。
         Assert.Contains("https://t0042-asst.s001.pandalabs.cn/app/callback/login/pandaauth",
             await applications.GetRedirectUrisAsync(asstWeb));
-        Assert.Contains("https://t0042-asst.s001.pandalabs.cn/app/",
+        // post-logout 为专用路径（根路径会被 OpenIddict 客户端拦截成无 state 回调 400，me-web 教训）。
+        Assert.Contains("https://t0042-asst.s001.pandalabs.cn/app/callback/logout/pandaauth",
             await applications.GetPostLogoutRedirectUrisAsync(asstWeb));
         Assert.Contains("https://t0042-asst.s001.pandalabs.cn/admin/callback/login/pandaauth",
             await applications.GetRedirectUrisAsync(asstAdmin));
+        Assert.Contains("https://t0042-asst.s001.pandalabs.cn/admin/callback/logout/pandaauth",
+            await applications.GetPostLogoutRedirectUrisAsync(asstAdmin));
 
         // asst-mobile：App Links 回调按配置入库（公共客户端无密钥可验）。
         Assert.Contains("https://t0042-asst.s001.pandalabs.cn/app/callback/mobile",
