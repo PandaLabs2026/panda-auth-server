@@ -31,7 +31,10 @@ public sealed class AdminAuditController(PandaAuthDbContext dbContext) : Control
 
         if (!string.IsNullOrWhiteSpace(userName))
         {
-            logs = logs.Where(log => log.UserName.Contains(userName.Trim()));
+            // 大小写不敏感口径（与 AdminUsersController.List 的归一化比对一致）：两侧同升大小写，
+            // InMemory 与 Npgsql 均可下推/求值；ToUpperInvariant 在 PG 侧表现为 locale 无关折叠。
+            var normalized = userName.Trim().ToUpperInvariant();
+            logs = logs.Where(log => log.UserName.ToUpper().Contains(normalized));
         }
 
         if (succeeded is { } succeededFilter)
@@ -78,10 +81,11 @@ public sealed class AdminAuditController(PandaAuthDbContext dbContext) : Control
 
         if (!string.IsNullOrWhiteSpace(actor))
         {
-            var actorFilter = actor.Trim();
+            // 同 Logins 的大小写不敏感口径；ActorUserName 可空，空值不参与匹配。
+            var actorFilter = actor.Trim().ToUpperInvariant();
             logs = logs.Where(log =>
-                (log.ActorUserName != null && log.ActorUserName.Contains(actorFilter))
-                || log.ActorUserId.Contains(actorFilter));
+                (log.ActorUserName != null && log.ActorUserName.ToUpper().Contains(actorFilter))
+                || log.ActorUserId.ToUpper().Contains(actorFilter));
         }
 
         if (!string.IsNullOrWhiteSpace(action))

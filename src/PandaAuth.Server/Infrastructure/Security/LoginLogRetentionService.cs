@@ -51,13 +51,12 @@ public sealed class LoginLogRetentionService(
                 var cutoff = ComputeCutoff(DateTimeOffset.UtcNow, retentionDays);
                 var removed = await PurgeAsync(dbContext, cutoff, BatchSize, stoppingToken);
                 var removedAdmin = await PurgeAdminAuditAsync(dbContext, cutoff, BatchSize, stoppingToken);
-                var removedCodes = await PurgeVerificationCodesAsync(dbContext, stoppingToken);
                 var removedAccountTokens = await PurgeAccountVerificationTokensAsync(
                     dbContext, DateTimeOffset.UtcNow, stoppingToken);
                 var removedChallenges = await PurgeMfaChallengesAsync(dbContext, DateTimeOffset.UtcNow, stoppingToken);
                 logger.LogInformation(
-                    "审计日志清理完成：login_logs 删除 {Removed} 行、admin_audit_logs 删除 {RemovedAdmin} 行、verification_codes 清理 {RemovedCodes} 行、账号验证令牌清理 {RemovedAccountTokens} 行、MFA challenge 清理 {RemovedChallenges} 行，截止点 {Cutoff:O}。",
-                    removed, removedAdmin, removedCodes, removedAccountTokens, removedChallenges, cutoff);
+                    "审计日志清理完成：login_logs 删除 {Removed} 行、admin_audit_logs 删除 {RemovedAdmin} 行、账号验证令牌清理 {RemovedAccountTokens} 行、MFA challenge 清理 {RemovedChallenges} 行，截止点 {Cutoff:O}。",
+                    removed, removedAdmin, removedAccountTokens, removedChallenges, cutoff);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -141,38 +140,6 @@ public sealed class LoginLogRetentionService(
             removed += expired.Count;
 
             if (expired.Count < batchSize)
-            {
-                return removed;
-            }
-        }
-    }
-
-    /// <summary>
-    /// 验证码行清理：过期超过 24 小时即删（含未消费的——防枚举签发会为不存在的邮箱写行，
-    /// 这类行只能靠本清理回收）。分批语义同上；不复用保留天数（验证码生命周期以分钟计）。
-    /// </summary>
-    internal static async Task<int> PurgeVerificationCodesAsync(
-        PandaAuthDbContext dbContext, CancellationToken cancellationToken)
-    {
-        var cutoff = DateTimeOffset.UtcNow.AddHours(-24);
-        var removed = 0;
-        while (true)
-        {
-            var expired = await dbContext.VerificationCodes
-                .Where(code => code.ExpiresAt < cutoff)
-                .OrderBy(code => code.Id)
-                .Take(BatchSize)
-                .ToListAsync(cancellationToken);
-            if (expired.Count == 0)
-            {
-                return removed;
-            }
-
-            dbContext.VerificationCodes.RemoveRange(expired);
-            await dbContext.SaveChangesAsync(cancellationToken);
-            removed += expired.Count;
-
-            if (expired.Count < BatchSize)
             {
                 return removed;
             }

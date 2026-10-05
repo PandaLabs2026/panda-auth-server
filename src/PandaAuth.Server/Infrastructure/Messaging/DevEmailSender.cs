@@ -6,9 +6,9 @@ namespace PandaAuth.Server.Infrastructure.Messaging;
 /// </summary>
 public sealed class DevEmailSender(ILogger<DevEmailSender> logger) : IEmailSender
 {
-    public Task SendVerificationCodeAsync(string email, string code, CancellationToken ct)
+    public Task SendPasswordResetNoticeAsync(string email, CancellationToken ct)
     {
-        logger.LogWarning("[DevEmail] 验证码投递（仅限非生产环境）email={Email} code={Code}", email, code);
+        logger.LogWarning("[DevEmail] 密码重置通知投递（仅限非生产环境）email={Email}", email);
         return Task.CompletedTask;
     }
 

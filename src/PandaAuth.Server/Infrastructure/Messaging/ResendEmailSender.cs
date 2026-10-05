@@ -34,11 +34,11 @@ public sealed class ResendEmailSender(
         return $"{head}***{email[at..]}";
     }
 
-    public async Task SendVerificationCodeAsync(string email, string code, CancellationToken ct)
+    public async Task SendPasswordResetNoticeAsync(string email, CancellationToken ct)
     {
-        var (subject, html) = EmailTemplates.VerificationCode(code);
+        var (subject, html) = EmailTemplates.PasswordResetNotice();
         await SendCoreAsync(email, subject, html, ct);
-        logger.LogInformation("验证码邮件已发送 email={Email}", MaskEmail(email));
+        logger.LogInformation("密码重置通知已发送 email={Email}", MaskEmail(email));
     }
 
     public async Task SendAsync(string email, string subject, string htmlBody, CancellationToken ct)
