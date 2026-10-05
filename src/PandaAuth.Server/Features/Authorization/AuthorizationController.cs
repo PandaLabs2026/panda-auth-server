@@ -125,6 +125,9 @@ public sealed class AuthorizationController(
 
         var principal = await CreatePrincipalAsync(user, authResult.Principal!.GetScopes(), authResult.Principal,
             Claims.AuthenticationTime);
+        // audience 与 client_credentials 分支同源：来自 scope 实体的资源绑定（fleet.* → fleet-api）。
+        // 缺 audience 时控制面资源方（fleet-api）按 OpenIddict 规则无法完整内省该令牌。
+        principal.SetResources(await scopeManager.ListResourcesAsync(authResult.Principal!.GetScopes(), HttpContext.RequestAborted).ToListAsync(HttpContext.RequestAborted));
         return SignIn(principal, OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
     }
 
