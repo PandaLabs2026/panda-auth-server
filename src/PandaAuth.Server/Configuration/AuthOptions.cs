@@ -99,6 +99,8 @@ public sealed class SeedOptions
 
     public OasisWebSeedOptions OasisWeb { get; set; } = new();
 
+    public FleetAdminWebSeedOptions FleetAdminWeb { get; set; } = new();
+
     public FleetSeedOptions Fleet { get; set; } = new();
 
     public MgmtSeedOptions Mgmt { get; set; } = new();
@@ -152,6 +154,18 @@ public sealed class AdminWebSeedOptions : FirstPartyWebSeedOptions
 public sealed class OasisWebSeedOptions : FirstPartyWebSeedOptions
 {
     /// <summary>默认关闭；生产经 Auth__Seed__OasisWeb__Enabled 显式开启。</summary>
+    public override bool Enabled { get; set; }
+}
+
+/// <summary>
+/// Fleet 管理台（panda-fleet-admin，fleet-admin-web）的 Web 客户端：机密、授权码 + PKCE + 刷新令牌，
+/// 走与 me-web 相同的 upsert 播种路径；权限集在第一方 Web 基础上追加 fleet.* 委托作用域
+/// （见 DbSeeder.FleetAdminWebPermissions）。默认关闭——与 OasisWeb 同策略，
+/// 仅 Fleet 控制面部署经 Auth__Seed__FleetAdminWeb__Enabled 显式开启。
+/// </summary>
+public sealed class FleetAdminWebSeedOptions : FirstPartyWebSeedOptions
+{
+    /// <summary>默认关闭；生产经 Auth__Seed__FleetAdminWeb__Enabled 显式开启。</summary>
     public override bool Enabled { get; set; }
 }
 

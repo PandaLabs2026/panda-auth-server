@@ -35,6 +35,12 @@ public class DbSeederTests
 
     private const string OasisWebClientSecret = "oasis-web-test-secret";
 
+    private const string FleetAdminWebRedirectUri = "https://fleet.appliket.com/admin/callback/pandaauth";
+
+    private const string FleetAdminWebPostLogoutUri = "https://fleet.appliket.com/admin/callback/logout/pandaauth";
+
+    private const string FleetAdminWebClientSecret = "fleet-admin-web-test-secret";
+
     // 密钥对账用例用的存量旧回调：刻意不用已退役域名，避免与域名退役检查的
     // 负断言夹具（`.cn` 命中数基线）重复计数。
     private const string LegacyRedirectUri = "http://localhost:9007/callback/login/pandaauth";
@@ -144,6 +150,54 @@ public class DbSeederTests
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => DbSeeder.SeedAsync(provider));
 
         Assert.Contains("Auth:Seed:Fleet:ClientSecret", exception.Message);
+    }
+
+    [Fact]
+    public async Task FleetAdminWebDisabledByDefault_DoesNotCreateClient()
+    {
+        // fleet-admin-web 与 OasisWeb 同策略：非 PandaAuth 自带面板，默认关闭，
+        // 未显式开启时任何部署（含共享实例）都不得出现该客户端。
+        var options = ValidOptions();
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        Assert.Null(await applications.FindByClientIdAsync("fleet-admin-web"));
+    }
+
+    [Fact]
+    public async Task FleetAdminWebEnabled_CreatesConfidentialClientWithFleetScopes()
+    {
+        var options = ValidOptions();
+        options.Seed.FleetAdminWeb = new FleetAdminWebSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = FleetAdminWebClientSecret,
+            RedirectUris = [FleetAdminWebRedirectUri],
+            PostLogoutRedirectUris = [FleetAdminWebPostLogoutUri],
+        };
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var fleetAdmin = await applications.FindByClientIdAsync("fleet-admin-web");
+        Assert.NotNull(fleetAdmin);
+        Assert.True(await applications.ValidateClientSecretAsync(fleetAdmin, FleetAdminWebClientSecret));
+        Assert.Equal(ClientTypes.Confidential, await applications.GetClientTypeAsync(fleetAdmin));
+        Assert.Contains(FleetAdminWebRedirectUri, await applications.GetRedirectUrisAsync(fleetAdmin));
+        Assert.Contains(FleetAdminWebPostLogoutUri, await applications.GetPostLogoutRedirectUrisAsync(fleetAdmin));
+        // 第一方 Web 基础面：授权码 + 刷新令牌 + PKCE + 登出/吊销端点。
+        Assert.True(await applications.HasPermissionAsync(fleetAdmin, Permissions.GrantTypes.AuthorizationCode));
+        Assert.True(await applications.HasPermissionAsync(fleetAdmin, Permissions.GrantTypes.RefreshToken));
+        Assert.True(await applications.HasPermissionAsync(fleetAdmin, Permissions.Endpoints.EndSession));
+        Assert.True(await applications.HasPermissionAsync(fleetAdmin, Permissions.Endpoints.Revocation));
+        // fleet.* 委托作用域：管理台代表操作者调 Fleet Server，token 受众经 scope Resources 落到 fleet-api。
+        Assert.True(await applications.HasPermissionAsync(fleetAdmin, Permissions.Prefixes.Scope + "fleet.read"));
+        Assert.True(await applications.HasPermissionAsync(fleetAdmin, Permissions.Prefixes.Scope + "fleet.allocate"));
+        Assert.True(await applications.HasPermissionAsync(fleetAdmin, Permissions.Prefixes.Scope + "fleet.apply"));
+        Assert.True(await applications.HasPermissionAsync(fleetAdmin, Permissions.Prefixes.Scope + "fleet.server.manage"));
     }
 
     [Fact]
