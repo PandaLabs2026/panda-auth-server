@@ -23,10 +23,13 @@ public sealed class AuthorizationController(
     ClaimsPolicyService claimsPolicy,
     IOpenIddictScopeManager scopeManager,
     ITenantContextAccessor tenantContextAccessor,
-    TenantRedirectPolicy tenantRedirectPolicy) : Controller
+    TenantRedirectPolicy tenantRedirectPolicy,
+    TimeProvider clock) : Controller
 {
     [HttpGet("authorize")]
-    [Authorize]
+    // 不挂 [Authorize]：它会在动作前抢先把未认证请求 302 到登录页，使 prompt=none 无法按 OIDC
+    // 以 error=login_required 回 redirect_uri。认证改为动作内手动 AuthenticateAsync，
+    // 挑战/报错语义（prompt/max_age/租户/账号状态）全部在协议层统一裁决。
     public async Task<IActionResult> Authorize()
     {
         var request = HttpContext.GetOpenIddictServerRequest()
@@ -46,13 +49,24 @@ public sealed class AuthorizationController(
         var authResult = await HttpContext.AuthenticateAsync(LoginSessionService.Scheme);
         if (authResult is not { Succeeded: true })
         {
+            // prompt=none：客户端声明不得出现交互界面——未认证时按 OIDC 必须把
+            // error=login_required 302 回 redirect_uri，而不是把用户送去登录页。
+            if (request.HasPromptValue(PromptValues.None))
+            {
+                return Forbid(new AuthenticationProperties(new Dictionary<string, string?>
+                {
+                    [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.LoginRequired,
+                    [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = "用户未认证，而请求要求不进行交互（prompt=none）。",
+                }), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+            }
+
             return Challenge(
                 new AuthenticationProperties { RedirectUri = Request.Path + Request.QueryString },
                 LoginSessionService.Scheme);
         }
 
         // Legacy or malformed cookies must establish a new real login, never synthesize "now".
-        if (!FleetHumanPrincipalClaims.TryReadAuthenticationTime(authResult.Principal, LoginSessionService.AuthenticatedAtClaim, out _))
+        if (!FleetHumanPrincipalClaims.TryReadAuthenticationTime(authResult.Principal, LoginSessionService.AuthenticatedAtClaim, out var authenticatedAt))
         {
             await signInManager.SignOutAsync(HttpContext);
             return Challenge(
@@ -69,6 +83,17 @@ public sealed class AuthorizationController(
                 [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.InvalidGrant,
                 [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = "账号不存在或已被冻结。",
             }), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+        }
+
+        // prompt=login / max_age 超龄：客户端要求一次比当前会话更新的认证。先注销当前会话再挑战，
+        // 强制回登录页——静默放行会让过期会话继续发码，auth_time 语义失真（Fleet auth_time 契约）。
+        if (request.HasPromptValue(PromptValues.Login) ||
+            ExceedsMaxAge(request.MaxAge, authenticatedAt, clock.GetUtcNow().ToUnixTimeSeconds()))
+        {
+            await signInManager.SignOutAsync(HttpContext);
+            return Challenge(
+                new AuthenticationProperties { RedirectUri = Request.Path + Request.QueryString },
+                LoginSessionService.Scheme);
         }
 
         var principal = await CreatePrincipalAsync(user, request.GetScopes(), authResult.Principal);
@@ -273,4 +298,11 @@ public sealed class AuthorizationController(
             [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.InvalidGrant,
             [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = description,
         }), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+
+    /// <summary>
+    /// max_age 是否要求重新认证。OIDC 语义：认证年龄（now − auth_time）超过 max_age 秒须重认证；
+    /// max_age=0 是「任何既有认证都不可复用」的显式写法，恒为真。internal 供单测钉住边界语义。
+    /// </summary>
+    internal static bool ExceedsMaxAge(long? maxAge, long authenticatedAtSeconds, long nowSeconds)
+        => maxAge is { } limit && (limit == 0 || nowSeconds - authenticatedAtSeconds > limit);
 }
