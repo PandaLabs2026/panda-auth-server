@@ -621,14 +621,82 @@ public class DbSeederTests
         Assert.NotNull(meWeb);
         Assert.NotNull(adminWeb);
 
-        Assert.Contains("https://t0042.auth.pandalabs.cn/me/callback/login/pandaauth",
+        Assert.Contains("https://t0042-auth.s001.pandalabs.cn/me/callback/login/pandaauth",
             await applications.GetRedirectUrisAsync(meWeb));
-        Assert.Contains("https://t0042.auth.pandalabs.cn/me/",
+        Assert.Contains("https://t0042-auth.s001.pandalabs.cn/me/",
             await applications.GetPostLogoutRedirectUrisAsync(meWeb));
-        Assert.Contains("https://t0042.auth.pandalabs.cn/admin/callback/login/pandaauth",
+        Assert.Contains("https://t0042-auth.s001.pandalabs.cn/admin/callback/login/pandaauth",
             await applications.GetRedirectUrisAsync(adminWeb));
-        Assert.Contains("https://t0042.auth.pandalabs.cn/admin/",
+        Assert.Contains("https://t0042-auth.s001.pandalabs.cn/admin/",
             await applications.GetPostLogoutRedirectUrisAsync(adminWeb));
+    }
+
+    [Fact]
+    public async Task PandaAssistantBinding_SeedsAsstClientsWithZoneCallbacksAndIntrospection()
+    {
+        // PANDA-INFRA-R1（panda-asst ADR 0095）：asst 客户端族的回调按 PandaAssistant 绑定展开，
+        // asst-server 只授内省端点；asst-mobile 公共客户端无密钥。
+        var options = ValidOptions();
+        options.Seed.AsstWeb = new AsstWebSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "asst-web-secret-0123456789abcdef",
+            RedirectUris = ["https://asst.example.local/app/callback/pandaauth"],
+            PostLogoutRedirectUris = ["https://asst.example.local/app/"],
+        };
+        options.Seed.AsstAdmin = new AsstAdminSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "asst-admin-secret-0123456789abcd",
+            RedirectUris = ["https://asst.example.local/admin/callback/pandaauth"],
+            PostLogoutRedirectUris = ["https://asst.example.local/admin/"],
+        };
+        options.Seed.AsstMobile = new AsstMobileSeedOptions
+        {
+            Enabled = true,
+            RedirectUris = ["https://t0042-asst.s001.pandalabs.cn/app/callback/mobile"],
+            PostLogoutRedirectUris = ["https://t0042-asst.s001.pandalabs.cn/app/"],
+        };
+        options.Seed.AsstServer = new AsstServerSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "asst-server-secret-0123456789abcdef",
+        };
+        options.TenantRouting.Bindings =
+        [
+            new TenantRouteBindingOptions { TenantId = "t0042", Product = TenantProduct.PandaAuth, Zone = "s001", State = TenantRouteState.Ready },
+            new TenantRouteBindingOptions { TenantId = "t0042", Product = TenantProduct.PandaAssistant, Zone = "s001", State = TenantRouteState.Ready },
+        ];
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var asstWeb = await applications.FindByClientIdAsync("asst-web");
+        var asstAdmin = await applications.FindByClientIdAsync("asst-admin");
+        var asstMobile = await applications.FindByClientIdAsync("asst-mobile");
+        var asstServer = await applications.FindByClientIdAsync("asst-server");
+        Assert.NotNull(asstWeb);
+        Assert.NotNull(asstAdmin);
+        Assert.NotNull(asstMobile);
+        Assert.NotNull(asstServer);
+
+        // 租户展开：asst 主机（PandaAssistant 绑定）进入 asst-web/asst-admin 白名单，
+        // 且不污染 me-web/admin-web 的 auth 主机白名单口径。
+        Assert.Contains("https://t0042-asst.s001.pandalabs.cn/app/callback/login/pandaauth",
+            await applications.GetRedirectUrisAsync(asstWeb));
+        Assert.Contains("https://t0042-asst.s001.pandalabs.cn/app/",
+            await applications.GetPostLogoutRedirectUrisAsync(asstWeb));
+        Assert.Contains("https://t0042-asst.s001.pandalabs.cn/admin/callback/login/pandaauth",
+            await applications.GetRedirectUrisAsync(asstAdmin));
+
+        // asst-mobile：App Links 回调按配置入库（公共客户端无密钥可验）。
+        Assert.Contains("https://t0042-asst.s001.pandalabs.cn/app/callback/mobile",
+            await applications.GetRedirectUrisAsync(asstMobile));
+
+        // asst-server：密钥可验 + 内省权限（无回调面）。
+        Assert.True(await applications.ValidateClientSecretAsync(asstServer, "asst-server-secret-0123456789abcdef"));
+        Assert.Empty(await applications.GetRedirectUrisAsync(asstServer));
     }
 
     [Fact]

@@ -25,6 +25,10 @@ public sealed class TenantHostResolver(TenantRoutingOptions options) : ITenantHo
 
         foreach (var binding in options.Bindings)
         {
+            // IdP 只在自身产品（t####-auth）主机上产生租户上下文；PandaAssistant/Oasis 绑定
+            // 仅供种子回调白名单展开（DbSeeder），不得让 IdP 响应非本产品主机（PANDA-INFRA-R1）。
+            if (binding.Product != TenantProduct.PandaAuth)
+                continue;
             TenantId tenantId;
             try
             {
@@ -35,7 +39,7 @@ public sealed class TenantHostResolver(TenantRoutingOptions options) : ITenantHo
                 throw new InvalidOperationException($"Invalid tenant route binding: {binding.TenantId}.", exception);
             }
 
-            var canonicalHost = TenantCanonicalHost.For(tenantId, binding.Product);
+            var canonicalHost = TenantCanonicalHost.For(tenantId, binding.Product, binding.Zone);
             if (!string.Equals(canonicalHost, host, StringComparison.OrdinalIgnoreCase))
                 continue;
             if (binding.RouteRevision < 1)
@@ -44,7 +48,7 @@ public sealed class TenantHostResolver(TenantRoutingOptions options) : ITenantHo
                 throw new TenantContextException(TenantContextErrors.RouteNotReady,
                     $"Tenant route is not ready: {canonicalHost} ({binding.State}).");
 
-            return new TenantContext(tenantId, binding.Product, canonicalHost, binding.RouteRevision, binding.State);
+            return new TenantContext(tenantId, binding.Product, binding.Zone, canonicalHost, binding.RouteRevision, binding.State);
         }
 
         throw Unknown(host);
@@ -65,7 +69,8 @@ public sealed class TenantRedirectPolicy
         if (!string.Equals(redirectUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
             return false;
 
+        // 同租户同分区的任一产品规范主机上的回调均放行（跨产品单点登录面）。
         return Enum.GetValues<TenantProduct>().Any(product =>
-            string.Equals(redirectUri.Host, TenantCanonicalHost.For(context.TenantId, product), StringComparison.OrdinalIgnoreCase));
+            string.Equals(redirectUri.Host, TenantCanonicalHost.For(context.TenantId, product, context.Zone), StringComparison.OrdinalIgnoreCase));
     }
 }
