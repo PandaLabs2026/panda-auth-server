@@ -127,8 +127,8 @@ public class AccountLandingTests
 
     /// <summary>
     /// 登录连续失败 5 次→锁定的端到端回归：第 5 次失败即触发锁定，锁定期内即使口令正确也被拒；
-    /// login_logs 逐次记录 failureReason，锁定次起为 locked_out。用户可见文案按当前行为钉住
-    /// （后续 PR 统一文案时同步更新断言）。
+    /// login_logs 逐次记录 failureReason，锁定次起为 locked_out。用户可见文案统一为
+    /// 「用户名或密码错误。」（文案卫生 PR 定稿：锁定文案区分度即账号存在性预言）。
     /// </summary>
     [Fact]
     public async Task FiveConsecutiveFailures_LockAccountWithLockedOutAuditAndUserMessage()
@@ -146,15 +146,14 @@ public class AccountLandingTests
         {
             var view = Assert.IsType<ViewResult>(await Controller(provider).Login(
                 new LoginViewModel { UserName = user.UserName!, Password = "Wrong!Pass123" }, CancellationToken.None));
-            Assert.Equal(
-                attempt < 5 ? "用户名或密码错误。" : "失败次数过多，账号已临时锁定，请稍后再试。",
-                ViewError(view));
+            // 文案不区分锁定与口令错误；真实原因只落 login_logs。
+            Assert.Equal("用户名或密码错误。", ViewError(view));
         }
 
         // 锁定未过期时，正确口令也必须被拒（锁定检查先决于口令结果）。
         var lockedView = Assert.IsType<ViewResult>(await Controller(provider).Login(
             new LoginViewModel { UserName = user.UserName!, Password = CorrectPassword }, CancellationToken.None));
-        Assert.Equal("失败次数过多，账号已临时锁定，请稍后再试。", ViewError(lockedView));
+        Assert.Equal("用户名或密码错误。", ViewError(lockedView));
 
         var locked = await provider.GetRequiredService<UserService>().FindByNameAsync(user.UserName!);
         Assert.NotNull(locked!.LockoutEnd);
