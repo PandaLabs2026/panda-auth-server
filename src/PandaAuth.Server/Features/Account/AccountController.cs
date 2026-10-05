@@ -28,6 +28,14 @@ public sealed class AccountController(
     [HttpGet("login")]
     public IActionResult Login(string? returnUrl = null)
     {
+        // 已认证用户访问登录页：继续本地 returnUrl（SSO 授权续走）或落到账户中心 /me/。
+        // auth 源根路径被 Caddy 指回 /account/login——无此重定向会让「登录成功」的用户
+        // 落到 / 后又被弹回登录表单，形成死循环。
+        if (User.Identity?.IsAuthenticated == true)
+        {
+            return LocalRedirect(Url.IsLocalUrl(returnUrl) ? returnUrl! : "/me/");
+        }
+
         // 自助重置/改密（CredentialController）完成后跳转回来时带一次性提示。
         if (TempData["Notice"] is string notice)
         {
@@ -120,7 +128,7 @@ public sealed class AccountController(
         }
 
         await signInManager.SignInAsync(HttpContext, signedInUser!, isPersistent: false);
-        return LocalRedirect(string.IsNullOrWhiteSpace(model.ReturnUrl) ? "/" : model.ReturnUrl);
+        return LocalRedirect(string.IsNullOrWhiteSpace(model.ReturnUrl) ? "/me/" : model.ReturnUrl);
 
         string SafeReturnUrl(string? returnUrl)
             => Url.IsLocalUrl(returnUrl) ? returnUrl! : "/";
