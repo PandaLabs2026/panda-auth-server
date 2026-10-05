@@ -545,6 +545,37 @@ public class DbSeederTests
     }
 
     [Fact]
+    public void MeSeedDefaultPostLogoutUris_UseDedicatedLogoutPath()
+    {
+        // 种子默认值即生产事实：未显式注入 Auth__Seed__Me__PostLogoutRedirectUris* 的部署，
+        // migrate 直接把该默认值登记进 me-web 白名单。me 客户端自 de78b73 起硬编码回跳
+        // me/callback/logout/pandaauth，默认值若为裸根 /me/，end-session 会因
+        // post_logout_redirect_uri 全等失配被拒。与 deploy/verify-me-callback.sh 的
+        // ②④⑥⑧ 与条数不变式同口径，仓内先行卡住漂移。
+        var serverDirectory = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "PandaAuth.Server"));
+
+        var options = new ConfigurationBuilder()
+            .SetBasePath(serverDirectory)
+            .AddJsonFile("appsettings.json")
+            .Build()
+            .GetSection(AuthOptions.SectionName).Get<AuthOptions>()
+            ?? throw new InvalidOperationException("未能从 appsettings 绑定 AuthOptions。");
+
+        // 登录回调维持不动（本修复只动 post-logout）。
+        Assert.Equal(
+        [
+            "https://auth.pandalabs.cn/me/callback/login/pandaauth",
+            "http://localhost:9007/me/callback/login/pandaauth",
+        ], options.Seed.Me.RedirectUris);
+        Assert.Equal(
+        [
+            "https://auth.pandalabs.cn/me/callback/logout/pandaauth",
+            "http://localhost:9007/me/callback/logout/pandaauth",
+        ], options.Seed.Me.PostLogoutRedirectUris);
+    }
+
+    [Fact]
     public async Task DevelopmentConfig_SeedsFreshDatabaseWithoutThrowing()
     {
         // 回归：全新空库 + Development 配置启动即播种不抛异常（旧结构缺 MeClientSecret 会硬失败）。
@@ -572,6 +603,10 @@ public class DbSeederTests
         Assert.NotNull(meWeb);
         Assert.Contains("http://localhost:9007/me/callback/login/pandaauth",
             await applications.GetRedirectUrisAsync(meWeb));
+        // 与 admin-web 同规：me 登出回跳必须是专用路径（me 客户端硬编码 callback/logout/pandaauth），
+        // 裸根 /me/ 会被 end-session 以 post_logout_redirect_uri 失配拒绝。
+        Assert.Contains("http://localhost:9007/me/callback/logout/pandaauth",
+            await applications.GetPostLogoutRedirectUrisAsync(meWeb));
         Assert.True(await applications.ValidateClientSecretAsync(meWeb, "me-web-dev-secret"));
 
         var adminWeb = await applications.FindByClientIdAsync("admin-web");
