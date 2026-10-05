@@ -155,11 +155,9 @@ openIddict.AddServer(options =>
             OpenIddictConstants.Scopes.Profile,
             OpenIddictConstants.Scopes.Roles,
             OpenIddictConstants.Scopes.OfflineAccess,
-            "api",
-            "fleet.read",
-            "fleet.allocate",
-            "fleet.apply",
-            "fleet.server.manage");
+            "api");
+        // 控制面七 scope 单一事实源在 Share（PandaAuthScopes.FleetAll），注册与 seed 共用。
+        options.RegisterScopes([.. PandaAuthScopes.FleetAll]);
 
         // Issuer 全部来自配置（生产 https://auth.pandalabs.cn，海外实例改环境变量即可，零代码切换）。
         options.SetIssuer(IssuerUri());
