@@ -97,14 +97,16 @@ public static class DbSeeder
         {
             await SeedFirstPartyWebApplicationAsync(
                 applications, "asst-web", "熊猫助理工作台", "Auth:Seed:AsstWeb", options.Seed.AsstWeb,
-                options.TenantRouting, "app", AsstClientPermissions(), TenantProduct.PandaAssistant);
+                options.TenantRouting, "app", AsstClientPermissions(), TenantProduct.PandaAssistant,
+                postLogoutSuffix: "callback/logout/pandaauth");
         }
 
         if (options.Seed.AsstAdmin.Enabled)
         {
             await SeedFirstPartyWebApplicationAsync(
                 applications, "asst-admin", "熊猫助理管理后台", "Auth:Seed:AsstAdmin", options.Seed.AsstAdmin,
-                options.TenantRouting, "admin", AsstClientPermissions(), TenantProduct.PandaAssistant);
+                options.TenantRouting, "admin", AsstClientPermissions(), TenantProduct.PandaAssistant,
+                postLogoutSuffix: "callback/logout/pandaauth");
         }
 
         if (options.Seed.AsstMobile.Enabled)
@@ -353,11 +355,14 @@ public static class DbSeeder
         TenantRoutingOptions? tenantRouting = null,
         string? callbackArea = null,
         string[]? permissions = null,
-        TenantProduct tenantHostProduct = TenantProduct.PandaAuth)
+        TenantProduct tenantHostProduct = TenantProduct.PandaAuth,
+        string postLogoutSuffix = "")
     {
         permissions ??= FirstPartyWebPermissions();
         var redirectUris = ExpandTenantRedirectUris(seed.RedirectUris, tenantRouting, callbackArea, "callback/login/pandaauth", tenantHostProduct);
-        var postLogoutRedirectUris = ExpandTenantRedirectUris(seed.PostLogoutRedirectUris, tenantRouting, callbackArea, "", tenantHostProduct);
+        // post-logout 回调必须是专用路径：应用根（如 /app/）会被 OpenIddict 客户端拦截做登出回调提取，
+        // 无 state 的普通导航被当作回调以 400 拒绝（me-web 2026-10-01 实测教训）。asst 客户端用 callback/logout/pandaauth。
+        var postLogoutRedirectUris = ExpandTenantRedirectUris(seed.PostLogoutRedirectUris, tenantRouting, callbackArea, postLogoutSuffix, tenantHostProduct);
         var existing = await applications.FindByClientIdAsync(clientId);
         if (existing is null)
         {
