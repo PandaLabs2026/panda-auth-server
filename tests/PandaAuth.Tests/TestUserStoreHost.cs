@@ -104,7 +104,8 @@ internal static class TestUserStoreHost
             provider.GetRequiredService<ClaimsPolicyService>(),
             provider.GetRequiredService<IOpenIddictScopeManager>(),
             provider.GetRequiredService<ITenantContextAccessor>(),
-            new TenantRedirectPolicy())
+            new TenantRedirectPolicy(),
+            provider.GetRequiredService<TimeProvider>())
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { RequestServices = provider } },
         };

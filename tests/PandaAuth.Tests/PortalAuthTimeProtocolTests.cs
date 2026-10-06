@@ -90,6 +90,69 @@ public class PortalAuthTimeProtocolTests
     }
 
     [PostgresFact]
+    public async Task PromptNone_Unauthenticated_RedirectsBackToClientWithLoginRequired()
+    {
+        // OIDC：prompt=none 声明不得出现交互界面，未认证时必须把 error=login_required
+        // 302 回 redirect_uri。缺陷形态是 [Authorize] 抢先把 302 打到 /account/login。
+        await using var fixture = await ProtocolFixture.CreateAsync();
+        using var client = fixture.Browser();
+        var response = await client.GetAsync(fixture.AuthorizationUrl(profile: false) + "&prompt=none");
+
+        Assert.True(response.StatusCode == HttpStatusCode.Redirect);
+        var location = response.Headers.Location!;
+        Assert.StartsWith("http://localhost/callback", location.OriginalString, StringComparison.Ordinal);
+        Assert.Contains("error=login_required", location.Query, StringComparison.Ordinal);
+        Assert.DoesNotContain("/account/login", location.OriginalString, StringComparison.Ordinal);
+    }
+
+    [PostgresFact]
+    public async Task PromptLogin_Authenticated_SignsOutAndForcesLoginPageThenFlowStillCompletes()
+    {
+        await using var fixture = await ProtocolFixture.CreateAsync();
+        using var client = fixture.Browser();
+        var authorize = fixture.AuthorizationUrl(profile: false);
+        await fixture.LoginAsync(client, authorize);
+
+        var forced = await client.GetAsync(authorize + "&prompt=login");
+
+        // 已认证会话被注销（过期删除头）并挑战回登录页，而不是静默发码。
+        Assert.True(forced.StatusCode == HttpStatusCode.Redirect);
+        Assert.Contains("/account/login", forced.Headers.Location!.OriginalString, StringComparison.Ordinal);
+        Assert.True(forced.Headers.TryGetValues("Set-Cookie", out var deleted) &&
+            deleted.Any(value => value.StartsWith(LoginSessionService.Scheme + "=;", StringComparison.Ordinal)));
+
+        // 重新登录后正常授权流回归不变：仍能走到发码。
+        await fixture.LoginAsync(client, authorize);
+        await fixture.CodeExchangeAsync(client, authorize);
+    }
+
+    [PostgresFact]
+    public async Task MaxAge_AuthenticatedBeyondLimitForcesReauth_WithinLimitKeepsSilentFlow()
+    {
+        await using var fixture = await ProtocolFixture.CreateAsync();
+        using var client = fixture.Browser();
+        var authorize = fixture.AuthorizationUrl(profile: false);
+        await fixture.LoginAsync(client, authorize);
+
+        // max_age=0：任何既有认证都视为过旧——强制回登录页并注销会话。
+        var zero = await client.GetAsync(authorize + "&max_age=0");
+        Assert.True(zero.StatusCode == HttpStatusCode.Redirect);
+        Assert.Contains("/account/login", zero.Headers.Location!.OriginalString, StringComparison.Ordinal);
+
+        // 重新登录（auth_time 重置为当前钟），时钟推进 61 秒后 max_age=60 超龄 → 强制重认证；
+        // max_age=3600 仍在龄内 → 静默续签发码（正常流回归）。
+        await fixture.LoginAsync(client, authorize);
+        fixture.Clock.Advance(TimeSpan.FromSeconds(61));
+        var beyond = await client.GetAsync(authorize + "&max_age=60");
+        Assert.True(beyond.StatusCode == HttpStatusCode.Redirect);
+        Assert.Contains("/account/login", beyond.Headers.Location!.OriginalString, StringComparison.Ordinal);
+
+        await fixture.LoginAsync(client, authorize);
+        fixture.Clock.Advance(TimeSpan.FromSeconds(10));
+        await fixture.CodeExchangeAsync(client, authorize + "&max_age=3600");
+    }
+
+    [PostgresFact]
     public async Task ActualCookieMfaReissue_ProtocolRetainsAuthenticationTimeAndDoesNotDiscloseMfa()
     {
         await using var fixture = await ProtocolFixture.CreateAsync();
