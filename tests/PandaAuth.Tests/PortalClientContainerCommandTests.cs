@@ -8,6 +8,22 @@ using Xunit;
 
 namespace PandaAuth.Tests;
 
+/// <summary>
+/// 本文件唯一用例钉的是 t0a2 批次（2026-10-03）真实发布产物：除 Postgres 前置外还要求
+/// 批次挂载源 /tmp/panda-fleet-lifecycle-20261003/tooling/t0a2-publish 存在。批次归档、
+/// /tmp 产物清理后按批记录显式跳过——不是当前构建的回归门禁，复验该批次时重建产物再跑。
+/// </summary>
+public sealed class PortalContainerArtifactFactAttribute : FactAttribute
+{
+    public PortalContainerArtifactFactAttribute()
+    {
+        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PANDA_AUTH_TEST_POSTGRES")))
+            Skip = "Set PANDA_AUTH_TEST_POSTGRES to a disposable local PostgreSQL admin connection.";
+        else if (!Directory.Exists("/tmp/panda-fleet-lifecycle-20261003/tooling/t0a2-publish"))
+            Skip = "t0a2 批次发布产物已随批次归档清理；复验该批次时按 fleet-lifecycle 批记录重建挂载源。";
+    }
+}
+
 public class PortalClientContainerCommandTests
 {
     // Task verification runtime: pinned ASP.NET10.0.12 with the existing Auth image's curl dependency.
@@ -15,7 +31,7 @@ public class PortalClientContainerCommandTests
     internal const string Runtime = "sha256:afdb2da8488c675f9b9d786a6a0b01588fd8f9d1130f99b4bff37debe2898630";
     private const string Published = "/tmp/panda-fleet-lifecycle-20261003/tooling/t0a2-publish";
 
-    [PostgresFact]
+    [PortalContainerArtifactFact]
     public async Task ActualProductProcess_UID1003_FixedProtectedMount_RegisterRecoverUnregister_NoKeysSeedOrListener()
     {
         await using var fixture = await RegistrationDatabase.CreateAsync();
