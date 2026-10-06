@@ -96,6 +96,23 @@ public class FleetIntrospectionTests
         Assert.Equal(original, inspected.GetProperty(Claims.AuthenticationTime).GetInt64());
     }
 
+    [PostgresFact]
+    public async Task ExpiredAccessToken_ActualIntrospection_ReturnsInactive()
+    {
+        // website-admin 会话门禁依赖的语义（OidcSetup live introspection）：AT 过期未撤销
+        // 内省必须 active=false（OpenIddict ValidateExpirationDate → RFC 7662），拒绝不被
+        // 签名有效性或撤销豁免——本用例把该语义钉进真实管线测试。
+        await using var fixture = await FleetProtocolFixture.CreateAsync();
+        using var client = fixture.Browser();
+        await fixture.LoginAsync(client);
+        var token = await fixture.CodeExchangeAsync(client);
+        fixture.Clock.Advance(TimeSpan.FromMinutes(11));
+
+        var inspected = await fixture.IntrospectAsync(client, token.GetProperty("access_token").GetString()!);
+
+        Assert.False(inspected.GetProperty("active").GetBoolean());
+    }
+
     private sealed class MutableClock : TimeProvider
     {
         private DateTimeOffset _now = DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.AddMinutes(-3).ToUnixTimeSeconds());

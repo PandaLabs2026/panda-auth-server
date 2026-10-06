@@ -42,7 +42,7 @@ internal static class WebsiteAdminClientCommand
                 configuration["Auth:Issuer"]?.TrimEnd('/') + "/" != Issuer) throw new InvalidOperationException();
             using var input = JsonDocument.Parse(PortalClientCommand.ReadProtectedFile(Root + "/request.json", uid, true));
             var root = input.RootElement;
-            var allowed = new HashSet<string> { "clientSecret", "administratorEmail", "validUntilUtc", "operationId", "expectedRedirectUris", "expectedPostLogoutRedirectUris" };
+            var allowed = new HashSet<string> { "clientSecret", "administratorEmail", "validUntilUtc", "operationId", "expectedRedirectUris", "expectedPostLogoutRedirectUris", "expectedAdditionalPermissions" };
             if (root.EnumerateObject().Any(p => !allowed.Remove(p.Name)) || allowed.Count != 0) throw new InvalidOperationException();
             using var endpoints = JsonDocument.Parse(PortalClientCommand.ReadProtectedFile(Root + "/endpoints.json", uid, false));
             var baseUrl = endpoints.RootElement.GetProperty("adminPublicUrl").GetString()!;
@@ -76,8 +76,10 @@ internal static class WebsiteAdminClientCommand
                 ConsentType = ConsentTypes.Implicit, DisplayName = "PandaLabs 官网运营后台",
                 RedirectUris = { callback }, PostLogoutRedirectUris = { logout },
                 Permissions = { Permissions.Endpoints.Authorization, Permissions.Endpoints.Token,
-                    Permissions.Endpoints.EndSession, Permissions.Endpoints.Introspection,
-                    Permissions.GrantTypes.AuthorizationCode, Permissions.ResponseTypes.Code, Permissions.Scopes.Profile },
+                    Permissions.Endpoints.EndSession, Permissions.Endpoints.Introspection, Permissions.Endpoints.Revocation,
+                    Permissions.GrantTypes.AuthorizationCode, Permissions.GrantTypes.RefreshToken,
+                    Permissions.ResponseTypes.Code, Permissions.Scopes.Profile,
+                    Permissions.Prefixes.Scope + Scopes.OfflineAccess },
                 Requirements = { Requirements.Features.ProofKeyForCodeExchange },
             };
             var existing = await manager.FindByClientIdAsync(ClientId);
@@ -97,17 +99,39 @@ internal static class WebsiteAdminClientCommand
             {
                 var current = new OpenIddictApplicationDescriptor(); await manager.PopulateAsync(current, existing);
                 if (current.ClientType != descriptor.ClientType || current.ConsentType != descriptor.ConsentType ||
-                    !current.Permissions.SetEquals(descriptor.Permissions) || !current.Requirements.SetEquals(descriptor.Requirements) ||
+                    !current.Requirements.SetEquals(descriptor.Requirements) ||
                     !await manager.ValidateClientSecretAsync(existing, secret)) throw new InvalidOperationException();
-                if (!current.RedirectUris.SetEquals(descriptor.RedirectUris) || !current.PostLogoutRedirectUris.SetEquals(descriptor.PostLogoutRedirectUris))
+                var permissionsChanged = !current.Permissions.SetEquals(descriptor.Permissions);
+                var redirectsChanged = !current.RedirectUris.SetEquals(descriptor.RedirectUris) || !current.PostLogoutRedirectUris.SetEquals(descriptor.PostLogoutRedirectUris);
+                List<string> addedPermissions = [];
+                if (permissionsChanged)
+                {
+                    // 受控权限升级:只允许追加——现有多出的权限(裁剪)与缺口之外的变化一律失败关闭;
+                    // 缺口集合必须与 request.json 的 expectedAdditionalPermissions 逐项精确相等,
+                    // 防止描述符漂移被顺带放行。升级路径与回调迁移同源:Populate+Update+再验 secret+审计。
+                    var extra = current.Permissions.Except(descriptor.Permissions).ToHashSet(StringComparer.Ordinal);
+                    var missing = descriptor.Permissions.Except(current.Permissions).ToHashSet(StringComparer.Ordinal);
+                    var expectedAdditional = root.GetProperty("expectedAdditionalPermissions").EnumerateArray().Select(x => x.GetString()!).ToHashSet(StringComparer.Ordinal);
+                    if (extra.Count != 0 || missing.Count == 0 || !missing.SetEquals(expectedAdditional)) throw new InvalidOperationException();
+                    current.Permissions.Clear(); current.Permissions.UnionWith(descriptor.Permissions);
+                    addedPermissions = [.. missing.OrderBy(x => x, StringComparer.Ordinal)];
+                }
+                if (redirectsChanged)
                 {
                     if (expectedRedirect.Count != 1 || expectedLogout.Count != 1 ||
                         !current.RedirectUris.SetEquals(expectedRedirect) || !current.PostLogoutRedirectUris.SetEquals(expectedLogout)) throw new InvalidOperationException();
                     current.RedirectUris.Clear(); current.RedirectUris.UnionWith(descriptor.RedirectUris);
                     current.PostLogoutRedirectUris.Clear(); current.PostLogoutRedirectUris.UnionWith(descriptor.PostLogoutRedirectUris);
+                }
+                if (permissionsChanged || redirectsChanged)
+                {
                     await manager.PopulateAsync(existing, current); await manager.UpdateAsync(existing);
                     if (!await manager.ValidateClientSecretAsync(existing, secret)) throw new InvalidOperationException();
-                    db.AdminAuditLogs.Add(new PandaAuth.Server.Domain.AdminAuditLog {
+                    if (permissionsChanged) db.AdminAuditLogs.Add(new PandaAuth.Server.Domain.AdminAuditLog {
+                        Action = "website-admin-permission-migrate", TargetType = "client", TargetId = ClientId,
+                        ActorUserId = "host-operator", ActorUserName = actorUserName,
+                        Detail = JsonSerializer.Serialize(new { operationId = operation, addedPermissions }), CreatedAt = DateTimeOffset.UtcNow });
+                    if (redirectsChanged) db.AdminAuditLogs.Add(new PandaAuth.Server.Domain.AdminAuditLog {
                         Action = "website-admin-callback-migrate", TargetType = "client", TargetId = ClientId,
                         ActorUserId = "host-operator", ActorUserName = actorUserName,
                         Detail = JsonSerializer.Serialize(new { operationId = operation, redirectUri = callback.AbsoluteUri, logoutUri = logout.AbsoluteUri }), CreatedAt = DateTimeOffset.UtcNow });
