@@ -187,8 +187,7 @@ public static class UserStoreRegistration
                 options.Cookie.Name = LoginSessionService.Scheme;
                 options.Cookie.HttpOnly = true;
                 options.Cookie.SameSite = SameSiteMode.Lax;
-<<<<<<< HEAD
-                options.Cookie.SecurePolicy = httpsRequired ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
+                options.Cookie.SecurePolicy = securePolicy;
                 // 静态事件改为委托：逐请求从 RequestServices 解析 UserService 与 stamp 缓存
                 // （ValidateCookieAsync 需要作用域服务与 IMemoryCache，静态签名拿不到）。
                 options.Events.OnValidatePrincipal = async context =>
@@ -198,18 +197,13 @@ public static class UserStoreRegistration
                         context.HttpContext.RequestServices.GetRequiredService<UserService>(),
                         context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>());
                 };
-=======
-                options.Cookie.SecurePolicy = securePolicy;
-                options.Events.OnValidatePrincipal = LoginSessionService.ValidateCookieAsync;
->>>>>>> origin/main
             })
             .AddCookie(LoginSessionService.ReconfigurationScheme, options =>
             {
                 options.Cookie.Name = LoginSessionService.ReconfigurationScheme;
                 options.Cookie.HttpOnly = true;
                 options.Cookie.SameSite = SameSiteMode.Lax;
-<<<<<<< HEAD
-                options.Cookie.SecurePolicy = httpsRequired ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
+                options.Cookie.SecurePolicy = securePolicy;
                 options.Events.OnValidatePrincipal = async context =>
                 {
                     await LoginSessionService.ValidateCookieAsync(
@@ -217,10 +211,6 @@ public static class UserStoreRegistration
                         context.HttpContext.RequestServices.GetRequiredService<UserService>(),
                         context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>());
                 };
-=======
-                options.Cookie.SecurePolicy = securePolicy;
-                options.Events.OnValidatePrincipal = LoginSessionService.ValidateCookieAsync;
->>>>>>> origin/main
             });
         return services;
     }
