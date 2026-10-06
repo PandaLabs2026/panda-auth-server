@@ -27,19 +27,6 @@ public static class EmailTemplates
         "<p>你的 PandaAuth 账号邮箱已更改。如果这不是你本人操作，请立即联系管理员。</p>"
     );
 
-    /// <summary>验证码邮件。有效期口径与 OtpService.CodeTtlMinutes 一致，改动须同步。</summary>
-    public static (string Subject, string Html) VerificationCode(string code) =>
-    (
-        "PandaAuth 验证码",
-        $"""
-        <h2 style="color:#2E6F96;margin-bottom:8px;">PandaAuth 验证码</h2>
-        <p>你正在重置密码，验证码为：</p>
-        <p style="font-size:28px;font-weight:bold;letter-spacing:4px;padding:16px;background:#f0f5f2;border-radius:8px;text-align:center;color:#2B3438;">{code}</p>
-        <p>5 分钟内有效。若非你本人操作，请忽略本邮件（可能是他人误填了你的邮箱）。</p>
-        <p style="color:#6b6b70;font-size:14px;">此邮件由 PandaAuth 系统自动发送，请勿直接回复。</p>
-        """
-    );
-
     /// <summary>密码重置成功通知（重置完成后发送，提示凭据已变更）。</summary>
     public static (string Subject, string Html) PasswordResetNotice() =>
     (

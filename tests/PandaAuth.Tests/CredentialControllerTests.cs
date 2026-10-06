@@ -23,7 +23,7 @@ namespace PandaAuth.Tests;
 
 /// <summary>
 /// CredentialController 安全路径测试：防枚举中性、发送门控（仅 Active 账号）、
-/// 重置成功后令牌吊销与安全戳刷新、错误验证码拒绝。OTP 生命周期见 OtpServiceTests。
+/// 重置成功后令牌吊销、安全戳刷新与重置通知邮件、错误令牌拒绝后表单字段保留。
 /// </summary>
 public class CredentialControllerTests
 {
@@ -31,9 +31,13 @@ public class CredentialControllerTests
     {
         private static readonly Regex TokenPattern = new("[A-Za-z0-9_-]{43}", RegexOptions.Compiled);
         public ConcurrentQueue<(string Email, string Subject, string Body)> Messages { get; } = new();
+        public ConcurrentQueue<string> ResetNotices { get; } = new();
 
-        public Task SendVerificationCodeAsync(string email, string code, CancellationToken ct)
-            => throw new InvalidOperationException("The legacy OTP path must not be used.");
+        public Task SendPasswordResetNoticeAsync(string email, CancellationToken ct)
+        {
+            ResetNotices.Enqueue(email);
+            return Task.CompletedTask;
+        }
 
         public Task SendAsync(string email, string subject, string htmlBody, CancellationToken ct)
         {
@@ -66,7 +70,6 @@ public class CredentialControllerTests
         var pwned = new StubPwnedChecker();
         services.AddSingleton(pwned);
         services.AddSingleton<IPwnedPasswordChecker>(pwned);
-        services.AddScoped<OtpService>();
         services.AddScoped<AccountVerificationService>();
         services.AddScoped<SecurityEventWriter>();
         services.AddScoped<SessionSecurityService>();
@@ -177,6 +180,33 @@ public class CredentialControllerTests
         var securityEvent = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents);
         Assert.Equal("user.password_reset", securityEvent.EventType);
         Assert.Equal(user.Id, securityEvent.UserId);
+
+        // 重置成功必须向账号持有人发出安全通知（受害者知情权）；恰好一封、发给原邮箱。
+        Assert.Equal(["reset@example.com"], sender.ResetNotices);
+    }
+
+    [Fact]
+    public async Task ResetPassword_WrongToken_RendersWithEnteredFields()
+    {
+        var (controller, _, _, _, users) = await CreateAsync();
+        await SeedUserAsync(users, "keep@example.com");
+
+        var result = await controller.ResetPassword(
+            new ResetPasswordViewModel
+            {
+                Email = "keep@example.com",
+                Token = "wrong-token-value-000000000000000",
+                NewPassword = "NewPass!2026x",
+                ReturnUrl = "/connect/authorize?client_id=admin-web",
+            },
+            CancellationToken.None);
+
+        // 失败后带 model 重渲染：邮箱/令牌/ReturnUrl 保留，用户改掉错误项即可重试，不必重抄。
+        var view = Assert.IsType<ViewResult>(result);
+        var model = Assert.IsType<ResetPasswordViewModel>(view.Model);
+        Assert.Equal("keep@example.com", model.Email);
+        Assert.Equal("wrong-token-value-000000000000000", model.Token);
+        Assert.True(view.ViewData.ModelState[string.Empty]!.Errors.Count > 0);
     }
 
     [Fact]

@@ -475,7 +475,7 @@ public class UserStoreMigrationTests
 
     private sealed class NullEmailSender : IEmailSender
     {
-        public Task SendVerificationCodeAsync(string email, string code, CancellationToken ct) => Task.CompletedTask;
+        public Task SendPasswordResetNoticeAsync(string email, CancellationToken ct) => Task.CompletedTask;
 
         public Task SendAsync(string email, string subject, string htmlBody, CancellationToken ct) => Task.CompletedTask;
     }

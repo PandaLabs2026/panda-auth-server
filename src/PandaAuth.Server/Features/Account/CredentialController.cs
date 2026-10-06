@@ -88,14 +88,14 @@ public sealed class CredentialController(
         using var ipLease = loginRateLimiter.AttemptByIp(HttpContext.Connection.RemoteIpAddress?.ToString());
         if (!ipLease.IsAcquired)
         {
-            return ViewWithError("尝试过于频繁，请稍后再试。");
+            return ViewWithError(model, "尝试过于频繁，请稍后再试。");
         }
 
         // 泄露密码检测在令牌消费之前：命中即拒绝且不烧掉一次性令牌。
         var pwned = await pwnedPasswords.CheckAsync(model.NewPassword, cancellationToken);
         if (pwned.Rejected)
         {
-            return ViewWithError(pwned.Outcome == PwnedPasswordOutcome.Breached
+            return ViewWithError(model, pwned.Outcome == PwnedPasswordOutcome.Breached
                 ? "该密码出现在已知泄露库中，请更换新密码。"
                 : "暂时无法核验密码安全性，请稍后再试。");
         }
@@ -104,7 +104,7 @@ public sealed class CredentialController(
             email, model.Token, model.NewPassword, cancellationToken);
         if (!outcome.Succeeded)
         {
-            return ViewWithError(outcome.Error == AccountVerificationError.PasswordPolicy
+            return ViewWithError(model, outcome.Error == AccountVerificationError.PasswordPolicy
                 ? "新密码不合规。"
                 : "令牌错误、已使用或已过期。");
         }
@@ -122,6 +122,17 @@ public sealed class CredentialController(
             UserAgent: Request.Headers.UserAgent.ToString(),
             CorrelationId: HttpContext.TraceIdentifier), cancellationToken);
         logger.LogInformation("用户通过邮箱恢复重置密码 userId={UserId}", outcome.SecurityEvent.SubjectId);
+
+        // 重置成功通知（尽力而为）：账号持有人有权知道凭据刚被换过——受害者（令牌被钓鱼/邮箱被劫持）
+        // 凭此接管。通知失败只记日志：重置本身已完成，不能因通道故障回滚或卡住流程。
+        try
+        {
+            await emailSender.SendPasswordResetNoticeAsync(email, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogError(exception, "密码重置通知发送失败 email={Email}", email);
+        }
 
         TempData["Notice"] = "密码已重置，请使用新密码登录。";
         return RedirectToAction("Login", "Account", new { returnUrl = NormalizeLocalReturnUrl(model.ReturnUrl) });
@@ -154,7 +165,7 @@ public sealed class CredentialController(
         var user = await userManager.GetUserAsync(User);
         if (user is null) return Challenge();
         var result = await verification.ConsumeEmailConfirmationAsync(user.Id, model.Token, cancellationToken);
-        if (!result.Succeeded) return ViewWithError("令牌错误、已使用或已过期。");
+        if (!result.Succeeded) return ViewWithError(model, "令牌错误、已使用或已过期。");
         TempData["Notice"] = "邮箱已确认。";
         return RedirectToAction("Login", "Account");
     }
@@ -172,11 +183,11 @@ public sealed class CredentialController(
         if (!ModelState.IsValid) return View(model);
         var user = await userManager.GetUserAsync(User);
         if (user is null) return Challenge();
-        if (!user.EmailConfirmed) return ViewWithError("请先确认当前邮箱。");
+        if (!user.EmailConfirmed) return ViewWithError(model, "请先确认当前邮箱。");
         var check = await signInManager.CheckPasswordSignInAsync(user, model.CurrentPassword, lockoutOnFailure: true);
-        if (!check.Succeeded) return ViewWithError("当前密码不正确。");
+        if (!check.Succeeded) return ViewWithError(model, "当前密码不正确。");
         var outcome = await verification.BeginEmailChangeAsync(check.User!.Id, model.NewEmail, cancellationToken);
-        if (!outcome.Succeeded) return ViewWithError("无法变更邮箱，请检查目标地址。");
+        if (!outcome.Succeeded) return ViewWithError(model, "无法变更邮箱，请检查目标地址。");
         TempData["PendingEmail"] = model.NewEmail;
         TempData["ReturnUrl"] = NormalizeLocalReturnUrl(model.ReturnUrl);
         return RedirectToAction(nameof(ConfirmEmailChange));
@@ -203,7 +214,7 @@ public sealed class CredentialController(
         var oldEmail = user.Email;
         var outcome = await verification.ConsumeEmailChangeAsync(
             user.Id, model.NewEmail, model.Token, cancellationToken);
-        if (!outcome.Succeeded) return ViewWithError("令牌错误、已使用或已过期。");
+        if (!outcome.Succeeded) return ViewWithError(model, "令牌错误、已使用或已过期。");
         await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: cancellationToken);
         await signInManager.SignOutAsync(HttpContext);
         if (!string.IsNullOrWhiteSpace(oldEmail))
@@ -259,7 +270,7 @@ public sealed class CredentialController(
         // CheckPasswordSignInAsync can retry after a concurrency conflict. From this point on
         // every mutation must use its reloaded entity, not the pre-check instance.
         user = check.User!;
-        if (!user.EmailConfirmed) return ViewWithError("请先确认当前邮箱。");
+        if (!user.EmailConfirmed) return ViewWithError(model, "请先确认当前邮箱。");
 
         // 泄露密码检测：通过当前密码核验后、写入前执行。
         var pwned = await pwnedPasswords.CheckAsync(model.NewPassword, cancellationToken);
@@ -271,10 +282,12 @@ public sealed class CredentialController(
             return View(model);
         }
 
-        var (changed, error) = await ReplacePasswordAsync(user, model.NewPassword);
-        if (!changed)
+        // ReplacePasswordAsync（哈希+安全戳）经 UserService 的单次 SaveAsync 落库：
+        // 策略校验在写库之前，失败即零变更；并发冲突路径由 UserService 内部重试消化。
+        var changed = await userManager.ReplacePasswordAsync(user, model.NewPassword);
+        if (!changed.Succeeded)
         {
-            ModelState.AddModelError(string.Empty, error ?? "新密码不合规。");
+            ModelState.AddModelError(string.Empty, string.Join("；", changed.Errors.Select(error => error.Description)));
             return View(model);
         }
 
@@ -288,26 +301,14 @@ public sealed class CredentialController(
     }
 
     /// <summary>
-    /// 移除旧密码并写入新密码（走完整密码策略校验）。校验失败时回滚旧哈希——
-    /// 不回滚会把账号锁死在「无密码」状态（与管理端重置同一处实证结论）。
-    /// 安全戳一并回滚：AddPasswordAsync 内部已轮换，不还原会让一次失败的改密
-    /// 仍然踹掉目标既有 Cookie 会话（与管理端重置同一口径）。
+    /// 带 model 重渲染：保留已填字段（邮箱/ReturnUrl/令牌），用户改掉错误项即可重试，
+    /// 不必整段重抄。令牌一并回显属可接受权衡——失败路径未消费令牌（消费即成功），
+    /// 回显只省重抄、不放大滥用面；密码字段由 password 输入遮蔽。
     /// </summary>
-    private async Task<(bool Changed, string? Error)> ReplacePasswordAsync(PandaUser user, string newPassword)
-    {
-        var add = await userManager.ReplacePasswordAsync(user, newPassword);
-        if (!add.Succeeded)
-        {
-            return (false, string.Join("；", add.Errors.Select(error => error.Description)));
-        }
-
-        return (true, null);
-    }
-
-    private IActionResult ViewWithError(string message)
+    private IActionResult ViewWithError(object model, string message)
     {
         ModelState.AddModelError(string.Empty, message);
-        return View();
+        return View(model);
     }
 
     private static string NormalizeLocalReturnUrl(string? returnUrl)

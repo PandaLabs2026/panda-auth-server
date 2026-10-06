@@ -21,7 +21,6 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
 
     public DbSet<ExternalIdentity> ExternalIdentities => Set<ExternalIdentity>();
 
-    public DbSet<VerificationCode> VerificationCodes => Set<VerificationCode>();
 
     public DbSet<EmailVerification> EmailVerifications => Set<EmailVerification>();
 
@@ -145,15 +144,6 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
                 .HasFilter("\"UnlinkedAt\" IS NULL");
             entity.HasIndex(x => new { x.UserId, x.UnlinkedAt });
             entity.HasOne<PandaUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
-        });
-
-        builder.Entity<VerificationCode>(entity =>
-        {
-            entity.ToTable("verification_codes");
-            // 频控（按邮箱数最近 1 分钟/1 小时）与校验检索都走 EmailHash + CreatedAt。
-            entity.HasIndex(x => new { x.EmailHash, x.CreatedAt });
-            // 保留清理按 ExpiresAt 谓词分批删除，同 login_logs 的理由需要单列索引。
-            entity.HasIndex(x => x.ExpiresAt);
         });
 
         builder.Entity<EmailVerification>(entity =>

@@ -266,10 +266,9 @@ public sealed class AdminUsersController(
         var generated = string.IsNullOrEmpty(request?.NewPassword);
         var password = generated ? AdminPasswordGenerator.Generate() : request!.NewPassword!;
 
-        // 先留底再移除：AddPasswordAsync 若因策略不过而失败，此时用户已无密码，
-        // 不回滚旧哈希会把账号锁死在「无密码」状态（谁也登不进，包括管理员重置）。
-        // 安全戳同理：AddPasswordAsync 内部已轮换并持久化，失败路径一并还原——
-        // 否则一次「没发生的」重置也会把目标的既有 Cookie 会话全部踹下线。
+        // ReplacePasswordAsync（新哈希+安全戳轮换）经 UserService 单次 SaveAsync 落库：
+        // 密码策略校验先于任何写入，失败即零变更（不存在「已移除旧密码再回滚」的中间态）；
+        // 并发冲突由 UserService 内部以重载-重试消化。
         var add = await userManager.ReplacePasswordAsync(user, password);
         if (!add.Succeeded)
         {
