@@ -130,8 +130,10 @@ public sealed class AccountController(
         await signInManager.SignInAsync(HttpContext, signedInUser!, isPersistent: false);
         return LocalRedirect(string.IsNullOrWhiteSpace(model.ReturnUrl) ? "/me/" : model.ReturnUrl);
 
+        // returnUrl 无效/缺失时，MFA 挑战完成后的落点须与直登成功一致（/me/）：
+        // 挑战页与断言端各自兜底，旧值 / 是公网形态下的死胡同（根路径被网关指回登录页）。
         string SafeReturnUrl(string? returnUrl)
-            => Url.IsLocalUrl(returnUrl) ? returnUrl! : "/";
+            => Url.IsLocalUrl(returnUrl) ? returnUrl! : "/me/";
 
         IActionResult ViewWithError(string message)
         {
@@ -169,7 +171,11 @@ public sealed class AccountController(
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Logout()
     {
+        // 登出后回登录页而非 /me/：me 未认证会被立刻 challenge 回登录页，多一跳无意义；
+        // auth 源根路径（/）在公网形态由网关指回 /account/login，直接落登录表单路径最短。
+        // Notice 经 TempData 一次性提示「已安全退出」，登录 GET 已渲染（见 Login 视图）。
+        TempData["Notice"] = "已安全退出。";
         await signInManager.SignOutAsync(HttpContext);
-        return Redirect("/");
+        return Redirect("/account/login");
     }
 }
