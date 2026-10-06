@@ -85,6 +85,18 @@ public sealed class AuthorizationController(
             }), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
         }
 
+        // 邮箱确认门（与 Admin 面的 RequireConfirmedEmailAttribute 对齐）：未确认邮箱不发授权码，
+        // 否则 admin 建号后用户无需验邮箱即可拿到带 email claim 的令牌。刻意保留登录能力——
+        // 自助确认邮件流程（重发/点击确认链接）需要用户先登录才能操作，把登录也锁死会形成死锁。
+        if (!user.EmailConfirmed)
+        {
+            return Forbid(new AuthenticationProperties(new Dictionary<string, string?>
+            {
+                [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.AccessDenied,
+                [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = "邮箱未确认，请先完成邮箱验证。",
+            }), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+        }
+
         // prompt=login / max_age 超龄：客户端要求一次比当前会话更新的认证。先注销当前会话再挑战，
         // 强制回登录页——静默放行会让过期会话继续发码，auth_time 语义失真（Fleet auth_time 契约）。
         if (request.HasPromptValue(PromptValues.Login) ||
@@ -255,7 +267,9 @@ public sealed class AuthorizationController(
             identity.AddClaim(new Claim(PandaAuthClaims.Nickname, user.Nickname ?? user.UserName ?? string.Empty));
         }
 
-        if (scopes.Contains(Scopes.Email) && !string.IsNullOrEmpty(user.Email))
+        // email 只在已确认时写入令牌（纵深）：授权端已有确认门，但本方法也被刷新令牌等
+        // 重建主体的路径复用——门之外的任何调用路径都不应把未确认 email 投进令牌。
+        if (scopes.Contains(Scopes.Email) && user.EmailConfirmed && !string.IsNullOrEmpty(user.Email))
         {
             identity.AddClaim(new Claim(Claims.Email, user.Email));
         }
