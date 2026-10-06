@@ -23,10 +23,14 @@ public sealed class AuthorizationController(
     ClaimsPolicyService claimsPolicy,
     IOpenIddictScopeManager scopeManager,
     ITenantContextAccessor tenantContextAccessor,
-    TenantRedirectPolicy tenantRedirectPolicy) : Controller
+    TenantRedirectPolicy tenantRedirectPolicy,
+    TimeProvider clock,
+    LoginMfaChallengeService? challenges = null) : Controller
 {
     [HttpGet("authorize")]
-    [Authorize]
+    // 不挂 [Authorize]：它会在动作前抢先把未认证请求 302 到登录页，使 prompt=none 无法按 OIDC
+    // 以 error=login_required 回 redirect_uri。认证改为动作内手动 AuthenticateAsync，
+    // 挑战/报错语义（prompt/max_age/租户/账号状态）全部在协议层统一裁决。
     public async Task<IActionResult> Authorize()
     {
         var request = HttpContext.GetOpenIddictServerRequest()
@@ -46,13 +50,24 @@ public sealed class AuthorizationController(
         var authResult = await HttpContext.AuthenticateAsync(LoginSessionService.Scheme);
         if (authResult is not { Succeeded: true })
         {
+            // prompt=none：客户端声明不得出现交互界面——未认证时按 OIDC 必须把
+            // error=login_required 302 回 redirect_uri，而不是把用户送去登录页。
+            if (request.HasPromptValue(PromptValues.None))
+            {
+                return Forbid(new AuthenticationProperties(new Dictionary<string, string?>
+                {
+                    [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.LoginRequired,
+                    [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = "用户未认证，而请求要求不进行交互（prompt=none）。",
+                }), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+            }
+
             return Challenge(
                 new AuthenticationProperties { RedirectUri = Request.Path + Request.QueryString },
                 LoginSessionService.Scheme);
         }
 
         // Legacy or malformed cookies must establish a new real login, never synthesize "now".
-        if (!FleetHumanPrincipalClaims.TryReadAuthenticationTime(authResult.Principal, LoginSessionService.AuthenticatedAtClaim, out _))
+        if (!FleetHumanPrincipalClaims.TryReadAuthenticationTime(authResult.Principal, LoginSessionService.AuthenticatedAtClaim, out var authenticatedAt))
         {
             await signInManager.SignOutAsync(HttpContext);
             return Challenge(
@@ -69,6 +84,29 @@ public sealed class AuthorizationController(
                 [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.InvalidGrant,
                 [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = "账号不存在或已被冻结。",
             }), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+        }
+
+        // 邮箱确认门（与 Admin 面的 RequireConfirmedEmailAttribute 对齐）：未确认邮箱不发授权码，
+        // 否则 admin 建号后用户无需验邮箱即可拿到带 email claim 的令牌。刻意保留登录能力——
+        // 自助确认邮件流程（重发/点击确认链接）需要用户先登录才能操作，把登录也锁死会形成死锁。
+        if (!user.EmailConfirmed)
+        {
+            return Forbid(new AuthenticationProperties(new Dictionary<string, string?>
+            {
+                [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.AccessDenied,
+                [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = "邮箱未确认，请先完成邮箱验证。",
+            }), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+        }
+
+        // prompt=login / max_age 超龄：客户端要求一次比当前会话更新的认证。先注销当前会话再挑战，
+        // 强制回登录页——静默放行会让过期会话继续发码，auth_time 语义失真（Fleet auth_time 契约）。
+        if (request.HasPromptValue(PromptValues.Login) ||
+            ExceedsMaxAge(request.MaxAge, authenticatedAt, clock.GetUtcNow().ToUnixTimeSeconds()))
+        {
+            await signInManager.SignOutAsync(HttpContext);
+            return Challenge(
+                new AuthenticationProperties { RedirectUri = Request.Path + Request.QueryString },
+                LoginSessionService.Scheme);
         }
 
         var principal = await CreatePrincipalAsync(user, request.GetScopes(), authResult.Principal);
@@ -194,6 +232,15 @@ public sealed class AuthorizationController(
             await signInManager.SignOutAsync(HttpContext);
         }
 
+        // 登出兜底清理 MFA 会话残留：pending 挑战 cookie（5 分钟 TTL 内可凭验证码重入完成登录）
+        // 与遗留重配置 cookie 若不清除，登出后的共享设备仍能继续第二因子/重配置流程；
+        // end-session 是协议层登出，同样不允许留下任何可续写的本地会话。
+        challenges?.Clear(HttpContext);
+        if (await HttpContext.AuthenticateAsync(LoginSessionService.ReconfigurationScheme) is { Succeeded: true })
+        {
+            await signInManager.SignOutReconfigurationAsync(HttpContext);
+        }
+
         return SignOut(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
     }
 
@@ -230,7 +277,9 @@ public sealed class AuthorizationController(
             identity.AddClaim(new Claim(PandaAuthClaims.Nickname, user.Nickname ?? user.UserName ?? string.Empty));
         }
 
-        if (scopes.Contains(Scopes.Email) && !string.IsNullOrEmpty(user.Email))
+        // email 只在已确认时写入令牌（纵深）：授权端已有确认门，但本方法也被刷新令牌等
+        // 重建主体的路径复用——门之外的任何调用路径都不应把未确认 email 投进令牌。
+        if (scopes.Contains(Scopes.Email) && user.EmailConfirmed && !string.IsNullOrEmpty(user.Email))
         {
             identity.AddClaim(new Claim(Claims.Email, user.Email));
         }
@@ -273,4 +322,11 @@ public sealed class AuthorizationController(
             [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.InvalidGrant,
             [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = description,
         }), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+
+    /// <summary>
+    /// max_age 是否要求重新认证。OIDC 语义：认证年龄（now − auth_time）超过 max_age 秒须重认证；
+    /// max_age=0 是「任何既有认证都不可复用」的显式写法，恒为真。internal 供单测钉住边界语义。
+    /// </summary>
+    internal static bool ExceedsMaxAge(long? maxAge, long authenticatedAtSeconds, long nowSeconds)
+        => maxAge is { } limit && (limit == 0 || nowSeconds - authenticatedAtSeconds > limit);
 }

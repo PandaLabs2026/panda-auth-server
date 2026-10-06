@@ -70,13 +70,13 @@ public static class DbSeeder
 
         if (options.Seed.Me.Enabled)
         {
-            await SeedFirstPartyWebApplicationAsync(applications, logger, db, "me-web", "PandaAuth 账户中心", "Auth:Seed:Me", options.Seed.Me, options.TenantRouting, "me");
+            await SeedFirstPartyWebApplicationAsync(applications, logger, db, FirstPartyClients.MeWeb, "PandaAuth 账户中心", "Auth:Seed:Me", options.Seed.Me, options.TenantRouting, "me");
         }
 
         if (options.Seed.AdminWeb.Enabled)
         {
             await SeedFirstPartyWebApplicationAsync(
-                applications, logger, db, "admin-web", "PandaAuth 管理后台", "Auth:Seed:AdminWeb", options.Seed.AdminWeb, options.TenantRouting, "admin");
+                applications, logger, db, FirstPartyClients.AdminWeb, "PandaAuth 管理后台", "Auth:Seed:AdminWeb", options.Seed.AdminWeb, options.TenantRouting, "admin");
         }
 
         // Oasis 不挂在 PandaAuth 租户路由下（独立产品域），不参与租户回调展开；
@@ -84,7 +84,7 @@ public static class DbSeeder
         if (options.Seed.OasisWeb.Enabled)
         {
             await SeedFirstPartyWebApplicationAsync(
-                applications, logger, db, "oasis-web", "Oasis 工作台", "Auth:Seed:OasisWeb", options.Seed.OasisWeb,
+                applications, logger, db, FirstPartyClients.OasisWeb, "Oasis 工作台", "Auth:Seed:OasisWeb", options.Seed.OasisWeb,
                 permissions: OasisWebPermissions());
         }
 
@@ -92,7 +92,7 @@ public static class DbSeeder
         if (options.Seed.FleetAdminWeb.Enabled)
         {
             await SeedFirstPartyWebApplicationAsync(
-                applications, logger, db, "fleet-admin-web", "Panda Fleet 管理台", "Auth:Seed:FleetAdminWeb", options.Seed.FleetAdminWeb,
+                applications, logger, db, FirstPartyClients.FleetAdminWeb, "Panda Fleet 管理台", "Auth:Seed:FleetAdminWeb", options.Seed.FleetAdminWeb,
                 permissions: FleetAdminWebPermissions());
         }
 
@@ -101,7 +101,7 @@ public static class DbSeeder
         if (options.Seed.AsstWeb.Enabled)
         {
             await SeedFirstPartyWebApplicationAsync(
-                applications, logger, db, "asst-web", "熊猫助理工作台", "Auth:Seed:AsstWeb", options.Seed.AsstWeb,
+                applications, logger, db, FirstPartyClients.AsstWeb, "熊猫助理工作台", "Auth:Seed:AsstWeb", options.Seed.AsstWeb,
                 options.TenantRouting, "app", AsstClientPermissions(), TenantProduct.PandaAssistant,
                 postLogoutSuffix: "callback/logout/pandaauth");
         }
@@ -109,7 +109,7 @@ public static class DbSeeder
         if (options.Seed.AsstAdmin.Enabled)
         {
             await SeedFirstPartyWebApplicationAsync(
-                applications, logger, db, "asst-admin", "熊猫助理管理后台", "Auth:Seed:AsstAdmin", options.Seed.AsstAdmin,
+                applications, logger, db, FirstPartyClients.AsstAdmin, "熊猫助理管理后台", "Auth:Seed:AsstAdmin", options.Seed.AsstAdmin,
                 options.TenantRouting, "admin", AsstClientPermissions(), TenantProduct.PandaAssistant,
                 postLogoutSuffix: "callback/logout/pandaauth");
         }
@@ -159,12 +159,12 @@ public static class DbSeeder
             throw new InvalidOperationException("缺少 Auth:Seed:Fleet:ClientSecret 配置（fleet-api 客户端密钥）。");
         }
 
-        var existing = await applications.FindByClientIdAsync("fleet-api");
+        var existing = await applications.FindByClientIdAsync(FirstPartyClients.FleetApi);
         if (existing is null)
         {
             var descriptor = new OpenIddictApplicationDescriptor
             {
-                ClientId = "fleet-api",
+                ClientId = FirstPartyClients.FleetApi,
                 ClientType = ClientTypes.Confidential,
                 ClientSecret = fleet.ClientSecret,
                 ConsentType = ConsentTypes.Implicit,
@@ -224,12 +224,12 @@ public static class DbSeeder
                 "Auth:Seed:Mgmt:Enabled=true 但缺少 Auth:Seed:Mgmt:ClientSecret 配置（mgmt-api 机密客户端密钥）。");
         }
 
-        var existing = await applications.FindByClientIdAsync("mgmt-api");
+        var existing = await applications.FindByClientIdAsync(FirstPartyClients.MgmtApi);
         if (existing is null)
         {
             await applications.CreateAsync(new OpenIddictApplicationDescriptor
             {
-                ClientId = "mgmt-api",
+                ClientId = FirstPartyClients.MgmtApi,
                 ClientType = ClientTypes.Confidential,
                 ClientSecret = mgmt.ClientSecret,
                 ConsentType = ConsentTypes.Implicit,
@@ -271,11 +271,11 @@ public static class DbSeeder
         }
 
         // demo-public：公共客户端（模拟移动端/桌面端），授权码 + 强制 PKCE + 刷新令牌。
-        if (await applications.FindByClientIdAsync("demo-public") is null)
+        if (await applications.FindByClientIdAsync(FirstPartyClients.DemoPublic) is null)
         {
             await applications.CreateAsync(new OpenIddictApplicationDescriptor
             {
-                ClientId = "demo-public",
+                ClientId = FirstPartyClients.DemoPublic,
                 ClientType = ClientTypes.Public,
                 ConsentType = ConsentTypes.Implicit,
                 DisplayName = "PandaAuth Demo（公共客户端 / PKCE）",
@@ -300,11 +300,11 @@ public static class DbSeeder
         }
 
         // demo-web：机密客户端（模拟传统 Web 应用后端托管凭证），授权码 + PKCE + 刷新令牌。
-        if (await applications.FindByClientIdAsync("demo-web") is null)
+        if (await applications.FindByClientIdAsync(FirstPartyClients.DemoWeb) is null)
         {
             await applications.CreateAsync(new OpenIddictApplicationDescriptor
             {
-                ClientId = "demo-web",
+                ClientId = FirstPartyClients.DemoWeb,
                 ClientType = ClientTypes.Confidential,
                 ClientSecret = demo.WebSecret,
                 ConsentType = ConsentTypes.Implicit,
@@ -330,11 +330,11 @@ public static class DbSeeder
         }
 
         // demo-service：机密客户端，客户端凭证模式（服务间调用）。
-        if (await applications.FindByClientIdAsync("demo-service") is null)
+        if (await applications.FindByClientIdAsync(FirstPartyClients.DemoService) is null)
         {
             await applications.CreateAsync(new OpenIddictApplicationDescriptor
             {
-                ClientId = "demo-service",
+                ClientId = FirstPartyClients.DemoService,
                 ClientType = ClientTypes.Confidential,
                 ClientSecret = demo.ServiceSecret,
                 ConsentType = ConsentTypes.Implicit,
@@ -626,7 +626,7 @@ public static class DbSeeder
     /// </summary>
     private static async Task SeedAsstMobileApplicationAsync(IOpenIddictApplicationManager applications, AsstMobileSeedOptions seed)
     {
-        var existing = await applications.FindByClientIdAsync("asst-mobile");
+        var existing = await applications.FindByClientIdAsync(FirstPartyClients.AsstMobile);
         if (existing is null)
         {
             if (seed.RedirectUris.Length == 0)
@@ -636,7 +636,7 @@ public static class DbSeeder
 
             var descriptor = new OpenIddictApplicationDescriptor
             {
-                ClientId = "asst-mobile",
+                ClientId = FirstPartyClients.AsstMobile,
                 ClientType = ClientTypes.Public,
                 ConsentType = ConsentTypes.Implicit,
                 DisplayName = "熊猫助理 App（公共客户端 / PKCE）",
@@ -696,12 +696,12 @@ public static class DbSeeder
             throw new InvalidOperationException("缺少 Auth:Seed:AsstServer:ClientSecret 配置（asst-server 内省客户端密钥）。");
         }
 
-        var existing = await applications.FindByClientIdAsync("asst-server");
+        var existing = await applications.FindByClientIdAsync(FirstPartyClients.AsstServer);
         if (existing is null)
         {
             await applications.CreateAsync(new OpenIddictApplicationDescriptor
             {
-                ClientId = "asst-server",
+                ClientId = FirstPartyClients.AsstServer,
                 ClientType = ClientTypes.Confidential,
                 ClientSecret = seed.ClientSecret,
                 ConsentType = ConsentTypes.Implicit,

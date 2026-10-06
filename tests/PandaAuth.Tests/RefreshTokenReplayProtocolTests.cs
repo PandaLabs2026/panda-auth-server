@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
@@ -235,6 +236,12 @@ public sealed class RefreshTokenReplayProtocolTests
         {
             builder.UseEnvironment("Development");
             builder.UseContentRoot(_root.Path);
+            // 本用例的浏览器是 HttpClient + CookieContainer：.NET 对 http 请求严格执行 Secure
+            // 属性（不像真实浏览器把 localhost 视为可信源放行）。Program 已把防伪 cookie 恒置
+            // Always，此处以 http 浏览并回贴防伪 cookie 的协议流需回落 SameAsRequest；
+            // Secure 属性本身的断言在 LoginCookieTests。
+            builder.ConfigureTestServices(services => services.AddAntiforgery(options =>
+                options.Cookie.SecurePolicy = Microsoft.AspNetCore.Http.CookieSecurePolicy.SameAsRequest));
         }
         protected override void Dispose(bool disposing) { base.Dispose(disposing); _root.Dispose(); }
     }

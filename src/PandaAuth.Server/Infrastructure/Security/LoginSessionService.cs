@@ -164,8 +164,17 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock)
 
 public static class UserStoreRegistration
 {
-    public static IServiceCollection AddUserStore(this IServiceCollection services, bool httpsRequired = false)
+    /// <param name="cookieSecure">会话 cookie 的 Secure 属性策略（Auth:CookieSecure）。</param>
+    public static IServiceCollection AddUserStore(
+        this IServiceCollection services,
+        PandaAuth.Server.Configuration.CookieSecurePolicy cookieSecure = PandaAuth.Server.Configuration.CookieSecurePolicy.SameAsRequest)
     {
+        // CookieSecure 与 HttpsRequired（OpenIddict transport requirement）解耦：网关终止 TLS 后
+        // 回源为 http 的部署（fleet 控制面等，HttpsRequired=false）下，Secure 若跟随回源协议
+        // （SameAsRequest）会被网关链路剥离（auth.appliket.com 实测），需单独收紧为 Always。
+        var securePolicy = cookieSecure == PandaAuth.Server.Configuration.CookieSecurePolicy.Always
+            ? CookieSecurePolicy.Always
+            : CookieSecurePolicy.SameAsRequest;
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddScoped<IPasswordHasher, Argon2idPasswordHasher>();
         services.AddScoped<UserService>();
@@ -178,6 +187,7 @@ public static class UserStoreRegistration
                 options.Cookie.Name = LoginSessionService.Scheme;
                 options.Cookie.HttpOnly = true;
                 options.Cookie.SameSite = SameSiteMode.Lax;
+<<<<<<< HEAD
                 options.Cookie.SecurePolicy = httpsRequired ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
                 // 静态事件改为委托：逐请求从 RequestServices 解析 UserService 与 stamp 缓存
                 // （ValidateCookieAsync 需要作用域服务与 IMemoryCache，静态签名拿不到）。
@@ -188,12 +198,17 @@ public static class UserStoreRegistration
                         context.HttpContext.RequestServices.GetRequiredService<UserService>(),
                         context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>());
                 };
+=======
+                options.Cookie.SecurePolicy = securePolicy;
+                options.Events.OnValidatePrincipal = LoginSessionService.ValidateCookieAsync;
+>>>>>>> origin/main
             })
             .AddCookie(LoginSessionService.ReconfigurationScheme, options =>
             {
                 options.Cookie.Name = LoginSessionService.ReconfigurationScheme;
                 options.Cookie.HttpOnly = true;
                 options.Cookie.SameSite = SameSiteMode.Lax;
+<<<<<<< HEAD
                 options.Cookie.SecurePolicy = httpsRequired ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
                 options.Events.OnValidatePrincipal = async context =>
                 {
@@ -202,6 +217,10 @@ public static class UserStoreRegistration
                         context.HttpContext.RequestServices.GetRequiredService<UserService>(),
                         context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>());
                 };
+=======
+                options.Cookie.SecurePolicy = securePolicy;
+                options.Events.OnValidatePrincipal = LoginSessionService.ValidateCookieAsync;
+>>>>>>> origin/main
             });
         return services;
     }
