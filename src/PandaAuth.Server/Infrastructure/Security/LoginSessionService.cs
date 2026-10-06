@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Security.Mfa;
@@ -123,16 +124,41 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock)
         await context.SignInAsync(Scheme, new ClaimsPrincipal(identity), ticket.Properties);
     }
 
-    public static async Task ValidateCookieAsync(CookieValidatePrincipalContext context)
+    /// <summary>stamp 短缓存键前缀；键含 userId+stamp——stamp 轮换（改密/改角色）即 miss、立即生效。</summary>
+    internal const string StampCacheKeyPrefix = "login-stamp-valid:";
+
+    /// <summary>stamp 缓存 TTL：用户状态变化（冻结等不轮换 stamp 的路径）最迟 60 秒生效的取舍窗口。</summary>
+    internal static readonly TimeSpan StampCacheTtl = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// 每个 cookie 认证请求都会走到这里：命中 stamp 短缓存即免查库（热路径大头）。
+    /// 取舍：改密/改角色等轮换 stamp 的操作会同步作废旧 stamp 的缓存键（UserService 轮换路径负责），
+    /// 旧会话立即失效；冻结等不轮换 stamp 的状态变化最迟 60 秒（TTL）后生效。
+    /// 校验失败绝不写缓存（fail-closed 不缓存否定结果）。
+    /// 经 AddUserStore 的事件委托逐请求解析 UserService/IMemoryCache；internal static 供缓存行为直测。
+    /// </summary>
+    internal static async Task ValidateCookieAsync(
+        CookieValidatePrincipalContext context, UserService users, IMemoryCache stampCache)
     {
-        var users = context.HttpContext.RequestServices.GetRequiredService<UserService>();
-        var user = await users.GetUserAsync(context.Principal!);
+        var principal = context.Principal!;
+        var userId = principal.FindFirstValue(ClaimTypes.NameIdentifier) ?? principal.FindFirstValue("sub");
+        var stamp = principal.FindFirstValue(StampClaim);
+        if (!string.IsNullOrEmpty(userId) && !string.IsNullOrEmpty(stamp) &&
+            stampCache.TryGetValue(StampCacheKeyPrefix + userId + ":" + stamp, out _))
+        {
+            return;
+        }
+
+        var user = await users.FindByIdAsync(userId ?? string.Empty);
         if (user is null || user.Status != UserStatus.Active || string.IsNullOrEmpty(user.SecurityStamp) ||
-            user.SecurityStamp != context.Principal!.FindFirstValue(StampClaim))
+            user.SecurityStamp != stamp)
         {
             context.RejectPrincipal();
             await context.HttpContext.SignOutAsync(Scheme);
+            return;
         }
+
+        stampCache.Set(StampCacheKeyPrefix + user.Id + ":" + user.SecurityStamp, true, StampCacheTtl);
     }
 }
 
@@ -161,16 +187,40 @@ public static class UserStoreRegistration
                 options.Cookie.Name = LoginSessionService.Scheme;
                 options.Cookie.HttpOnly = true;
                 options.Cookie.SameSite = SameSiteMode.Lax;
+<<<<<<< HEAD
+                options.Cookie.SecurePolicy = httpsRequired ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
+                // 静态事件改为委托：逐请求从 RequestServices 解析 UserService 与 stamp 缓存
+                // （ValidateCookieAsync 需要作用域服务与 IMemoryCache，静态签名拿不到）。
+                options.Events.OnValidatePrincipal = async context =>
+                {
+                    await LoginSessionService.ValidateCookieAsync(
+                        context,
+                        context.HttpContext.RequestServices.GetRequiredService<UserService>(),
+                        context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>());
+                };
+=======
                 options.Cookie.SecurePolicy = securePolicy;
                 options.Events.OnValidatePrincipal = LoginSessionService.ValidateCookieAsync;
+>>>>>>> origin/main
             })
             .AddCookie(LoginSessionService.ReconfigurationScheme, options =>
             {
                 options.Cookie.Name = LoginSessionService.ReconfigurationScheme;
                 options.Cookie.HttpOnly = true;
                 options.Cookie.SameSite = SameSiteMode.Lax;
+<<<<<<< HEAD
+                options.Cookie.SecurePolicy = httpsRequired ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
+                options.Events.OnValidatePrincipal = async context =>
+                {
+                    await LoginSessionService.ValidateCookieAsync(
+                        context,
+                        context.HttpContext.RequestServices.GetRequiredService<UserService>(),
+                        context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>());
+                };
+=======
                 options.Cookie.SecurePolicy = securePolicy;
                 options.Events.OnValidatePrincipal = LoginSessionService.ValidateCookieAsync;
+>>>>>>> origin/main
             });
         return services;
     }

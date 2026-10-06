@@ -444,7 +444,8 @@ public class AdminUsersControllerTests
         var detail = DetailOf(await controller.UpdateRoles(user.Id, new AdminUserRolesRequest([PandaAuthRoles.Admin]), CancellationToken.None));
 
         Assert.Equal([PandaAuthRoles.Admin], detail.Roles);
-        Assert.NotEqual(stampBefore, user.SecurityStamp);
+        var rolesReloaded = await provider.GetRequiredService<UserService>().FindByIdAsync(user.Id);
+        Assert.NotEqual(stampBefore, rolesReloaded!.SecurityStamp);
         Assert.Equal([user.Id], revoker.RevokedUsers);
         var entry = SingleAudit(provider);
         Assert.Equal(AdminAuditAction.UserUpdateRoles, entry.Action);
@@ -675,8 +676,10 @@ public class AdminUsersControllerTests
         var detail = DetailOf(await controller.ResetTwoFactor(user.Id, CancellationToken.None));
 
         Assert.False(detail.TwoFactorEnabled);
-        Assert.False(user.TwoFactorEnabled);
-        Assert.NotEqual(stampBefore, user.SecurityStamp);
+        // 只读查找已改 AsNoTracking：控制器的修改落库而不回写测试本地实例，断言改为重取。
+        var resetReloaded = await provider.GetRequiredService<UserService>().FindByIdAsync(user.Id);
+        Assert.False(resetReloaded!.TwoFactorEnabled);
+        Assert.NotEqual(stampBefore, resetReloaded.SecurityStamp);
         Assert.Equal([user.Id], revoker.RevokedUsers);
     }
 
@@ -706,7 +709,8 @@ public class AdminUsersControllerTests
             user.Id, new AdminDeactivateRequest("deactivate-me"), CancellationToken.None));
 
         Assert.Equal(UserStatus.Deleted, detail.Status);
-        Assert.NotEqual(stampBefore, user.SecurityStamp);
+        var deactivateReloaded = await provider.GetRequiredService<UserService>().FindByIdAsync(user.Id);
+        Assert.NotEqual(stampBefore, deactivateReloaded!.SecurityStamp);
         Assert.Equal([user.Id], revoker.RevokedUsers);
         var entry = SingleAudit(provider);
         Assert.Equal(AdminAuditAction.UserDeactivate, entry.Action);
