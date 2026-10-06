@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.Extensions.DependencyInjection;
 using OpenIddict.Abstractions;
 using PandaAuth.Server.Domain;
+using PandaAuth.Server.Features.Authorization;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
 using Xunit;
@@ -11,6 +12,19 @@ namespace PandaAuth.Tests;
 
 public class AuthorizationTimeClaimsTests
 {
+    [Fact]
+    public void ExceedsMaxAge_PinsBoundarySemantics()
+    {
+        // max_age=0：显式声明任何既有认证都不可复用，恒须重认证（OIDC 语义按「超过」取严格大于，
+        // 但 0 与「恰好等于 0」无法区分，取恒真才是调用方意图）。null（未携带）不强制。
+        Assert.True(AuthorizationController.ExceedsMaxAge(0, authenticatedAtSeconds: 1000, nowSeconds: 1000));
+        // 严格大于：恰好在限值内（含恰好等于 max_age）不强制，超过 1 秒即强制。
+        Assert.False(AuthorizationController.ExceedsMaxAge(60, 1000, 1060));
+        Assert.True(AuthorizationController.ExceedsMaxAge(60, 1000, 1061));
+        // 未携带 max_age 的请求不做年龄约束（兼容既有静默续签流）。
+        Assert.False(AuthorizationController.ExceedsMaxAge(null, 0, long.MaxValue));
+    }
+
     [Theory]
     [InlineData("0", "0")]
     [InlineData("1700000000", "1700000000")]

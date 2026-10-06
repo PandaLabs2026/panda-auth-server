@@ -10,6 +10,16 @@ public sealed class AuthOptions
     /// <summary>是否强制 HTTPS（生产强制开启；本地开发可关闭）。</summary>
     public bool HttpsRequired { get; set; } = true;
 
+    /// <summary>
+    /// 登录会话 cookie 的 Secure 属性策略；默认 SameAsRequest 保本地 http 直连开发。
+    /// 与 <see cref="HttpsRequired"/> 分工：后者管 OpenIddict 端点的 transport requirement
+    /// （是否要求 HTTPS 回源），本项管 cookie 属性——网关终止 TLS 后回源为 http 的部署
+    /// （fleet 控制面等，HttpsRequired=false）下 SameAsRequest 会跟随回源协议丢掉 Secure
+    /// （auth.appliket.com 实测），生产经 compose 注入 Always。防伪 cookie 不走本配置，
+    /// 恒为 Always（见 Program.cs 注册处注释）。
+    /// </summary>
+    public CookieSecurePolicy CookieSecure { get; set; } = CookieSecurePolicy.SameAsRequest;
+
     public RateLimitOptions RateLimit { get; set; } = new();
 
     public AuditOptions Audit { get; set; } = new();
@@ -34,6 +44,16 @@ public sealed class AuthOptions
 
     /// <summary>DataProtection 密钥持久化目录；为空时使用临时密钥（仅限开发环境）。</summary>
     public string DataProtectionKeyPath { get; set; } = string.Empty;
+}
+
+/// <summary>会话 cookie 的 Secure 属性策略（配置键 Auth:CookieSecure）。</summary>
+public enum CookieSecurePolicy
+{
+    /// <summary>恒带 Secure 属性；网关终止 TLS 后回源 http 的部署必须用此值，否则 cookie 裸奔。</summary>
+    Always,
+
+    /// <summary>跟随请求协议；仅适合无网关的本地 http 直连开发形态。</summary>
+    SameAsRequest,
 }
 
 public sealed class RateLimitOptions

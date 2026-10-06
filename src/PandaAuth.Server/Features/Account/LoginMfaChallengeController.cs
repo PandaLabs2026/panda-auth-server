@@ -40,7 +40,8 @@ public sealed class LoginMfaChallengeController(
         }
         return View(new LoginMfaChallengeViewModel
         {
-            ReturnUrl = Url.IsLocalUrl(returnUrl) ? returnUrl! : "/",
+            // 兜底与断言端 SafeReturnUrl 一致：挑战完成后的默认落点是账户中心 /me/，不是死胡同 /。
+            ReturnUrl = Url.IsLocalUrl(returnUrl) ? returnUrl! : "/me/",
             HasTotp = factors.Any(factor => factor.Type == "totp"),
             HasPasskey = factors.Any(factor => factor.Type == "passkey"),
         });

@@ -7,6 +7,8 @@ using PandaAuth.Server.Infrastructure.Security;
 using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Shared;
 using Xunit;
+// 与 Microsoft.AspNetCore.Http.CookieSecurePolicy 同名，用别名消歧：本文件断言的是配置枚举。
+using ConfigurationCookieSecurePolicy = PandaAuth.Server.Configuration.CookieSecurePolicy;
 
 namespace PandaAuth.Tests;
 
@@ -121,6 +123,62 @@ public class LoginCookieTests
         await scope.ServiceProvider.GetRequiredService<LoginSessionService>().SignInAsync(context, user, false);
         return context.Response.Headers.SetCookie.Single()!.Split(';')[0];
     }
+
+    /// <summary>
+    /// CookieSecure=Always 的语义锚点：网关终止 TLS 后回源为 http 时，会话 cookie 仍必须带
+    /// Secure 属性（SameAsRequest 会跟随回源协议剥离，auth.appliket.com 实测的缺陷即在此）。
+    /// 覆盖登录与 MFA 重配置两个 scheme；默认 SameAsRequest 下 http 回源无 Secure 作为对照。
+    /// </summary>
+    [Fact]
+    public async Task CookieSecurePolicy_ControlsSecureAttributeOnBothSessionSchemes()
+    {
+        using var always = TestUserStoreHost.Create(
+            new PandaAuth.Server.Configuration.AuthOptions { CookieSecure = ConfigurationCookieSecurePolicy.Always });
+        var users = always.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "secure-alice", TwoFactorEnabled = true };
+        await users.CreateAsync(user, "Strong!Pass123");
+
+        using (var scope = always.CreateScope())
+        {
+            var sessions = scope.ServiceProvider.GetRequiredService<LoginSessionService>();
+            var login = PlainContext(scope.ServiceProvider, "http");
+            await sessions.SignInAsync(login, user, false);
+            AssertHasSecureAttribute(login, LoginSessionService.Scheme);
+
+            var reconfigure = PlainContext(scope.ServiceProvider, "http");
+            await sessions.SignInForMfaReconfigurationAsync(reconfigure, user);
+            AssertHasSecureAttribute(reconfigure, LoginSessionService.ReconfigurationScheme);
+        }
+
+        using var sameAsRequest = TestUserStoreHost.Create();
+        var plainUser = new PandaUser { UserName = "plain-alice" };
+        await sameAsRequest.GetRequiredService<UserService>().CreateAsync(plainUser, "Strong!Pass123");
+        using (var scope = sameAsRequest.CreateScope())
+        {
+            var context = PlainContext(scope.ServiceProvider, "http");
+            await scope.ServiceProvider.GetRequiredService<LoginSessionService>().SignInAsync(context, plainUser, false);
+            // 默认 SameAsRequest 下 http 回源不带 Secure——这正是 fleet 形态必须显式配置 Always 的原因。
+            Assert.DoesNotContain("secure", SecureSegments(context, LoginSessionService.Scheme), StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private static DefaultHttpContext PlainContext(IServiceProvider provider, string scheme)
+    {
+        var context = new DefaultHttpContext { RequestServices = provider };
+        context.Request.Scheme = scheme;
+        context.Request.Host = new HostString("localhost");
+        return context;
+    }
+
+    private static IEnumerable<string> SecureSegments(HttpContext context, string cookieName)
+        => context.Response.Headers.SetCookie
+            .Single(header => header!.StartsWith(cookieName + "=", StringComparison.Ordinal))!
+            .Split(';')
+            .Skip(1)
+            .Select(attribute => attribute.Trim());
+
+    private static void AssertHasSecureAttribute(HttpContext context, string cookieName)
+        => Assert.Contains("secure", SecureSegments(context, cookieName), StringComparer.OrdinalIgnoreCase);
 
     private static DefaultHttpContext Context(IServiceProvider provider, string? cookie = null)
     {

@@ -85,7 +85,13 @@ builder.Services.AddDbContext<PandaAuthDbContext>(options =>
     options.UseOpenIddict();
 });
 
-builder.Services.AddUserStore(authOptions.HttpsRequired);
+builder.Services.AddUserStore(authOptions.CookieSecure);
+
+// 防伪 cookie 恒 Secure，不随 Auth:CookieSecure 配置：网关终止 TLS 回源 http 时 SameAsRequest
+// 会丢掉 Secure；真实浏览器对 localhost 的 http 请求同样接受 Secure cookie（localhost 被视为
+// 可信源），本地直连开发不受影响。
+builder.Services.AddAntiforgery(options =>
+    options.Cookie.SecurePolicy = Microsoft.AspNetCore.Http.CookieSecurePolicy.Always);
 
 builder.Services.AddScoped<IPasswordHasher, Argon2idPasswordHasher>();
 

@@ -545,6 +545,37 @@ public class DbSeederTests
     }
 
     [Fact]
+    public void MeSeedDefaultPostLogoutUris_UseDedicatedLogoutPath()
+    {
+        // 种子默认值即生产事实：未显式注入 Auth__Seed__Me__PostLogoutRedirectUris* 的部署，
+        // migrate 直接把该默认值登记进 me-web 白名单。me 客户端自 de78b73 起硬编码回跳
+        // me/callback/logout/pandaauth，默认值若为裸根 /me/，end-session 会因
+        // post_logout_redirect_uri 全等失配被拒。与 deploy/verify-me-callback.sh 的
+        // ②④⑥⑧ 与条数不变式同口径，仓内先行卡住漂移。
+        var serverDirectory = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "PandaAuth.Server"));
+
+        var options = new ConfigurationBuilder()
+            .SetBasePath(serverDirectory)
+            .AddJsonFile("appsettings.json")
+            .Build()
+            .GetSection(AuthOptions.SectionName).Get<AuthOptions>()
+            ?? throw new InvalidOperationException("未能从 appsettings 绑定 AuthOptions。");
+
+        // 登录回调维持不动（本修复只动 post-logout）。
+        Assert.Equal(
+        [
+            "https://auth.pandalabs.cn/me/callback/login/pandaauth",
+            "http://localhost:9007/me/callback/login/pandaauth",
+        ], options.Seed.Me.RedirectUris);
+        Assert.Equal(
+        [
+            "https://auth.pandalabs.cn/me/callback/logout/pandaauth",
+            "http://localhost:9007/me/callback/logout/pandaauth",
+        ], options.Seed.Me.PostLogoutRedirectUris);
+    }
+
+    [Fact]
     public async Task DevelopmentConfig_SeedsFreshDatabaseWithoutThrowing()
     {
         // 回归：全新空库 + Development 配置启动即播种不抛异常（旧结构缺 MeClientSecret 会硬失败）。
@@ -572,6 +603,10 @@ public class DbSeederTests
         Assert.NotNull(meWeb);
         Assert.Contains("http://localhost:9007/me/callback/login/pandaauth",
             await applications.GetRedirectUrisAsync(meWeb));
+        // 与 admin-web 同规：me 登出回跳必须是专用路径（me 客户端硬编码 callback/logout/pandaauth），
+        // 裸根 /me/ 会被 end-session 以 post_logout_redirect_uri 失配拒绝。
+        Assert.Contains("http://localhost:9007/me/callback/logout/pandaauth",
+            await applications.GetPostLogoutRedirectUrisAsync(meWeb));
         Assert.True(await applications.ValidateClientSecretAsync(meWeb, "me-web-dev-secret"));
 
         var adminWeb = await applications.FindByClientIdAsync("admin-web");
@@ -681,6 +716,83 @@ public class DbSeederTests
             await applications.GetRedirectUrisAsync(adminWeb));
         Assert.Contains("https://t0042-auth.s001.pandalabs.cn/admin/",
             await applications.GetPostLogoutRedirectUrisAsync(adminWeb));
+    }
+
+    [Fact]
+    public async Task SeededFirstPartyClients_AllCoveredByManagementReservedList()
+    {
+        // 防漂移锚点：全开关播种后，DbSeeder 实际落库的每个客户端都必须在第一方保留名单内
+        // （Management API 对名单只读）。新增播种客户端而未登记 FirstPartyClients 会在此失败，
+        // 而不是等自动化通道误伤种子对账时才暴露。
+        var options = ValidOptions();
+        options.Seed.OasisWeb = new OasisWebSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = OasisWebClientSecret,
+            RedirectUris = [OasisWebRedirectUri],
+            PostLogoutRedirectUris = [OasisWebPostLogoutUri],
+        };
+        options.Seed.FleetAdminWeb = new FleetAdminWebSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = FleetAdminWebClientSecret,
+            RedirectUris = [FleetAdminWebRedirectUri],
+            PostLogoutRedirectUris = [FleetAdminWebPostLogoutUri],
+        };
+        options.Seed.AsstWeb = new AsstWebSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "asst-web-secret-0123456789abcdef",
+            RedirectUris = ["https://asst.example.local/app/callback/pandaauth"],
+            PostLogoutRedirectUris = ["https://asst.example.local/app/"],
+        };
+        options.Seed.AsstAdmin = new AsstAdminSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "asst-admin-secret-0123456789abcd",
+            RedirectUris = ["https://asst.example.local/admin/callback/pandaauth"],
+            PostLogoutRedirectUris = ["https://asst.example.local/admin/"],
+        };
+        options.Seed.AsstMobile = new AsstMobileSeedOptions
+        {
+            Enabled = true,
+            RedirectUris = ["https://t0042-asst.s001.pandalabs.cn/app/callback/mobile"],
+            PostLogoutRedirectUris = ["https://t0042-asst.s001.pandalabs.cn/app/"],
+        };
+        options.Seed.AsstServer = new AsstServerSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "asst-server-secret-0123456789abcdef",
+        };
+        options.Seed.Fleet = new FleetSeedOptions { Enabled = true, ClientSecret = "fleet-api-test-secret" };
+        options.Seed.Mgmt = new MgmtSeedOptions { Enabled = true, ClientSecret = "mgmt-api-test-secret" };
+        options.Seed.Demo = new DemoSeedOptions
+        {
+            Enabled = true,
+            WebSecret = "demo-web-test-secret",
+            ServiceSecret = "demo-service-test-secret",
+        };
+        options.TenantRouting.Bindings =
+        [
+            new TenantRouteBindingOptions { TenantId = "t0042", Product = TenantProduct.PandaAuth, Zone = "s001", State = TenantRouteState.Ready },
+            new TenantRouteBindingOptions { TenantId = "t0042", Product = TenantProduct.PandaAssistant, Zone = "s001", State = TenantRouteState.Ready },
+        ];
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var seeded = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var application in applications.ListAsync())
+        {
+            seeded.Add((await applications.GetClientIdAsync(application))!);
+        }
+
+        // 播种 ⊆ 保留名单（防漂移方向：新播种项必须登记）。
+        Assert.All(seeded, clientId => Assert.Contains(clientId, FirstPartyClients.All));
+        // 保留名单中除宿主命令注册的 website-admin 外全部实际播种（防名单空挂/播种静默跳过）。
+        Assert.All(FirstPartyClients.All.Where(id => id != FirstPartyClients.WebsiteAdmin),
+            clientId => Assert.Contains(clientId, seeded));
     }
 
     [Fact]
