@@ -55,6 +55,7 @@ public class MfaControllerTests
             provider.GetRequiredService<LoginSessionService>(),
             db,
             provider.GetRequiredService<ILoggerFactory>().CreateLogger<MfaController>(),
+            provider.GetRequiredService<LoginRateLimiter>(),
             new MfaService(
                 db,
                 users,
@@ -94,7 +95,8 @@ public class MfaControllerTests
                 new TotpSecretProtector(Convert.FromBase64String("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="), "v1"), TimeProvider.System),
             provider.GetRequiredService<LoginSessionService>(),
             provider.GetRequiredService<PandaAuthDbContext>(),
-            provider.GetRequiredService<ILoggerFactory>().CreateLogger<MfaController>())
+            provider.GetRequiredService<ILoggerFactory>().CreateLogger<MfaController>(),
+            provider.GetRequiredService<LoginRateLimiter>())
         {
             ControllerContext = new ControllerContext { HttpContext = context },
         };
@@ -120,7 +122,8 @@ public class MfaControllerTests
                 new TotpSecretProtector(Convert.FromBase64String("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="), "v1"), TimeProvider.System),
             provider.GetRequiredService<LoginSessionService>(),
             provider.GetRequiredService<PandaAuthDbContext>(),
-            provider.GetRequiredService<ILoggerFactory>().CreateLogger<MfaController>())
+            provider.GetRequiredService<ILoggerFactory>().CreateLogger<MfaController>(),
+            provider.GetRequiredService<LoginRateLimiter>())
         {
             ControllerContext = new ControllerContext { HttpContext = context },
         };
@@ -205,6 +208,7 @@ public class MfaControllerTests
             provider.GetRequiredService<LoginSessionService>(),
             db,
             provider.GetRequiredService<ILoggerFactory>().CreateLogger<MfaController>(),
+            provider.GetRequiredService<LoginRateLimiter>(),
             new MfaService(db, provider.GetRequiredService<UserService>(), totp,
                 provider.GetRequiredService<LoginSessionService>(), TimeProvider.System))
         {

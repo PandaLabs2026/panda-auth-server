@@ -24,7 +24,8 @@ public sealed class AuthorizationController(
     IOpenIddictScopeManager scopeManager,
     ITenantContextAccessor tenantContextAccessor,
     TenantRedirectPolicy tenantRedirectPolicy,
-    TimeProvider clock) : Controller
+    TimeProvider clock,
+    LoginMfaChallengeService? challenges = null) : Controller
 {
     [HttpGet("authorize")]
     // 不挂 [Authorize]：它会在动作前抢先把未认证请求 302 到登录页，使 prompt=none 无法按 OIDC
@@ -229,6 +230,15 @@ public sealed class AuthorizationController(
         if (User.Identity?.IsAuthenticated == true)
         {
             await signInManager.SignOutAsync(HttpContext);
+        }
+
+        // 登出兜底清理 MFA 会话残留：pending 挑战 cookie（5 分钟 TTL 内可凭验证码重入完成登录）
+        // 与遗留重配置 cookie 若不清除，登出后的共享设备仍能继续第二因子/重配置流程；
+        // end-session 是协议层登出，同样不允许留下任何可续写的本地会话。
+        challenges?.Clear(HttpContext);
+        if (await HttpContext.AuthenticateAsync(LoginSessionService.ReconfigurationScheme) is { Succeeded: true })
+        {
+            await signInManager.SignOutReconfigurationAsync(HttpContext);
         }
 
         return SignOut(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
