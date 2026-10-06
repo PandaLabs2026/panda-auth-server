@@ -79,11 +79,12 @@ public sealed class AccountController(
         if (user is not null && user.Status != UserStatus.Active)
         {
             failureReason = "account_frozen";
-            // 冻结状态在文案里已明示（不是秘密），但响应耗时不应额外区分路径：
-            // 与「用户不存在」一样支付一次等价哈希代价，避免各分支耗时形成可枚举的指纹。
+            // 用户可见文案与「用户名或密码错误」完全一致：区分文案（冻结/锁定/口令）等于免费向
+            // 撞库者确认账号存在。真实原因只落 login_logs（运维可辨），响应耗时仍与「用户不存在」
+            // 一样支付一次等价哈希代价，避免各分支形成可枚举的耗时指纹。
             passwordHasher.Verify(dummyPasswordHash.Value, model.Password);
             await loginAudit.RecordAsync(BuildLog(), cancellationToken);
-            return ViewWithError("账号已被冻结，请联系管理员。");
+            return ViewWithError("用户名或密码错误。");
         }
 
         if (user is not null)
@@ -93,8 +94,21 @@ public sealed class AccountController(
             signedInUser = result.User;
             if (result.RequiresMfaReconfiguration && result.User is not null)
             {
-                await signInManager.SignInForMfaReconfigurationAsync(HttpContext, result.User);
-                return LocalRedirect("/account/mfa/user/reconfigure");
+                // TwoFactorEnabled 只是「曾开启 MFA」的遗留标志；MfaService.MfaStatus 的口径是
+                // 「标志开启且无活跃因子」才需重配置——两处真值源在此对齐：标志遗留但仍有活跃
+                // 因子时清标志自愈，按正常（挑战/直登）路径继续；无因子才进重配置流。
+                if (mfa is null || !await mfa.HasActiveFactorAsync(result.User.Id, cancellationToken))
+                {
+                    await signInManager.SignInForMfaReconfigurationAsync(HttpContext, result.User);
+                    return LocalRedirect("/account/mfa/user/reconfigure");
+                }
+
+                result.User.TwoFactorEnabled = false;
+                await userManager.UpdateAsync(result.User);
+                // 该 outcome 的 Succeeded 为 false，但此路径密码已验证通过：改按成功继续，
+                // 否则会被记成 not_allowed 并落回「用户名或密码错误」的死胡同。
+                succeeded = true;
+                signedInUser = result.User;
             }
             failureReason = succeeded ? null
                 : result.IsLockedOut ? "locked_out"
@@ -112,9 +126,8 @@ public sealed class AccountController(
 
         if (!succeeded)
         {
-            return ViewWithError(failureReason == "locked_out"
-                ? "失败次数过多，账号已临时锁定，请稍后再试。"
-                : "用户名或密码错误。");
+            // 同冻结分支：锁定与口令错误的用户可见文案不区分，真实原因只落 login_logs。
+            return ViewWithError("用户名或密码错误。");
         }
 
         // 登录路径 MFA 挑战：开关开启且已有活跃因子时，签入前先要求第二因子（2026-09-30 拍板）。
@@ -131,8 +144,10 @@ public sealed class AccountController(
         await signInManager.SignInAsync(HttpContext, signedInUser!, isPersistent: false);
         return LocalRedirect(string.IsNullOrWhiteSpace(model.ReturnUrl) ? "/me/" : model.ReturnUrl);
 
+        // returnUrl 无效/缺失时，MFA 挑战完成后的落点须与直登成功一致（/me/）：
+        // 挑战页与断言端各自兜底，旧值 / 是公网形态下的死胡同（根路径被网关指回登录页）。
         string SafeReturnUrl(string? returnUrl)
-            => Url.IsLocalUrl(returnUrl) ? returnUrl! : "/";
+            => Url.IsLocalUrl(returnUrl) ? returnUrl! : "/me/";
 
         IActionResult ViewWithError(string message)
         {
@@ -177,7 +192,11 @@ public sealed class AccountController(
         {
             await signInManager.SignOutReconfigurationAsync(HttpContext);
         }
+        // 登出后回登录页而非 /me/：me 未认证会被立刻 challenge 回登录页，多一跳无意义；
+        // auth 源根路径（/）在公网形态由网关指回 /account/login，直接落登录表单路径最短。
+        // Notice 经 TempData 一次性提示「已安全退出」，登录 GET 已渲染（见 Login 视图）。
+        TempData["Notice"] = "已安全退出。";
         await signInManager.SignOutAsync(HttpContext);
-        return Redirect("/");
+        return Redirect("/account/login");
     }
 }
