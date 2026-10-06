@@ -209,6 +209,7 @@ public class FleetIntrospectionTests
                     Permissions.GrantTypes.AuthorizationCode, Permissions.GrantTypes.RefreshToken,
                     Permissions.ResponseTypes.Code, Permissions.Scopes.Profile,
                     Permissions.Prefixes.Scope + Scopes.OfflineAccess,
+                    Permissions.Prefixes.Scope + "api",
                 },
                 Requirements = { Requirements.Features.ProofKeyForCodeExchange },
             });
@@ -234,7 +235,7 @@ public class FleetIntrospectionTests
         {
             var authorize = "/connect/authorize?client_id=" + ClientId +
                 "&redirect_uri=http%3A%2F%2Flocalhost%2Fcallback&response_type=code" +
-                "&scope=openid%20profile%20offline_access&state=fleet-time-state&nonce=fleet-time-nonce" +
+                "&scope=openid%20profile%20offline_access%20api&state=fleet-time-state&nonce=fleet-time-nonce" +
                 "&code_challenge_method=S256&code_challenge=" +
                 Microsoft.IdentityModel.Tokens.Base64UrlEncoder.Encode(SHA256.HashData(Encoding.ASCII.GetBytes(Verifier)));
             var response = await client.GetAsync(authorize);
@@ -255,7 +256,7 @@ public class FleetIntrospectionTests
         {
             var authorize = "/connect/authorize?client_id=" + ClientId +
                 "&redirect_uri=http%3A%2F%2Flocalhost%2Fcallback&response_type=code" +
-                "&scope=openid%20profile%20offline_access&state=fleet-time-state&nonce=fleet-time-nonce" +
+                "&scope=openid%20profile%20offline_access%20api&state=fleet-time-state&nonce=fleet-time-nonce" +
                 "&code_challenge_method=S256&code_challenge=" +
                 Microsoft.IdentityModel.Tokens.Base64UrlEncoder.Encode(SHA256.HashData(Encoding.ASCII.GetBytes(Verifier)));
             var authorization = await client.GetAsync(authorize);
