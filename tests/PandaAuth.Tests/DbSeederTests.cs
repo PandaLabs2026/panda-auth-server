@@ -684,6 +684,83 @@ public class DbSeederTests
     }
 
     [Fact]
+    public async Task SeededFirstPartyClients_AllCoveredByManagementReservedList()
+    {
+        // 防漂移锚点：全开关播种后，DbSeeder 实际落库的每个客户端都必须在第一方保留名单内
+        // （Management API 对名单只读）。新增播种客户端而未登记 FirstPartyClients 会在此失败，
+        // 而不是等自动化通道误伤种子对账时才暴露。
+        var options = ValidOptions();
+        options.Seed.OasisWeb = new OasisWebSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = OasisWebClientSecret,
+            RedirectUris = [OasisWebRedirectUri],
+            PostLogoutRedirectUris = [OasisWebPostLogoutUri],
+        };
+        options.Seed.FleetAdminWeb = new FleetAdminWebSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = FleetAdminWebClientSecret,
+            RedirectUris = [FleetAdminWebRedirectUri],
+            PostLogoutRedirectUris = [FleetAdminWebPostLogoutUri],
+        };
+        options.Seed.AsstWeb = new AsstWebSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "asst-web-secret-0123456789abcdef",
+            RedirectUris = ["https://asst.example.local/app/callback/pandaauth"],
+            PostLogoutRedirectUris = ["https://asst.example.local/app/"],
+        };
+        options.Seed.AsstAdmin = new AsstAdminSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "asst-admin-secret-0123456789abcd",
+            RedirectUris = ["https://asst.example.local/admin/callback/pandaauth"],
+            PostLogoutRedirectUris = ["https://asst.example.local/admin/"],
+        };
+        options.Seed.AsstMobile = new AsstMobileSeedOptions
+        {
+            Enabled = true,
+            RedirectUris = ["https://t0042-asst.s001.pandalabs.cn/app/callback/mobile"],
+            PostLogoutRedirectUris = ["https://t0042-asst.s001.pandalabs.cn/app/"],
+        };
+        options.Seed.AsstServer = new AsstServerSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "asst-server-secret-0123456789abcdef",
+        };
+        options.Seed.Fleet = new FleetSeedOptions { Enabled = true, ClientSecret = "fleet-api-test-secret" };
+        options.Seed.Mgmt = new MgmtSeedOptions { Enabled = true, ClientSecret = "mgmt-api-test-secret" };
+        options.Seed.Demo = new DemoSeedOptions
+        {
+            Enabled = true,
+            WebSecret = "demo-web-test-secret",
+            ServiceSecret = "demo-service-test-secret",
+        };
+        options.TenantRouting.Bindings =
+        [
+            new TenantRouteBindingOptions { TenantId = "t0042", Product = TenantProduct.PandaAuth, Zone = "s001", State = TenantRouteState.Ready },
+            new TenantRouteBindingOptions { TenantId = "t0042", Product = TenantProduct.PandaAssistant, Zone = "s001", State = TenantRouteState.Ready },
+        ];
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var seeded = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var application in applications.ListAsync())
+        {
+            seeded.Add((await applications.GetClientIdAsync(application))!);
+        }
+
+        // 播种 ⊆ 保留名单（防漂移方向：新播种项必须登记）。
+        Assert.All(seeded, clientId => Assert.Contains(clientId, FirstPartyClients.All));
+        // 保留名单中除宿主命令注册的 website-admin 外全部实际播种（防名单空挂/播种静默跳过）。
+        Assert.All(FirstPartyClients.All.Where(id => id != FirstPartyClients.WebsiteAdmin),
+            clientId => Assert.Contains(clientId, seeded));
+    }
+
+    [Fact]
     public async Task PandaAssistantBinding_SeedsAsstClientsWithZoneCallbacksAndIntrospection()
     {
         // PANDA-INFRA-R1（panda-asst ADR 0095）：asst 客户端族的回调按 PandaAssistant 绑定展开，
