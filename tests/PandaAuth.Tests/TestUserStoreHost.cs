@@ -35,7 +35,8 @@ internal static class TestUserStoreHost
         services.AddAntiforgery();
         services.AddDataProtection().UseEphemeralDataProtectionProvider();
         services.AddHttpContextAccessor();
-        services.AddSingleton(Options.Create(options ?? new AuthOptions()));
+        var authOptions = options ?? new AuthOptions();
+        services.AddSingleton(Options.Create(authOptions));
         services.AddScoped<TenantContextAccessor>();
         services.AddScoped<ITenantContextAccessor>(serviceProvider => serviceProvider.GetRequiredService<TenantContextAccessor>());
         var databaseName = Guid.NewGuid().ToString("N");
@@ -43,7 +44,7 @@ internal static class TestUserStoreHost
             .UseInMemoryDatabase(databaseName)
             .UseOpenIddict());
         services.AddAuthentication();
-        services.AddUserStore();
+        services.AddUserStore(authOptions.CookieSecure);
         // AuthorizationController 依赖 IOpenIddictScopeManager（client_credentials 资源解析）；既有测试流不触发该路径。
         services.AddOpenIddict().AddCore(builder => builder.UseEntityFrameworkCore().UseDbContext<PandaAuthDbContext>());
         services.AddMemoryCache();
