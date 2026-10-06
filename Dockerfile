@@ -1,4 +1,4 @@
-# PandaAuth.Server 镜像（IDP 核心，生产绑定 127.0.0.1:9004）
+# PandaAuth.Server 镜像（IDP 核心；开发绑定 localhost:9004，生产端口由部署 env ASPNETCORE_URLS 注入，t0000 现网 10001）
 #
 # 跨仓构建：Server 通过相对路径引用 panda-auth-share，因此构建上下文必须是
 # panda-auth 工作区根（五个仓库同级克隆）：
