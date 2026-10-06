@@ -87,11 +87,15 @@ builder.Services.AddDbContext<PandaAuthDbContext>(options =>
 
 builder.Services.AddUserStore(authOptions.CookieSecure);
 
-// 防伪 cookie 恒 Secure，不随 Auth:CookieSecure 配置：网关终止 TLS 回源 http 时 SameAsRequest
-// 会丢掉 Secure；真实浏览器对 localhost 的 http 请求同样接受 Secure cookie（localhost 被视为
-// 可信源），本地直连开发不受影响。
+// 防伪 cookie Secure 按环境分层（与 admin/me 仓同款）：非 Development 恒 Always——网关终止
+// TLS 回源 http 时 SameAsRequest 会丢掉 Secure。Development 用 SameAsRequest：Antiforgery 的
+// CheckSSLConfig 对非 SSL 请求抛 InvalidOperationException，恒 Always 会让 http 测试宿主/
+// 本地直连的登录页 500、表单拿不到令牌（协议级测试实测；真实浏览器对 localhost http 虽接受
+// Secure cookie，服务端检查不买账）。
 builder.Services.AddAntiforgery(options =>
-    options.Cookie.SecurePolicy = Microsoft.AspNetCore.Http.CookieSecurePolicy.Always);
+    options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
+        ? Microsoft.AspNetCore.Http.CookieSecurePolicy.SameAsRequest
+        : Microsoft.AspNetCore.Http.CookieSecurePolicy.Always);
 
 builder.Services.AddScoped<IPasswordHasher, Argon2idPasswordHasher>();
 
