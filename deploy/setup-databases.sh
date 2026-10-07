@@ -236,6 +236,10 @@ for hba_host in "${HBA_HOST_LIST[@]}"; do
   HBA_RULES+=(
     "host panda_auth panda_auth $hba_host scram-sha-256"
     "host panda_auth panda_auth_migrator $hba_host scram-sha-256"
+    # v2 租户库组合（t0000：库 panda_auth_t0000 + runtime/migrator 角色，ADR-073
+    # 迁网后容器经 100.64.0.x 连接；2026-10-07 scram 收紧实测缺行即拒连崩溃循环）
+    "host panda_auth_t0000 panda_auth_t0000_runtime $hba_host scram-sha-256"
+    "host panda_auth_t0000 panda_auth_t0000_migrator $hba_host scram-sha-256"
   )
 done
 HBA_RULES+=(
