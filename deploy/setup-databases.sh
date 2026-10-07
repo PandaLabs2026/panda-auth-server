@@ -220,7 +220,9 @@ TEMP_FILE="$(mktemp "${HBA_FILE}.XXXXXX")"
 trap 'rm -f "$TEMP_FILE"' EXIT
 cp -a "$HBA_FILE" "$HBA_BACKUP"
 
-HBA_HOSTS="${PANDA_AUTH_HBA_HOSTS:-127.0.0.1/32 ::1/128}"
+# 默认含租户网段（ADR-073 每租户一网 t####-net=100.64.0.0/24，2026-10-07 迁网后
+# auth 容器经 100.64.0.x 连 PG）；覆盖示例：PANDA_AUTH_HBA_HOSTS="127.0.0.1/32 ::1/128"
+HBA_HOSTS="${PANDA_AUTH_HBA_HOSTS:-127.0.0.1/32 ::1/128 100.64.0.0/24}"
 read -r -a HBA_HOST_LIST <<< "$HBA_HOSTS"
 HBA_RULES=(
   'local panda_auth panda_auth reject'
