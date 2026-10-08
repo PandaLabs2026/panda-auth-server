@@ -126,6 +126,9 @@ if (isMigrateCommand)
 {
     using var migrateApp = builder.Build();
     using var migrateScope = migrateApp.Services.CreateScope();
+    // 每库单一迁移租约：同库并发首启（竞态部署/重复 compose run）时迁移+种子整体串行，
+    // 消除「查-生成-写」交错（fleet-control-plane.md 第六节 co-tenancy 审计的宿主侧落地）。
+    await using var migrationLease = await DatabaseLease.AcquireAsync(connectionString);
     await migrateScope.ServiceProvider.GetRequiredService<PandaAuthDbContext>().Database.MigrateAsync();
     await DbSeeder.SeedAsync(migrateScope.ServiceProvider);
     migrateApp.Logger.LogInformation("数据库迁移与种子数据初始化完成。");
@@ -133,7 +136,12 @@ if (isMigrateCommand)
 }
 
 // OpenIddict 要求在容器构建前注册密钥：从数据库加载（无密钥自动生成、超期自动轮换）。
-var keys = await SigningKeyStore.LoadOrCreateAsync(connectionString, authOptions.Keys);
+// 密钥生成同为「查-生成-写」：经同一租约串行化，杜绝同库并发启动签出两套主密钥。
+List<(SigningKeyRecord Record, RsaSecurityKey Key)> keys;
+await using (await DatabaseLease.AcquireAsync(connectionString))
+{
+    keys = await SigningKeyStore.LoadOrCreateAsync(connectionString, authOptions.Keys);
+}
 
 openIddict.AddServer(options =>
     {
