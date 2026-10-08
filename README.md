@@ -56,3 +56,11 @@ Product roadmap, release gates and community/commercial boundaries remain mainta
 - [Security](SECURITY.md): selected private reporting channel, enablement unverified; no public vulnerability details.
 - [Contributing](CONTRIBUTING.md): repository-specific checks and the shared contribution policy.
 - [MIT License](LICENSE) for project-owned code/documentation, subject to [license scope](LICENSING.md); third-party terms remain applicable and brand images are excluded.
+
+## Production bridge proxy configuration
+
+Production topology and release commands are maintained in the sibling meta repository's
+`deploy/README.md`. The default bridge stack sets both `PANDA_AUTH_TENANT_NETWORK_MODE=bridge`
+and `PANDA_AUTH_TRUSTED_PROXY` to the allocation's exact IPv4 network gateway.
+Subnet peers and loopback are not trusted in bridge mode. The application's image defaults
+are development defaults, not production port assignments.

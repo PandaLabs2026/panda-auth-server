@@ -1,5 +1,7 @@
 using System.Net;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Configuration;
@@ -114,6 +116,37 @@ public class ForwardedHeadersTests
         if (trustedProxy is not null) settings["PANDA_AUTH_TRUSTED_PROXY"] = trustedProxy;
 
         Assert.Throws<InvalidOperationException>(() => CreateForwardedHeadersOptions(settings));
+    }
+
+    [Theory]
+    [InlineData("100.64.3.1", true)]
+    [InlineData("100.64.3.2", false)]
+    [InlineData("127.0.0.1", false)]
+    public async Task HostingAutoForwarding_DoesNotBroadenBridgeTrust(string peerValue, bool trusted)
+    {
+        var builder = WebApplication.CreateBuilder();
+        // Same hosting flag as the bridge compose. Framework post-configuration must not win.
+        builder.WebHost.UseSetting("forwardedHeaders_enabled", "true");
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["PANDA_AUTH_TENANT_NETWORK_MODE"] = "bridge",
+            ["PANDA_AUTH_TRUSTED_PROXY"] = TenantGateway.ToString(),
+        });
+        builder.Services.Configure<ForwardedHeadersOptions>(options =>
+        {
+            options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+            options.ForwardLimit = 1;
+            TenantForwardedHeaders.Configure(options, builder.Configuration);
+        });
+        await using var app = builder.Build();
+        var options = app.Services.GetRequiredService<IOptions<ForwardedHeadersOptions>>().Value;
+        Assert.Equal(new[] { TenantGateway }, options.KnownProxies);
+        Assert.Empty(options.KnownIPNetworks);
+        var peer = IPAddress.Parse(peerValue);
+        var context = CreateContext(peer, RealClientIp.ToString(), "https");
+        await InvokeForwardedHeadersAsync(context, options);
+        Assert.Equal(trusted ? "https" : "http", context.Request.Scheme);
+        Assert.Equal(trusted ? RealClientIp : peer, context.Connection.RemoteIpAddress);
     }
 
     private static DefaultHttpContext CreateContext(IPAddress remoteIp, string forwardedFor, string? forwardedProto)
