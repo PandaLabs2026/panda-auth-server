@@ -47,6 +47,8 @@ Protocol paths: `/connect/authorize`, `/connect/token`, `/connect/userinfo`, `/c
 
 The [deployment guide](deploy/README.md) records migration rules and current initialization limitations. Production orchestration belongs to the coordination repository; normal startup does not replace one-time migration. Self-service password reset via verification codes and the management API are implemented (see the scope notes above).
 
+The name-only [runtime configuration reference](deploy/.env.example) lists Server process environment keys without values. Production orchestration and secret delivery belong to the PandaAuth coordination repository; this reference is not a deployable env file.
+
 ## Roadmap and governance
 
 Product roadmap, release gates and community/commercial boundaries remain maintainer-governed until a formal public release. This README documents only the independently reproducible Server build and runtime boundary.
