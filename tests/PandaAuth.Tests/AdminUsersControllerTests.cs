@@ -578,6 +578,74 @@ public class AdminUsersControllerTests
         Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
     }
 
+    // ---- 独立踢下线（RevokeTokens） ----
+
+    [Fact]
+    public async Task RevokeTokens_RevokesAndAudits_WithoutTouchingStatus()
+    {
+        var (controller, provider, revoker) = Create();
+        var user = await SeedUserAsync(provider, "kick-me");
+
+        var ok = Assert.IsType<OkObjectResult>(
+            await controller.RevokeTokens(user.Id, CancellationToken.None));
+
+        // 仅吊销令牌：账号状态、凭据、锁定态一律不动（与冻结的差别就是这些副作用）。
+        var detail = Assert.IsType<AdminUserDetail>(ok.Value);
+        Assert.Equal(UserStatus.Active, detail.Status);
+        Assert.Equal([user.Id], revoker.RevokedUsers);
+        var entry = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
+        Assert.Equal(AdminAuditAction.UserRevokeTokens, entry.Action);
+        Assert.Equal("actor-1", entry.ActorUserId);
+        Assert.Equal(user.Id, entry.TargetId);
+        Assert.Equal("203.0.113.10", entry.IpAddress);
+    }
+
+    [Fact]
+    public async Task RevokeTokens_ByTheAccountOwnerIsRejected()
+    {
+        var (controller, provider, revoker) = Create();
+        var user = await SeedUserAsync(provider, "self-kick");
+
+        controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim(Claims.Subject, user.Id),
+            new Claim(Claims.Name, "self-kick"),
+            new Claim(Claims.Role, PandaAuthRoles.Admin),
+            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.WebAuthn),
+            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
+        ], "TestBearer", Claims.Name, Claims.Role));
+
+        var problem = Assert.IsType<ObjectResult>(
+            await controller.RevokeTokens(user.Id, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
+
+        // 未发生吊销与审计：自助登出是自查会话的正道。
+        Assert.Empty(revoker.RevokedUsers);
+        Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
+    }
+
+    [Fact]
+    public async Task RevokeTokens_DeletedUserIsRejected()
+    {
+        var (controller, provider, revoker) = Create();
+        var user = await SeedUserAsync(provider, "deleted-kick", status: UserStatus.Deleted);
+
+        var problem = Assert.IsType<ObjectResult>(
+            await controller.RevokeTokens(user.Id, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
+        Assert.Empty(revoker.RevokedUsers);
+        Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
+    }
+
+    [Fact]
+    public async Task RevokeTokens_UnknownUserReturns404()
+    {
+        var (controller, _, revoker) = Create();
+
+        Assert.IsType<NotFoundResult>(await controller.RevokeTokens("missing-user", CancellationToken.None));
+        Assert.Empty(revoker.RevokedUsers);
+    }
+
     // ---- 资料编辑（UpdateProfile） ----
 
     [Fact]
