@@ -64,6 +64,9 @@ builder.Services.AddControllersWithViews(o =>
         {
             o.Conventions.Add(new MgmtRoutesDisabledConvention());
         }
+        // Admin API 错误码：title → 稳定码注册表注入 ProblemDetails.extensions.code
+        // （ADR 2026-10-11-admin-error-codes；前端按 code 走 i18n，未登记 title 降级 detail）。
+        o.Filters.Add<AdminErrorCodeFilter>();
     })
     .AddJsonOptions(options =>
         options.JsonSerializerOptions.TypeInfoResolverChain.Insert(0, FidoModelSerializerContext.Default));
