@@ -201,7 +201,7 @@ public class DbSeederTests
     }
 
     [Fact]
-    public async Task FleetEnabled_RegistersAllSevenControlPlaneScopesAndGrantsThemToFleetApi()
+    public async Task FleetEnabled_RegistersAllControlPlaneScopesAndGrantsThemToFleetApi()
     {
         var options = ValidOptions();
         options.Seed.Fleet = new FleetSeedOptions
@@ -230,7 +230,7 @@ public class DbSeederTests
     }
 
     [Fact]
-    public async Task FleetAdminWebEnabled_GrantsAllSevenControlPlaneScopes()
+    public async Task FleetAdminWebEnabled_GrantsAllControlPlaneScopes()
     {
         var options = ValidOptions();
         options.Seed.FleetAdminWeb = new FleetAdminWebSeedOptions
@@ -250,6 +250,91 @@ public class DbSeederTests
         foreach (var name in PandaAuthScopes.FleetAll)
             Assert.True(await applications.HasPermissionAsync(fleetAdmin, Permissions.Prefixes.Scope + name),
                 $"fleet-admin-web 缺少控制面 scope 授权：{name}");
+    }
+
+    [Fact]
+    public async Task FleetApiExists_MissingContractScopePermissionIsReconciledOnReseed()
+    {
+        // 存量事故现场（2026-10-11 隔离 e2e harness 首跑实证）：fleet.platform.operate 入契约前
+        // 创建的 fleet-api 客户端没有该 scope 权限，token 请求 invalid_scope；reseed 必须补齐，
+        // 且不得顺手动密钥与既有端点权限。
+        var options = ValidOptions();
+        options.Seed.Fleet = new FleetSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "fleet-api-test-secret",
+        };
+
+        using var provider = BuildProvider(options);
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var legacy = new OpenIddictApplicationDescriptor
+        {
+            ClientId = "fleet-api",
+            ClientType = ClientTypes.Confidential,
+            ClientSecret = "fleet-api-test-secret",
+            ConsentType = ConsentTypes.Implicit,
+            DisplayName = "PandaLabs Fleet 控制面 API",
+            Permissions =
+            {
+                Permissions.Endpoints.Token,
+                Permissions.Endpoints.Introspection,
+                Permissions.GrantTypes.ClientCredentials,
+            },
+        };
+        foreach (var name in PandaAuthScopes.FleetAll.Where(n => n != PandaAuthScopes.FleetPlatformOperate))
+        {
+            legacy.Permissions.Add(Permissions.Prefixes.Scope + name);
+        }
+        await applications.CreateAsync(legacy);
+
+        var before = await applications.FindByClientIdAsync("fleet-api");
+        Assert.NotNull(before);
+        Assert.False(await applications.HasPermissionAsync(
+            before, Permissions.Prefixes.Scope + PandaAuthScopes.FleetPlatformOperate));
+
+        await DbSeeder.SeedAsync(provider);
+
+        var fleet = await applications.FindByClientIdAsync("fleet-api");
+        Assert.NotNull(fleet);
+        Assert.True(await applications.HasPermissionAsync(
+            fleet, Permissions.Prefixes.Scope + PandaAuthScopes.FleetPlatformOperate));
+        Assert.True(await applications.ValidateClientSecretAsync(fleet, "fleet-api-test-secret"));
+        Assert.True(await applications.HasPermissionAsync(fleet, Permissions.Endpoints.Introspection));
+    }
+
+    [Fact]
+    public async Task FleetAdminWebExists_MissingContractScopePermissionsAreReconciledOnReseed()
+    {
+        // 存量事故现场（同 fleet-api 用例）：入契约前创建的 fleet-admin-web 没有任何 fleet.* 权限；
+        // reseed 按期望权限集补齐，且白名单与密钥保持不动。
+        var options = ValidOptions();
+        options.Seed.FleetAdminWeb = new FleetAdminWebSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = FleetAdminWebClientSecret,
+            RedirectUris = [FleetAdminWebRedirectUri],
+            PostLogoutRedirectUris = [FleetAdminWebPostLogoutUri],
+        };
+
+        using var provider = BuildProvider(options);
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        await CreateFirstPartyWebAsync(applications,
+            "fleet-admin-web",
+            "Panda Fleet 管理台",
+            redirectUris: [FleetAdminWebRedirectUri],
+            postLogoutUris: [FleetAdminWebPostLogoutUri],
+            clientSecret: FleetAdminWebClientSecret);
+
+        await DbSeeder.SeedAsync(provider);
+
+        var fleetAdmin = await applications.FindByClientIdAsync("fleet-admin-web");
+        Assert.NotNull(fleetAdmin);
+        foreach (var name in PandaAuthScopes.FleetAll)
+            Assert.True(await applications.HasPermissionAsync(fleetAdmin, Permissions.Prefixes.Scope + name),
+                $"fleet-admin-web 缺少控制面 scope 授权：{name}");
+        Assert.True(await applications.ValidateClientSecretAsync(fleetAdmin, FleetAdminWebClientSecret));
+        Assert.Equal(new[] { FleetAdminWebRedirectUri },
+            (await applications.GetRedirectUrisAsync(fleetAdmin)).OrderBy(x => x).ToArray());
     }
 
     [Fact]

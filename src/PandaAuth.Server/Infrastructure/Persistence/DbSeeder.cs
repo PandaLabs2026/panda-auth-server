@@ -184,11 +184,59 @@ public static class DbSeeder
             return;
         }
 
+        // 存量订正（权限先行，密钥对账仍收尾——descriptor 写回会把读出时的旧哈希原样带回，
+        // 顺序颠倒会覆盖新哈希，见 SeedFirstPartyWebApplicationAsync 尾部注释）：
+        // 契约新增 scope 时为存量客户端补权限白名单；缺权限时 token 请求直接 invalid_scope
+        // （fleet.platform.operate 2026-10-11 由隔离 e2e harness 首跑暴露）。
+        await ReconcileApplicationPermissionsAsync(applications, existing,
+        [
+            Permissions.Endpoints.Token,
+            Permissions.Endpoints.Introspection,
+            Permissions.GrantTypes.ClientCredentials,
+            ..PandaAuthScopes.FleetAll.Select(scope => Permissions.Prefixes.Scope + scope),
+        ]);
+
         if (!await applications.ValidateClientSecretAsync(existing, fleet.ClientSecret))
         {
             await WarnSecretRewriteAsync(logger, db, "fleet-api", "Auth:Seed:Fleet");
             await applications.UpdateAsync(existing, fleet.ClientSecret);
         }
+    }
+
+    /// <summary>
+    /// 存量客户端的权限白名单对账：把期望权限集中缺失的项补回（只增不删——历史多授的权限不在
+    /// 普通 migrate 里悄悄回收，回收必须走显式变更）。返回是否发生了写回。
+    /// 走 descriptor Populate 往返而非 2-arg UpdateAsync：后者会重新加盐哈希密钥（见 web 侧注释）。
+    /// </summary>
+    private static async Task<bool> ReconcileApplicationPermissionsAsync(
+        IOpenIddictApplicationManager applications,
+        object application,
+        IEnumerable<string> expected)
+    {
+        List<string>? missing = null;
+        foreach (var permission in expected)
+        {
+            if (!await applications.HasPermissionAsync(application, permission))
+            {
+                (missing ??= []).Add(permission);
+            }
+        }
+
+        if (missing is null)
+        {
+            return false;
+        }
+
+        var probe = new OpenIddictApplicationDescriptor();
+        await applications.PopulateAsync(probe, application);
+        foreach (var permission in missing)
+        {
+            probe.Permissions.Add(permission);
+        }
+
+        await applications.PopulateAsync(application, probe);
+        await applications.UpdateAsync(application);
+        return true;
     }
 
     /// <summary>
@@ -451,6 +499,10 @@ public static class DbSeeder
         // 存量订正：白名单替换与密钥对账各自独立判断，两者都不需要做时才提前返回——
         // 旧实现见任一白名单数组为空就 return，会连带跳过密钥对账。
         // 全部经 ApplicationManager API 完成，不直接写 EF。
+        // 权限对账（先行）：契约新增 scope 时按本客户端的期望权限集补齐白名单——缺权限时
+        // authorize 请求里的该 scope 会被剥掉、令牌永远拿不到它（fleet.platform.operate
+        // 2026-10-11 由隔离 e2e harness 首跑暴露）。只对账期望集，oasis-web 等裁剪集不被放大。
+        var reconcilePermissions = await ReconcileApplicationPermissionsAsync(applications, existing, permissions);
         var replaceRedirectUris = redirectUris.Length > 0;
         var replacePostLogoutRedirectUris = postLogoutRedirectUris.Length > 0;
 
@@ -463,7 +515,7 @@ public static class DbSeeder
         var reconcileSecret = !string.IsNullOrWhiteSpace(seed.ClientSecret) &&
             !await applications.ValidateClientSecretAsync(existing, seed.ClientSecret);
 
-        if (!replaceRedirectUris && !replacePostLogoutRedirectUris && !reconcileSecret)
+        if (!replaceRedirectUris && !replacePostLogoutRedirectUris && !reconcileSecret && !reconcilePermissions)
         {
             return;
         }
@@ -504,7 +556,7 @@ public static class DbSeeder
             await WarnSecretRewriteAsync(logger, db, clientId, configPrefix);
             await applications.UpdateAsync(existing, seed.ClientSecret);
         }
-        else if (replaceRedirectUris || replacePostLogoutRedirectUris)
+        else if (replaceRedirectUris || replacePostLogoutRedirectUris || reconcilePermissions)
         {
             await applications.UpdateAsync(existing);
         }
