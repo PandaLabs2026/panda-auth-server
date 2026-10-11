@@ -466,6 +466,49 @@ public sealed class AdminUsersController(
     }
 
     /// <summary>
+    /// 独立踢下线：仅吊销该用户全部 OIDC 令牌（AT/RT 即时失效），不动账号状态/凭据/安全戳。
+    /// 与冻结的吊销步骤同一通道（SessionSecurityService）；user.tokens_revoked 安全事件由
+    /// TokenRevocationService 内部发出，此处不重复记录。契约正本见元仓 ADR 2026-10-11。
+    /// </summary>
+    [HttpPost("{id}/revoke-tokens")]
+    public async Task<IActionResult> RevokeTokens(string id, CancellationToken cancellationToken)
+    {
+        if (!AdminApiAuthorization.HasValidMfa(User)) return Forbid();
+
+        var user = await userManager.FindByIdAsync(id);
+        if (user is null)
+        {
+            return NotFound();
+        }
+
+        if (DeletedGuard(user) is { } blocked)
+        {
+            return blocked;
+        }
+
+        // 自操作封禁：吊销自己的令牌等于踢掉当前管理台会话，自助登出已覆盖该需求
+        //（与「不能变更自己的账号状态」同一口径，元仓 ADR 2026-10-11）。
+        var actorId = User.FindFirst(Claims.Subject)?.Value;
+        if (string.Equals(user.Id, actorId, StringComparison.Ordinal))
+        {
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "不能对自己执行踢下线",
+                detail: "该操作会吊销你当前管理台会话的令牌。退出登录即可自助下线。");
+        }
+
+        await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: cancellationToken);
+        await audit.RecordAsync(
+            AdminAuditing.Entry(User!, AdminAuditAction.UserRevokeTokens, "user", user.Id,
+                new { userName = user.UserName },
+                HttpContext.Connection.RemoteIpAddress?.ToString()),
+            cancellationToken);
+        logger.LogInformation(
+            "管理员 {Actor} 吊销了用户 {UserId}（{UserName}）的全部令牌。",
+            User.FindFirst(Claims.Subject)?.Value, user.Id, user.UserName);
+
+        return Ok(await DetailOf(user));
+    }
+
+    /// <summary>
     /// 资料编辑（PUT 全量语义：每个字段携带最终值，null 即清空）。邮箱变更会重置 EmailConfirmed。
     /// 允许编辑自己：吊销只造成一次可恢复的管理台重登，非死锁（自助资料页属 me 侧后续切片）。
     /// </summary>
