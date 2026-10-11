@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using OpenIddict.EntityFrameworkCore.Models;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Admin;
 using PandaAuth.Server.Features.Tokens;
@@ -55,20 +56,20 @@ public class AdminUsersControllerTests
         await SeedUserAsync(provider, "bob", "bob@example.com");
         await SeedUserAsync(provider, "carol", "carol@example.com", UserStatus.Frozen);
 
-        var byUser = PageOf(await controller.List("ALI", null, null, null, CancellationToken.None));
+        var byUser = PageOf(await controller.List("ALI", null, null, null, null, null, CancellationToken.None));
         Assert.Equal(1, byUser.Total);
         Assert.Equal("alice", byUser.Items.Single().UserName);
 
-        var byStatus = PageOf(await controller.List(null, UserStatus.Frozen, null, null, CancellationToken.None));
+        var byStatus = PageOf(await controller.List(null, UserStatus.Frozen, null, null, null, null, CancellationToken.None));
         Assert.Equal("carol", byStatus.Items.Single().UserName);
 
-        var paged = PageOf(await controller.List(null, null, 1, 2, CancellationToken.None));
+        var paged = PageOf(await controller.List(null, null, 1, 2, null, null, CancellationToken.None));
         Assert.Equal(3, paged.Total);
         Assert.Equal(2, paged.Items.Count);
         Assert.Equal(2, paged.PageSize);
 
         // 上限保护：pageSize 超过 MaxPageSize 被钳制而不是放大查询。
-        var capped = PageOf(await controller.List(null, null, 1, 9999, CancellationToken.None));
+        var capped = PageOf(await controller.List(null, null, 1, 9999, null, null, CancellationToken.None));
         Assert.Equal(AdminUsersController.MaxPageSize, capped.PageSize);
     }
 
@@ -644,6 +645,72 @@ public class AdminUsersControllerTests
 
         Assert.IsType<NotFoundResult>(await controller.RevokeTokens("missing-user", CancellationToken.None));
         Assert.Empty(revoker.RevokedUsers);
+    }
+
+    // ---- 在线会话只读视图（Sessions）与列表排序 ----
+
+    [Fact]
+    public async Task Sessions_ReturnsOnlyValidRefreshTokens_WithoutSensitiveFields()
+    {
+        var (controller, provider, _) = Create();
+        var user = await SeedUserAsync(provider, "session-user");
+        var db = provider.GetRequiredService<PandaAuthDbContext>();
+        db.Set<OpenIddictEntityFrameworkCoreToken>().Add(new OpenIddictEntityFrameworkCoreToken
+        {
+            Id = "rt-1",
+            Subject = user.Id,
+            Status = Statuses.Valid,
+            Type = TokenTypeHints.RefreshToken,
+            Payload = "{\"secret\":\"must-not-leak\"}",
+            ReferenceId = "reference-handle",
+            CreationDate = DateTime.UtcNow.AddDays(-1),
+            ExpirationDate = DateTime.UtcNow.AddDays(13),
+        });
+        // 噪声：已吊销的 refresh 与有效的 access 都不得出现在视图里（AT 10 分钟即亡，非会话）。
+        db.Set<OpenIddictEntityFrameworkCoreToken>().Add(new OpenIddictEntityFrameworkCoreToken
+        {
+            Id = "rt-revoked", Subject = user.Id, Status = Statuses.Revoked, Type = TokenTypeHints.RefreshToken,
+        });
+        db.Set<OpenIddictEntityFrameworkCoreToken>().Add(new OpenIddictEntityFrameworkCoreToken
+        {
+            Id = "at-1", Subject = user.Id, Status = Statuses.Valid, Type = TokenTypeHints.AccessToken,
+        });
+        await db.SaveChangesAsync();
+
+        var ok = Assert.IsType<OkObjectResult>(await controller.Sessions(user.Id, CancellationToken.None));
+        var sessions = Assert.IsType<List<AdminUserSession>>(ok.Value);
+        var entry = Assert.Single(sessions);
+        Assert.Equal("rt-1", entry.Id);
+        Assert.Equal("refresh_token", entry.Type);
+        Assert.Equal(typeof(AdminUserSession), entry.GetType());
+    }
+
+    [Fact]
+    public async Task Sessions_UnknownUserReturns404()
+    {
+        var (controller, _, _) = Create();
+
+        Assert.IsType<NotFoundResult>(await controller.Sessions("missing-user", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task List_SortsByWhitelistedKeys_AndFallsBackForUnknown()
+    {
+        var (controller, provider, _) = Create();
+        await SeedUserAsync(provider, "carol");
+        await SeedUserAsync(provider, "alice");
+        await SeedUserAsync(provider, "bob");
+
+        var ascending = PageOf(await controller.List(null, null, null, null, "userName", "asc", CancellationToken.None));
+        Assert.Equal(new[] { "alice", "bob", "carol" }, ascending.Items.Select(item => item.UserName).ToArray());
+
+        // 参数大小写不敏感。
+        var descending = PageOf(await controller.List(null, null, null, null, "USERNAME", "DESC", CancellationToken.None));
+        Assert.Equal(new[] { "carol", "bob", "alice" }, descending.Items.Select(item => item.UserName).ToArray());
+
+        // 缺省与白名单外取值：createdAt 倒序回退（种子顺序即时间升序）。
+        var fallback = PageOf(await controller.List(null, null, null, null, "hacker;--", null, CancellationToken.None));
+        Assert.Equal(new[] { "bob", "alice", "carol" }, fallback.Items.Select(item => item.UserName).ToArray());
     }
 
     // ---- 资料编辑（UpdateProfile） ----

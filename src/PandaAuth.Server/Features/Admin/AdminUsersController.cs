@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using OpenIddict.EntityFrameworkCore.Models;
 using OpenIddict.Validation.AspNetCore;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Tokens;
@@ -32,13 +33,20 @@ public sealed class AdminUsersController(
     internal const int MaxPageSize = 50;
     internal const int DefaultPageSize = 20;
 
-    /// <summary>用户列表：按用户名/邮箱模糊搜索、状态过滤、分页（CreatedAt 倒序）。</summary>
+    /// <summary>
+    /// 用户列表：按用户名/邮箱模糊搜索、状态过滤、分页。
+    /// 排序参数从宽（元仓 ADR 2026-10-11-admin-user-sessions-and-sorting）：
+    /// orderBy 白名单 userName/email/createdAt（大小写不敏感），order 取 asc/desc；
+    /// 缺省与非法值一律回退 createdAt+desc，不因探测性输入报错。
+    /// </summary>
     [HttpGet]
     public async Task<IActionResult> List(
         [FromQuery] string? query,
         [FromQuery] UserStatus? status,
         [FromQuery] int? page,
         [FromQuery] int? pageSize,
+        [FromQuery] string? orderBy,
+        [FromQuery] string? order,
         CancellationToken cancellationToken)
     {
         var pageNumber = Math.Max(page ?? 1, 1);
@@ -59,9 +67,17 @@ public sealed class AdminUsersController(
             users = users.Where(user => user.Status == statusFilter);
         }
 
+        var ascending = string.Equals(order?.Trim(), "asc", StringComparison.OrdinalIgnoreCase);
+        IOrderedQueryable<PandaUser> ordered = (orderBy?.Trim().ToLowerInvariant()) switch
+        {
+            "username" => ascending ? users.OrderBy(user => user.NormalizedUserName!) : users.OrderByDescending(user => user.NormalizedUserName!),
+            "email" => ascending ? users.OrderBy(user => user.NormalizedEmail!) : users.OrderByDescending(user => user.NormalizedEmail!),
+            // 缺省与白名单外取值：createdAt 倒序（契约正本的从宽回退口径）。
+            _ => ascending ? users.OrderBy(user => user.CreatedAt) : users.OrderByDescending(user => user.CreatedAt),
+        };
+
         var total = await users.CountAsync(cancellationToken);
-        var items = await users
-            .OrderByDescending(user => user.CreatedAt)
+        var items = await ordered
             .Skip((pageNumber - 1) * size)
             .Take(size)
             .Select(user => new AdminUserSummary(
@@ -506,6 +522,39 @@ public sealed class AdminUsersController(
             User.FindFirst(Claims.Subject)?.Value, user.Id, user.UserName);
 
         return Ok(await DetailOf(user));
+    }
+
+    /// <summary>
+    /// 在线会话只读视图：该用户全部 Valid 状态 refresh_token 令牌的投影（AT 10 分钟即亡，
+    /// authorization code 同理，都不构成会话语义）。只读、无审计、无 MFA 门禁
+    /// （与 List/Detail 口径一致）；已注销账号允许查看（只读不影响终态语义）。
+    /// 投影刻意不含 Payload/ReferenceId——令牌句柄与密文不出服务端。契约正本见元仓 ADR 2026-10-11。
+    /// </summary>
+    [HttpGet("{id}/sessions")]
+    public async Task<IActionResult> Sessions(string id, CancellationToken cancellationToken)
+    {
+        var user = await userManager.FindByIdAsync(id);
+        if (user is null)
+        {
+            return NotFound();
+        }
+
+        var sessions = await db.Set<OpenIddictEntityFrameworkCoreToken>()
+            .AsNoTracking()
+            .Where(token => token.Subject == id
+                && token.Status == Statuses.Valid
+                && token.Type == TokenTypeHints.RefreshToken)
+            .OrderByDescending(token => token.CreationDate)
+            .Select(token => new AdminUserSession(
+                // OpenIddict 实体的 Id/Type 声明为 string?，DB 列实际 NOT NULL——空联合并满足 DTO 非空契约。
+                token.Id ?? string.Empty,
+                token.Application!.ClientId,
+                token.Type ?? string.Empty,
+                token.CreationDate,
+                token.ExpirationDate))
+            .ToListAsync(cancellationToken);
+
+        return Ok(sessions);
     }
 
     /// <summary>
