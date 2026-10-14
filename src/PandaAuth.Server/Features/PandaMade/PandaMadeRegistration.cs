@@ -15,7 +15,16 @@ internal static class PandaMadeRegistration
     {
         try
         {
-            // Production host/role/target is intentionally closed until owner topology registration.
+            if (environment == "Production")
+            {
+                var production = await PandaMadeProductionGuard.RequireAsync(configuration, "register");
+                using var provider = PortalClientCommand.Services(production);
+                await using var operation = provider.CreateAsyncScope();
+                await RegisterAsync(operation.ServiceProvider, new Uri("https://admin.pandamade.net/"),
+                    configuration["Auth:PandaMade:AdminSecret"] ?? "", configuration["Auth:PandaMade:ApiSecret"] ?? "");
+                await output.WriteLineAsync("pandamade-registration-ok");
+                return 0;
+            }
             if (environment != "Development") throw new InvalidOperationException();
             var issuer = new Uri(configuration["Auth:Issuer"] ?? "", UriKind.Absolute);
             var origin = new Uri(configuration["Auth:PandaMade:AdminOrigin"] ?? "", UriKind.Absolute);
@@ -23,7 +32,7 @@ internal static class PandaMadeRegistration
                 issuer.UserInfo.Length != 0 || issuer.Query.Length != 0 || issuer.Fragment.Length != 0 || !origin.IsLoopback)
                 throw new InvalidOperationException();
             var connection = new NpgsqlConnectionStringBuilder(configuration.GetConnectionString("Default"));
-            if (connection.Host != "127.0.0.1" || connection.Port != 43853 || connection.Username != "pandamade_fixture" ||
+            if (connection.Host != "127.0.0.1" || (connection.Port != 43853 && !(connection.Port == 5432 && configuration["PANDAMADE_TEST_SHARED_INSTANCE"] == "1")) || connection.Username != "pandamade_fixture" ||
                 !Regex.IsMatch(connection.Database ?? "", "^panda_auth_pandamade_test_[a-f0-9]{32}$"))
                 throw new InvalidOperationException();
             using var services = PortalClientCommand.Services(connection.ConnectionString);
@@ -39,6 +48,25 @@ internal static class PandaMadeRegistration
             await error.WriteLineAsync("pandamade-registration-closed");
             return 1;
         }
+    }
+
+    public static async Task<int> MigrateAsync(IConfiguration configuration, string environment, TextWriter output, TextWriter error)
+    {
+        try
+        {
+            if (environment != "Production") throw new InvalidOperationException();
+            var connection = await PandaMadeProductionGuard.RequireAsync(configuration, "migrate");
+            using var provider = PortalClientCommand.Services(connection);
+            await using var operation = provider.CreateAsyncScope();
+            await using var lease = await DatabaseLease.AcquireAsync(connection);
+            var db = operation.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+            var known = db.Database.GetMigrations().ToHashSet(StringComparer.Ordinal);
+            if ((await db.Database.GetAppliedMigrationsAsync()).Any(id => !known.Contains(id))) throw new InvalidOperationException();
+            await db.Database.MigrateAsync();
+            await output.WriteLineAsync("pandamade-migration-ok");
+            return 0;
+        }
+        catch { await error.WriteLineAsync("pandamade-migration-closed"); return 1; }
     }
 
     public static async Task RegisterAsync(IServiceProvider provider, Uri origin, string adminSecret, string apiSecret)

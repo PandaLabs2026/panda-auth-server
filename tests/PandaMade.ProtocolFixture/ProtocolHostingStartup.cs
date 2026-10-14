@@ -13,7 +13,7 @@ public sealed class ProtocolHostingStartup : IHostingStartup
     {
         var root = Environment.GetEnvironmentVariable("PANDAMADE_FIXTURE_ROOT") ?? "";
         if (Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") != "Development" ||
-            !root.StartsWith("/tmp/pandamade-business-test/",StringComparison.Ordinal) || !Directory.Exists(root))
+            !root.StartsWith(Path.Combine(Path.GetTempPath(),"pandamade-business-test")+Path.DirectorySeparatorChar,StringComparison.Ordinal) || !Directory.Exists(root))
             throw new InvalidOperationException("Fixture host is restricted to dedicated development runs.");
         builder.ConfigureServices(services => services.PostConfigureAll<OpenIddictServerOptions>(options =>
             { options.AccessTokenLifetime = TimeSpan.FromSeconds(10); Console.Error.WriteLine("Fixture access lifetime=10s"); }));

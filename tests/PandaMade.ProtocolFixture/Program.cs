@@ -14,16 +14,16 @@ try
     if (!OperatingSystem.IsLinux()) throw new InvalidOperationException();
     if (args.Length != 1 || args[0] is not ("create" or "inspect" or "cleanup" or "negative-clients")) throw new InvalidOperationException();
     var root = Environment.GetEnvironmentVariable("PANDAMADE_FIXTURE_ROOT") ?? "";
-    if (!Path.IsPathFullyQualified(root) || !Path.GetFullPath(root).StartsWith("/tmp/pandamade-business-test/",StringComparison.Ordinal) ||
+    if (!Path.IsPathFullyQualified(root) || !Path.GetFullPath(root).StartsWith(Path.Combine(Path.GetTempPath(),"pandamade-business-test")+Path.DirectorySeparatorChar,StringComparison.Ordinal) ||
         !Directory.Exists(root) || new DirectoryInfo(root).LinkTarget is not null) throw new InvalidOperationException();
     var baseConnection = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("PANDAMADE_TEST_POSTGRES"));
-    if (baseConnection.Host != "127.0.0.1" || baseConnection.Port != 43853 || baseConnection.Database != "postgres" || baseConnection.Username != "pandamade_fixture") throw new InvalidOperationException();
+    if (baseConnection.Host != "127.0.0.1" || (baseConnection.Port != 43853 && !(baseConnection.Port == 5432 && Environment.GetEnvironmentVariable("PANDAMADE_TEST_SHARED_INSTANCE") == "1")) || baseConnection.Database != "postgres" || baseConnection.Username != "pandamade_fixture") throw new InvalidOperationException();
     if (args[0] != "create")
     {
         using var stored=JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root,"state.json")));
         var saved=new NpgsqlConnectionStringBuilder(stored.RootElement.GetProperty("identityConnection").GetString());
         var nameToUse=saved.Database ?? "";
-        if (saved.Host != "127.0.0.1" || saved.Port != 43853 || saved.Username != "pandamade_fixture" ||
+        if (saved.Host != "127.0.0.1" || (saved.Port != 43853 && !(saved.Port == 5432 && Environment.GetEnvironmentVariable("PANDAMADE_TEST_SHARED_INSTANCE") == "1")) || saved.Username != "pandamade_fixture" ||
             !System.Text.RegularExpressions.Regex.IsMatch(nameToUse,"^panda_auth_pandamade_test_[a-f0-9]{32}$")) throw new InvalidOperationException();
         await using var context=new PandaAuthDbContext(new DbContextOptionsBuilder<PandaAuthDbContext>().UseNpgsql(saved.ConnectionString).UseOpenIddict().Options);
         if (args[0] == "negative-clients")

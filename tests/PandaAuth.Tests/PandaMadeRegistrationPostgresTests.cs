@@ -71,7 +71,7 @@ internal sealed class PandaMadeRegistrationDatabase : IAsyncDisposable
     public static async Task<PandaMadeRegistrationDatabase> CreateAsync()
     {
         var builder = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("PANDAMADE_TEST_POSTGRES"));
-        if (builder.Host != "127.0.0.1" || builder.Port != 43853 || builder.Username != "pandamade_fixture" || builder.Database != "postgres")
+        if (builder.Host != "127.0.0.1" || (builder.Port != 43853 && !(builder.Port == 5432 && Environment.GetEnvironmentVariable("PANDAMADE_TEST_SHARED_INSTANCE") == "1")) || builder.Username != "pandamade_fixture" || builder.Database != "postgres")
             throw new InvalidOperationException("Wrong PandaMade fixture boundary");
         var name = "panda_auth_pandamade_test_" + Guid.NewGuid().ToString("N");
         await using (var admin = new NpgsqlConnection(builder.ConnectionString))
@@ -84,7 +84,7 @@ internal sealed class PandaMadeRegistrationDatabase : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         var builder = new NpgsqlConnectionStringBuilder(connection);
-        if (builder.Host != "127.0.0.1" || builder.Port != 43853 || builder.Username != "pandamade_fixture" || !Regex.IsMatch(builder.Database!, "^panda_auth_pandamade_test_[a-f0-9]{32}$")) throw new InvalidOperationException("Wrong cleanup boundary");
+        if (builder.Host != "127.0.0.1" || (builder.Port != 43853 && !(builder.Port == 5432 && Environment.GetEnvironmentVariable("PANDAMADE_TEST_SHARED_INSTANCE") == "1")) || builder.Username != "pandamade_fixture" || !Regex.IsMatch(builder.Database!, "^panda_auth_pandamade_test_[a-f0-9]{32}$")) throw new InvalidOperationException("Wrong cleanup boundary");
         await using (var scope = Provider.CreateAsyncScope()) await scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>().Database.EnsureDeletedAsync();
         await Provider.DisposeAsync();
     }
