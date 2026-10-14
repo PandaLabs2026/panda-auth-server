@@ -22,6 +22,14 @@ using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Shared;
 using PandaAuth.Server.Features.PortalClients;
 
+if (args.Length == 1 && args[0] == "--migrate-pandamade")
+{
+    var migrationBuilder = WebApplication.CreateBuilder([]);
+    Environment.ExitCode = await PandaAuth.Server.Features.PandaMade.PandaMadeRegistration.MigrateAsync(
+        migrationBuilder.Configuration, migrationBuilder.Environment.EnvironmentName, Console.Out, Console.Error);
+    return;
+}
+
 if (args.Length == 1 && args[0] == "--register-pandamade-clients")
 {
     var registrationBuilder = WebApplication.CreateBuilder([]);
