@@ -96,6 +96,15 @@ public static class DbSeeder
                 permissions: FleetAdminWebPermissions());
         }
 
+        // Panda Fleet Hub 只部署在 Fleet 控制面（专用 PandaAuth 实例）；回调不参与租户路由展开；
+        // 权限集用裁剪版（无 roles scope、无 Introspection 端点——纯入口层，不消费角色与内省）。
+        if (options.Seed.FleetHubWeb.Enabled)
+        {
+            await SeedFirstPartyWebApplicationAsync(
+                applications, logger, db, FirstPartyClients.FleetHubWeb, "Panda Fleet Hub", "Auth:Seed:FleetHubWeb", options.Seed.FleetHubWeb,
+                permissions: FleetHubWebPermissions());
+        }
+
         // Panda Assistant 客户端族（PANDA-INFRA-R1，panda-asst ADR 0095）：默认关闭，
         // 仅 panda-asst 租户实例（t####-auth）显式开启；asst 回调展开按 PandaAssistant 绑定。
         if (options.Seed.AsstWeb.Enabled)
@@ -648,6 +657,13 @@ public static class DbSeeder
         ..PandaAuthScopes.FleetAll.Select(scope => Permissions.Prefixes.Scope + scope),
         Requirements.Features.ProofKeyForCodeExchange,
     ];
+
+    /// <summary>
+    /// fleet-hub-web 权限集 = asst 客户端同款裁剪集（无 roles、无内省端点）；
+    /// hub 是纯入口渲染层，授权完全在 PandaAuth，清单在 BFF 服务端持有。
+    /// Revocation 保留：登出走 RP-initiated signout + revoke。
+    /// </summary>
+    private static string[] FleetHubWebPermissions() => AsstClientPermissions();
 
     private static string[] ExpandTenantRedirectUris(
         string[] configuredUris,

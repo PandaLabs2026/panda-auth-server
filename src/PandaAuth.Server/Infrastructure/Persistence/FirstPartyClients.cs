@@ -14,6 +14,7 @@ public static class FirstPartyClients
     public const string AdminWeb = "admin-web";
     public const string OasisWeb = "oasis-web";
     public const string FleetAdminWeb = "fleet-admin-web";
+    public const string FleetHubWeb = "fleet-hub-web";
     public const string AsstWeb = "asst-web";
     public const string AsstAdmin = "asst-admin";
 
@@ -36,7 +37,7 @@ public static class FirstPartyClients
     /// <summary>第一方 clientId 全集；新增播种/注册的第一方客户端必须在此登记。</summary>
     public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
     {
-        MeWeb, AdminWeb, OasisWeb, FleetAdminWeb, AsstWeb, AsstAdmin,
+        MeWeb, AdminWeb, OasisWeb, FleetAdminWeb, FleetHubWeb, AsstWeb, AsstAdmin,
         AsstMobile,
         AsstServer, FleetApi, MgmtApi,
         WebsiteAdmin,

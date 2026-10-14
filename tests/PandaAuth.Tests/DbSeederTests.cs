@@ -41,6 +41,12 @@ public class DbSeederTests
 
     private const string FleetAdminWebClientSecret = "fleet-admin-web-test-secret";
 
+    private const string FleetHubWebRedirectUri = "https://appliket.com/callback/pandaauth";
+
+    private const string FleetHubWebPostLogoutUri = "https://appliket.com/callback/logout/pandaauth";
+
+    private const string FleetHubWebClientSecret = "fleet-hub-web-test-secret";
+
     // 密钥对账用例用的存量旧回调：刻意不用已退役域名，避免与域名退役检查的
     // 负断言夹具（`.cn` 命中数基线）重复计数。
     private const string LegacyRedirectUri = "http://localhost:9007/callback/login/pandaauth";
@@ -198,6 +204,54 @@ public class DbSeederTests
         Assert.True(await applications.HasPermissionAsync(fleetAdmin, Permissions.Prefixes.Scope + "fleet.allocate"));
         Assert.True(await applications.HasPermissionAsync(fleetAdmin, Permissions.Prefixes.Scope + "fleet.apply"));
         Assert.True(await applications.HasPermissionAsync(fleetAdmin, Permissions.Prefixes.Scope + "fleet.server.manage"));
+    }
+
+    [Fact]
+    public async Task FleetHubWebDisabledByDefault_DoesNotCreateClient()
+    {
+        // fleet-hub-web 与 OasisWeb/FleetAdminWeb 同策略：非 PandaAuth 自带面板，默认关闭，
+        // 未显式开启时任何部署（含共享实例）都不得出现该客户端。
+        var options = ValidOptions();
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        Assert.Null(await applications.FindByClientIdAsync("fleet-hub-web"));
+    }
+
+    [Fact]
+    public async Task FleetHubWebEnabled_CreatesConfidentialClientWithTrimmedPermissions()
+    {
+        var options = ValidOptions();
+        options.Seed.FleetHubWeb = new FleetHubWebSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = FleetHubWebClientSecret,
+            RedirectUris = [FleetHubWebRedirectUri],
+            PostLogoutRedirectUris = [FleetHubWebPostLogoutUri],
+        };
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var hub = await applications.FindByClientIdAsync("fleet-hub-web");
+        Assert.NotNull(hub);
+        Assert.True(await applications.ValidateClientSecretAsync(hub, FleetHubWebClientSecret));
+        Assert.Equal(ClientTypes.Confidential, await applications.GetClientTypeAsync(hub));
+        Assert.Contains(FleetHubWebRedirectUri, await applications.GetRedirectUrisAsync(hub));
+        Assert.Contains(FleetHubWebPostLogoutUri, await applications.GetPostLogoutRedirectUrisAsync(hub));
+        // 第一方 Web 基础面：授权码 + 刷新令牌 + PKCE + 登出/吊销端点。
+        Assert.True(await applications.HasPermissionAsync(hub, Permissions.GrantTypes.AuthorizationCode));
+        Assert.True(await applications.HasPermissionAsync(hub, Permissions.GrantTypes.RefreshToken));
+        Assert.True(await applications.HasPermissionAsync(hub, Permissions.Endpoints.EndSession));
+        Assert.True(await applications.HasPermissionAsync(hub, Permissions.Endpoints.Revocation));
+        Assert.True(await applications.HasPermissionAsync(hub, Requirements.Features.ProofKeyForCodeExchange));
+        // 裁剪面：无 roles scope（授权在 PandaAuth，hub 不消费角色）、无内省端点（无资源方消费方）。
+        Assert.False(await applications.HasPermissionAsync(hub, Permissions.Scopes.Roles));
+        Assert.False(await applications.HasPermissionAsync(hub, Permissions.Endpoints.Introspection));
+        Assert.False(await applications.HasPermissionAsync(hub, Permissions.Prefixes.Scope + "fleet.read"));
     }
 
     [Fact]
@@ -823,6 +877,13 @@ public class DbSeederTests
             ClientSecret = FleetAdminWebClientSecret,
             RedirectUris = [FleetAdminWebRedirectUri],
             PostLogoutRedirectUris = [FleetAdminWebPostLogoutUri],
+        };
+        options.Seed.FleetHubWeb = new FleetHubWebSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = FleetHubWebClientSecret,
+            RedirectUris = [FleetHubWebRedirectUri],
+            PostLogoutRedirectUris = [FleetHubWebPostLogoutUri],
         };
         options.Seed.AsstWeb = new AsstWebSeedOptions
         {
