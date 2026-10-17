@@ -13,6 +13,8 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
 
     public DbSet<AdminAuditLog> AdminAuditLogs => Set<AdminAuditLog>();
 
+    public DbSet<AdminNotificationCursor> AdminNotificationCursors => Set<AdminNotificationCursor>();
+
     public DbSet<SecurityEvent> SecurityEvents => Set<SecurityEvent>();
 
     public DbSet<PandaUserClaim> UserClaims => Set<PandaUserClaim>();
@@ -88,6 +90,13 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
             entity.HasIndex(x => new { x.ActorUserId, x.CreatedAt });
             // 保留清理按 CreatedAt 谓词分批删除，同 login_logs 的理由需要单列索引。
             entity.HasIndex(x => x.CreatedAt);
+        });
+
+        builder.Entity<AdminNotificationCursor>(entity =>
+        {
+            entity.ToTable("admin_notification_cursors");
+            entity.HasKey(x => x.AdminUserId);
+            entity.Property(x => x.AdminUserId).HasMaxLength(450);
         });
 
         builder.Entity<SecurityEvent>(entity =>
