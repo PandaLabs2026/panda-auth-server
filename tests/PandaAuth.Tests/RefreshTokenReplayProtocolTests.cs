@@ -108,7 +108,7 @@ public sealed class RefreshTokenReplayProtocolTests
 
         var loginPage = await client.GetAsync(loginPath);
         var loginHtml = await loginPage.Content.ReadAsStringAsync();
-        Assert.Contains("<img src=\"/account/brand/pandaauth-logo-horizontal-dark.png\" alt=\"PandaAuth\" />", loginHtml, StringComparison.Ordinal);
+        Assert.Contains("<img src=\"/account/brand/pandaauth-logo-horizontal-dark.png\" alt=\"PandaAuth by PandaLabs\" />", loginHtml, StringComparison.Ordinal);
         var antiForgery = ExtractHiddenValue(loginHtml, "__RequestVerificationToken");
         using var loginForm = new FormUrlEncodedContent(new Dictionary<string, string>
         {
