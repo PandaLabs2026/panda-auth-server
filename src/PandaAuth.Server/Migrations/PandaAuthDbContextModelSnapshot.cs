@@ -273,6 +273,23 @@ namespace PandaAuth.Server.Migrations
                     b.ToTable("admin_audit_logs", (string)null);
                 });
 
+            modelBuilder.Entity("PandaAuth.Server.Domain.AdminNotificationCursor", b =>
+                {
+                    b.Property<string>("AdminUserId")
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.Property<long>("LastAuditId")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("AdminUserId");
+
+                    b.ToTable("admin_notification_cursors", (string)null);
+                });
+
             modelBuilder.Entity("PandaAuth.Server.Domain.EmailVerification", b =>
                 {
                     b.Property<Guid>("Id")

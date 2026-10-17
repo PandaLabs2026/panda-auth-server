@@ -102,6 +102,7 @@ public class AdminApiAuthorizationContractTests
         typeof(AdminClientsController),
         typeof(AdminClaimsController),
         typeof(AdminAuditController),
+        typeof(AdminNotificationsController),
     ];
 
     [Theory]
