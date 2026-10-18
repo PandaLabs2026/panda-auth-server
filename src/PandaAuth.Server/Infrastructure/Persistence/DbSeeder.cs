@@ -70,13 +70,15 @@ public static class DbSeeder
 
         if (options.Seed.Me.Enabled)
         {
-            await SeedFirstPartyWebApplicationAsync(applications, logger, db, FirstPartyClients.MeWeb, "PandaAuth 账户中心", "Auth:Seed:Me", options.Seed.Me, options.TenantRouting, "me");
+            await SeedFirstPartyWebApplicationAsync(applications, logger, db, FirstPartyClients.MeWeb, "PandaAuth 账户中心", "Auth:Seed:Me", options.Seed.Me, options.TenantRouting, "me",
+                postLogoutSuffix: "callback/logout/pandaauth");
         }
 
         if (options.Seed.AdminWeb.Enabled)
         {
             await SeedFirstPartyWebApplicationAsync(
-                applications, logger, db, FirstPartyClients.AdminWeb, "PandaAuth 管理后台", "Auth:Seed:AdminWeb", options.Seed.AdminWeb, options.TenantRouting, "admin");
+                applications, logger, db, FirstPartyClients.AdminWeb, "PandaAuth 管理后台", "Auth:Seed:AdminWeb", options.Seed.AdminWeb, options.TenantRouting, "admin",
+                postLogoutSuffix: "callback/logout/pandaauth");
         }
 
         // Oasis 不挂在 PandaAuth 租户路由下（独立产品域），不参与租户回调展开；

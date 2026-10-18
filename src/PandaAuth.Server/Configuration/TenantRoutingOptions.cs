@@ -4,6 +4,12 @@ namespace PandaAuth.Server.Configuration;
 
 public sealed class TenantRoutingOptions
 {
+    /// <summary>
+    /// 租户主机路由总开关。默认关闭：既有单租户部署（无 bindings）行为不变；
+    /// 启用时规范主机必须能在 bindings 中解析，否则请求 fail-closed（421），不静默放行。
+    /// </summary>
+    public bool Enabled { get; set; }
+
     public TenantRouteBindingOptions[] Bindings { get; set; } = [];
 }
 
