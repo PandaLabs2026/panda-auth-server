@@ -43,6 +43,7 @@ public sealed class NotifyEmailSenderTests
             Assert.Equal("https://notify.example/v1/messages/raw", captured!.RequestUri!.ToString());
             Assert.Equal("Bearer", captured.Headers.Authorization!.Scheme);
             Assert.Equal("test-token", captured.Headers.Authorization.Parameter);
+            Assert.Equal("panda-auth-server", captured.Headers.GetValues("X-Notify-Producer").Single());
             using var document = JsonDocument.Parse(body!);
             var root = document.RootElement;
             Assert.Equal("t0000", root.GetProperty("tenantId").GetString());
