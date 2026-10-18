@@ -21,12 +21,14 @@ public sealed class NotifyEmailSender : IEmailSender
     private readonly EmailOptions _options;
     private readonly ILogger<NotifyEmailSender> _logger;
     private readonly string? _token;
+    private readonly string[] _urls;
 
     public NotifyEmailSender(HttpClient http, IOptions<EmailOptions> options, ILogger<NotifyEmailSender> logger)
     {
         _http = http;
         _options = options.Value;
         _logger = logger;
+        _urls = ResolveUrls(_options);
         if (!string.IsNullOrWhiteSpace(_options.NotifyTokenFile))
         {
             if (!File.Exists(_options.NotifyTokenFile))
@@ -62,12 +64,64 @@ public sealed class NotifyEmailSender : IEmailSender
             idempotencyKey = BuildIdempotencyKey(email, subject, htmlBody),
         };
 
-        using var request = new HttpRequestMessage(
-            HttpMethod.Post,
-            new Uri(new Uri(_options.NotifyUrl.TrimEnd('/') + "/"), "v1/messages/raw"))
+        Exception? lastError = null;
+        foreach (var baseUrl in _urls)
         {
-            Content = JsonContent.Create(payload),
-        };
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                new Uri(new Uri(baseUrl.TrimEnd('/') + "/"), "v1/messages/raw"))
+            {
+                Content = JsonContent.Create(payload),
+            };
+            AddHeaders(request);
+
+            HttpResponseMessage response;
+            try
+            {
+                response = await _http.SendAsync(request, ct);
+            }
+            catch (HttpRequestException ex)
+            {
+                lastError = ex;
+                continue;
+            }
+            catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+            {
+                lastError = ex;
+                continue;
+            }
+
+            using (response)
+            {
+                if ((int)response.StatusCode >= 500)
+                {
+                    lastError = new HttpRequestException($"Notify API returned {(int)response.StatusCode}.");
+                    continue;
+                }
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    _logger.LogError(
+                        "Notify transactional delivery failed email={Email} status={Status}",
+                        MaskEmail(email),
+                        (int)response.StatusCode);
+                    throw new InvalidOperationException($"Notify API returned {(int)response.StatusCode}.");
+                }
+            }
+
+            _logger.LogInformation("Notify transactional delivery accepted email={Email} subject={Subject}", MaskEmail(email), subject);
+            return;
+        }
+
+        _logger.LogError(
+            "Notify transactional delivery failed email={Email} error={Error}",
+            MaskEmail(email),
+            lastError?.Message);
+        throw new InvalidOperationException("All notify endpoints failed.", lastError);
+    }
+
+    private void AddHeaders(HttpRequestMessage request)
+    {
         if (!string.IsNullOrWhiteSpace(_token))
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _token);
@@ -77,18 +131,18 @@ public sealed class NotifyEmailSender : IEmailSender
         {
             request.Headers.Add("X-Notify-Producer", _options.NotifyProducer);
         }
+    }
 
-        using var response = await _http.SendAsync(request, ct);
-        if (!response.IsSuccessStatusCode)
+    private static string[] ResolveUrls(EmailOptions options)
+    {
+        var configured = string.IsNullOrWhiteSpace(options.NotifyUrls) ? options.NotifyUrl : options.NotifyUrls;
+        var urls = configured.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (urls.Length == 0)
         {
-            _logger.LogError(
-                "Notify transactional delivery failed email={Email} status={Status}",
-                MaskEmail(email),
-                (int)response.StatusCode);
-            throw new InvalidOperationException($"Notify API returned {(int)response.StatusCode}.");
+            throw new InvalidOperationException("Notify transport requires NotifyUrl or NotifyUrls.");
         }
 
-        _logger.LogInformation("Notify transactional delivery accepted email={Email} subject={Subject}", MaskEmail(email), subject);
+        return urls;
     }
 
     private static string BuildIdempotencyKey(string email, string subject, string html)
