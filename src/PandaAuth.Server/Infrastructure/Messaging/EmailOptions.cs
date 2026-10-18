@@ -18,4 +18,5 @@ public sealed class EmailOptions
     public string NotifyTokenFile { get; set; } = "";
     public string NotifyClientCertificateFile { get; set; } = "";
     public string NotifyClientCertificatePasswordFile { get; set; } = "";
+    public string NotifyServerCaFile { get; set; } = "";
 }

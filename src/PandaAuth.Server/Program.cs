@@ -324,17 +324,7 @@ if (builder.Environment.IsProduction())
             .ConfigurePrimaryHttpMessageHandler(services =>
             {
                 var options = services.GetRequiredService<IOptions<EmailOptions>>().Value;
-                var handler = new HttpClientHandler();
-                if (!string.IsNullOrWhiteSpace(options.NotifyClientCertificateFile))
-                {
-                    var password = string.IsNullOrWhiteSpace(options.NotifyClientCertificatePasswordFile)
-                        ? null
-                        : File.ReadAllText(options.NotifyClientCertificatePasswordFile).Trim();
-                    handler.ClientCertificates.Add(
-                        X509CertificateLoader.LoadPkcs12FromFile(options.NotifyClientCertificateFile, password));
-                }
-
-                return handler;
+                return NotifyTransportHandler.Create(options);
             });
     }
     else if (emailTransport.Equals("Resend", StringComparison.OrdinalIgnoreCase))
