@@ -13,6 +13,7 @@ public sealed class EmailOptions
     public string FromAddress { get; set; } = "";
 
     public string NotifyUrl { get; set; } = "";
+    public string NotifyUrls { get; set; } = "";
     public string NotifyTenantId { get; set; } = "";
     public string NotifyProducer { get; set; } = "panda-auth-server";
     public string NotifyTokenFile { get; set; } = "";

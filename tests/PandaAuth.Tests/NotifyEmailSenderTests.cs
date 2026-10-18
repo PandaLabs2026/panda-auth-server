@@ -88,6 +88,82 @@ public sealed class NotifyEmailSenderTests
         }
     }
 
+    [Fact]
+    public async Task Fails_over_to_the_next_endpoint_on_5xx_with_the_same_idempotency_key()
+    {
+        var tokenFile = Path.Combine(Path.GetTempPath(), $"notify-token-{Guid.NewGuid():N}");
+        File.WriteAllText(tokenFile, "test-token");
+        var requests = new List<(string Host, string Key)>();
+        try
+        {
+            var options = new EmailOptions
+            {
+                NotifyUrls = "https://primary.example, https://standby.example",
+                NotifyTenantId = "t0000",
+                NotifyTokenFile = tokenFile,
+            };
+            var handler = new StubHandler(request =>
+            {
+                var body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+                using var document = JsonDocument.Parse(body);
+                requests.Add((request.RequestUri!.Host, document.RootElement.GetProperty("idempotencyKey").GetString()!));
+                return request.RequestUri!.Host == "primary.example"
+                    ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                    : new HttpResponseMessage(HttpStatusCode.Accepted);
+            });
+            var sender = new NotifyEmailSender(
+                new HttpClient(handler),
+                Options.Create(options),
+                NullLogger<NotifyEmailSender>.Instance);
+
+            await sender.SendAsync("person@example.test", "Subject", "<p>Body</p>", CancellationToken.None);
+
+            Assert.Equal(2, requests.Count);
+            Assert.Equal("primary.example", requests[0].Host);
+            Assert.Equal("standby.example", requests[1].Host);
+            Assert.Equal(requests[0].Key, requests[1].Key);
+        }
+        finally
+        {
+            File.Delete(tokenFile);
+        }
+    }
+
+    [Fact]
+    public async Task Does_not_fail_over_on_a_client_error()
+    {
+        var tokenFile = Path.Combine(Path.GetTempPath(), $"notify-token-{Guid.NewGuid():N}");
+        File.WriteAllText(tokenFile, "test-token");
+        var requests = 0;
+        try
+        {
+            var options = new EmailOptions
+            {
+                NotifyUrls = "https://primary.example,https://standby.example",
+                NotifyTenantId = "t0000",
+                NotifyTokenFile = tokenFile,
+            };
+            var handler = new StubHandler(_ =>
+            {
+                requests++;
+                return new HttpResponseMessage(HttpStatusCode.BadRequest);
+            });
+            var sender = new NotifyEmailSender(
+                new HttpClient(handler),
+                Options.Create(options),
+                NullLogger<NotifyEmailSender>.Instance);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                sender.SendAsync("person@example.test", "Subject", "<p>Body</p>", CancellationToken.None));
+
+            Assert.Equal(1, requests);
+        }
+        finally
+        {
+            File.Delete(tokenFile);
+        }
+    }
+
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> handler) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>

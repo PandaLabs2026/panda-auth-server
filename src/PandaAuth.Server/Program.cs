@@ -306,7 +306,7 @@ builder.Services.AddOptions<EmailOptions>()
 
         if (options.Transport.Equals("Notify", StringComparison.OrdinalIgnoreCase))
         {
-            return !string.IsNullOrWhiteSpace(options.NotifyUrl)
+            return (!string.IsNullOrWhiteSpace(options.NotifyUrl) || !string.IsNullOrWhiteSpace(options.NotifyUrls))
                    && !string.IsNullOrWhiteSpace(options.NotifyTenantId)
                    && (!string.IsNullOrWhiteSpace(options.NotifyTokenFile)
                        || !string.IsNullOrWhiteSpace(options.NotifyClientCertificateFile));
