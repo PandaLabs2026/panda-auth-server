@@ -220,4 +220,113 @@ public class AdminClientsControllerTests
         var problem = Assert.IsType<ObjectResult>(await controller.RotateSecret("theta", CancellationToken.None));
         Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
     }
+
+    [Fact]
+    public async Task FirstPartyClients_AreMarkedAndRejectAllAdminWrites()
+    {
+        var (controller, provider) = Create();
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        await SeedConfidentialClientAsync(applications, FirstPartyClients.AdminWeb,
+            redirectUris: ["https://auth.example/admin/callback/login/pandaauth"]);
+        await SeedConfidentialClientAsync(applications, "ordinary-client");
+
+        var ok = Assert.IsType<OkObjectResult>(await controller.Detail(FirstPartyClients.AdminWeb));
+        Assert.True(Assert.IsType<AdminClientDetail>(ok.Value).IsFirstParty);
+
+        var ordinary = Assert.IsType<OkObjectResult>(await controller.Detail("ordinary-client"));
+        Assert.False(Assert.IsType<AdminClientDetail>(ordinary.Value).IsFirstParty);
+
+        var list = Assert.IsType<AdminPageResult<AdminClientSummary>>(
+            Assert.IsType<OkObjectResult>(await controller.List(null, null, CancellationToken.None)).Value);
+        Assert.True(list.Items.Single(item => item.ClientId == FirstPartyClients.AdminWeb).IsFirstParty);
+        Assert.False(list.Items.Single(item => item.ClientId == "ordinary-client").IsFirstParty);
+
+        var uriProblem = Assert.IsType<ObjectResult>(await controller.UpdateRedirectUris(
+            FirstPartyClients.AdminWeb,
+            new AdminRedirectUrisRequest(["https://auth.example/admin/callback/login/pandaauth"], []),
+            CancellationToken.None));
+        Assert.Equal(StatusCodes.Status400BadRequest, uriProblem.StatusCode);
+
+        var permissionProblem = Assert.IsType<ObjectResult>(await controller.UpdatePermissions(
+            FirstPartyClients.AdminWeb,
+            new AdminPermissionsRequest([Permissions.GrantTypes.AuthorizationCode]),
+            CancellationToken.None));
+        Assert.Equal(StatusCodes.Status400BadRequest, permissionProblem.StatusCode);
+
+        var rotateProblem = Assert.IsType<ObjectResult>(await controller.RotateSecret(
+            FirstPartyClients.AdminWeb, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status400BadRequest, rotateProblem.StatusCode);
+    }
+
+    [Fact]
+    public async Task UpdatePermissions_DowngradeRevokesClientTokens()
+    {
+        var (controller, provider, revoker) = CreateWithRevoker();
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        await SeedConfidentialClientAsync(applications, "downgrade",
+            permissions:
+            [
+                Permissions.GrantTypes.AuthorizationCode,
+                Permissions.ResponseTypes.Code,
+                Permissions.Scopes.Roles,
+            ]);
+
+        Assert.IsType<OkObjectResult>(await controller.UpdatePermissions(
+            "downgrade",
+            new AdminPermissionsRequest([Permissions.GrantTypes.AuthorizationCode, Permissions.ResponseTypes.Code]),
+            CancellationToken.None));
+
+        Assert.Equal(["downgrade"], revoker.RevokedClients);
+    }
+
+    [Fact]
+    public async Task UpdatePermissions_GrantOnlyDoesNotRevokeClientTokens()
+    {
+        var (controller, provider, revoker) = CreateWithRevoker();
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        await SeedConfidentialClientAsync(applications, "upgrade",
+            permissions: [Permissions.GrantTypes.AuthorizationCode, Permissions.ResponseTypes.Code]);
+
+        Assert.IsType<OkObjectResult>(await controller.UpdatePermissions(
+            "upgrade",
+            new AdminPermissionsRequest(
+            [
+                Permissions.GrantTypes.AuthorizationCode,
+                Permissions.ResponseTypes.Code,
+                Permissions.Scopes.Roles,
+            ]),
+            CancellationToken.None));
+
+        Assert.Empty(revoker.RevokedClients);
+    }
+
+    [Fact]
+    public async Task UpdateRedirectUris_AndRotateSecret_RevokeClientTokens()
+    {
+        var (controller, provider, revoker) = CreateWithRevoker();
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        await SeedConfidentialClientAsync(applications, "rotate-me", secret: "seed-secret");
+
+        Assert.IsType<OkObjectResult>(await controller.UpdateRedirectUris(
+            "rotate-me", new AdminRedirectUrisRequest(["https://new.example/callback"], []), CancellationToken.None));
+        Assert.IsType<OkObjectResult>(await controller.RotateSecret("rotate-me", CancellationToken.None));
+
+        Assert.Equal(["rotate-me", "rotate-me"], revoker.RevokedClients);
+    }
+
+    private static (AdminClientsController Controller, ServiceProvider Provider, StubTokenRevoker Revoker) CreateWithRevoker()
+    {
+        var (provider, revoker) = AdminTestHost.Create();
+        var controller = new AdminClientsController(
+            provider.GetRequiredService<PandaAuthDbContext>(),
+            provider.GetRequiredService<IOpenIddictApplicationManager>(),
+            provider.GetRequiredService<AdminAuditWriter>(),
+            provider.GetRequiredService<SecurityEventWriter>(),
+            provider.GetRequiredService<ILoggerFactory>().CreateLogger<AdminClientsController>(),
+            revoker)
+        {
+            ControllerContext = new() { HttpContext = AdminTestHost.HttpContext(provider) },
+        };
+        return (controller, provider, revoker);
+    }
 }

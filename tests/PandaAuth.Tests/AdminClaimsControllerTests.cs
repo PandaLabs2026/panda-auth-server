@@ -236,6 +236,24 @@ public sealed class AdminClaimsControllerTests
     }
 
     [Fact]
+    public async Task ReservedTenantClaims_CannotBeInjected()
+    {
+        var (controller, provider) = Create();
+        var user = new PandaUser { UserName = "reserved-claims" };
+        Assert.True((await provider.GetRequiredService<UserService>().CreateAsync(user)).Succeeded);
+
+        foreach (var claimType in new[] { PandaAuthClaims.TenantId, PandaAuthClaims.TenantHost })
+        {
+            var result = await controller.AddUser(
+                user.Id, new AdminClaimRequest(claimType, "t9999", "openid"), CancellationToken.None);
+            var problem = Assert.IsType<ObjectResult>(result);
+            Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
+        }
+
+        Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().UserClaims.AsEnumerable());
+    }
+
+    [Fact]
     public async Task ClaimWrites_RequireRecentWebAuthn()
     {
         var (controller, provider) = Create(withMfa: false);
