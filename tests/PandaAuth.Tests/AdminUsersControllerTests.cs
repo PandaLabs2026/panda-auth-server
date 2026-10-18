@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OpenIddict.EntityFrameworkCore.Models;
@@ -816,6 +817,27 @@ public class AdminUsersControllerTests
         Assert.False(resetReloaded!.TwoFactorEnabled);
         Assert.NotEqual(stampBefore, resetReloaded.SecurityStamp);
         Assert.Equal([user.Id], revoker.RevokedUsers);
+    }
+
+    [Fact]
+    public async Task ResetTwoFactor_ClearsAllRecoveryCodes()
+    {
+        var (controller, provider, _) = Create();
+        var user = await SeedUserAsync(provider, "reset-codes");
+        var db = provider.GetRequiredService<PandaAuthDbContext>();
+        db.MfaRecoveryCodes.AddRange(
+            new MfaRecoveryCode { UserId = user.Id, CodeHash = "aa", Salt = "11" },
+            new MfaRecoveryCode { UserId = user.Id, CodeHash = "bb", Salt = "22" });
+        var other = await SeedUserAsync(provider, "reset-codes-other");
+        db.MfaRecoveryCodes.Add(new MfaRecoveryCode { UserId = other.Id, CodeHash = "cc", Salt = "33" });
+        await db.SaveChangesAsync();
+
+        DetailOf(await controller.ResetTwoFactor(user.Id, CancellationToken.None));
+
+        Assert.Empty(await db.MfaRecoveryCodes.Where(code => code.UserId == user.Id).ToListAsync());
+        Assert.Single(await db.MfaRecoveryCodes.Where(code => code.UserId == other.Id).ToListAsync());
+        Assert.Contains(db.MfaRecoveryEvents, evt =>
+            evt.TargetUserId == user.Id && evt.Reason == MfaRecoveryEvent.AdminResetReason);
     }
 
     [Fact]

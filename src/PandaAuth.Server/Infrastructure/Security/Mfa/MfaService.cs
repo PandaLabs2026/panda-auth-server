@@ -143,6 +143,7 @@ public sealed class MfaService(
             if (activeTotp + activeWebAuthn <= 1)
                 throw new MfaPolicyException("Cannot remove the last active factor.");
             totp.RevokedAt = clock.GetUtcNow();
+            await RemoveRecoveryCodesAsync(userId, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
             if (transaction is not null) await transaction.CommitAsync(cancellationToken);
             return;
@@ -154,6 +155,7 @@ public sealed class MfaService(
                 throw new MfaPolicyException("Cannot remove the last active factor.");
             passkey.RevokedAt = clock.GetUtcNow();
             passkey.UpdatedAt = clock.GetUtcNow();
+            await RemoveRecoveryCodesAsync(userId, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
             if (transaction is not null) await transaction.CommitAsync(cancellationToken);
             return;
@@ -208,10 +210,38 @@ public sealed class MfaService(
         // 首因子解锁：amr 只能来自已完成的 MFA，账户没有任何活跃因子时不存在合法途径产生它，
         // 此时以 5 分钟内的密码登录（panda_authenticated_at）视为「近期重新认证」；
         // 已有因子后仍必须完成一次 MFA（防止仅凭密码注册第二因子绕过 step-up）。
+        //
+        // 管理员重置 MFA 之后，重置前签发的密码会话不得再用首因子解锁重建因子；否则
+        // “重置 MFA”会被一个仍持有旧会话的人原地撤销。重置后重新登录（auth_time 晚于
+        // 重置事件）才可按首因子流程重新绑定——这是本批选定的恢复口径，带外一次性
+        // 再注册令牌是更强但更重的后续方案。
         if (!await HasActiveFactorAsync(userId, cancellationToken) &&
-            SessionSecurityService.HasRecentAuthentication(principal, now, RecentAuthenticationWindow))
+            SessionSecurityService.HasRecentAuthentication(principal, now, RecentAuthenticationWindow) &&
+            !await WasResetAfterAuthenticationAsync(userId, principal, cancellationToken))
             return;
         throw new MfaPolicyException("Recent MFA authentication is required.");
+    }
+
+    /// <summary>最近一次管理员 MFA 重置是否晚于当前登录时刻；无法读取认证时刻时按“是”处理。</summary>
+    private async Task<bool> WasResetAfterAuthenticationAsync(
+        string userId, ClaimsPrincipal principal, CancellationToken cancellationToken)
+    {
+        if (!SessionSecurityService.TryGetAuthenticationTime(principal, out var authenticatedAt))
+            return true;
+        return await db.MfaRecoveryEvents.AnyAsync(evt =>
+            evt.TargetUserId == userId &&
+            evt.Reason == MfaRecoveryEvent.AdminResetReason &&
+            evt.CreatedAt >= authenticatedAt,
+            cancellationToken);
+    }
+
+    /// <summary>因子撤销后恢复码整体作废：旧码不得继续提供 step-up 事实。</summary>
+    private async Task RemoveRecoveryCodesAsync(string userId, CancellationToken cancellationToken)
+    {
+        var codes = await db.MfaRecoveryCodes
+            .Where(code => code.UserId == userId)
+            .ToListAsync(cancellationToken);
+        db.MfaRecoveryCodes.RemoveRange(codes);
     }
 
     /// <summary>是否存在活跃因子（已确认 TOTP 或未撤销 Passkey）——登录路径 MFA 挑战的判定依据。</summary>

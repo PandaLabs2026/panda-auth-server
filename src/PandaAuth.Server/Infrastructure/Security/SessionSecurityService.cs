@@ -13,12 +13,20 @@ public sealed class SessionSecurityService(
 {
     public static bool HasRecentAuthentication(
         ClaimsPrincipal principal, DateTimeOffset now, TimeSpan maximumAge)
+        => TryGetAuthenticationTime(principal, out var authenticatedAt) &&
+           authenticatedAt <= now && now - authenticatedAt <= maximumAge;
+
+    /// <summary>
+    /// 读取登录 Cookie 的原始认证时刻。缺失/畸形一律 false——调用方不得回退合成 "now"。
+    /// </summary>
+    public static bool TryGetAuthenticationTime(ClaimsPrincipal principal, out DateTimeOffset authenticatedAt)
     {
+        authenticatedAt = default;
         var raw = principal.FindFirstValue(LoginSessionService.AuthenticatedAtClaim);
         if (!long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds)) return false;
         if (seconds is < -62_135_596_800 or > 253_402_300_799) return false;
-        var authenticatedAt = DateTimeOffset.FromUnixTimeSeconds(seconds);
-        return authenticatedAt <= now && now - authenticatedAt <= maximumAge;
+        authenticatedAt = DateTimeOffset.FromUnixTimeSeconds(seconds);
+        return true;
     }
 
     /// <summary>Returns the active account only when the cookie's security stamp is current.</summary>

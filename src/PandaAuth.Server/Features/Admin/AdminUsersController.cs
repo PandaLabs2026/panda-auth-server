@@ -662,14 +662,42 @@ public sealed class AdminUsersController(
             return BadRequest(new { error = "管理员不能恢复自己的 MFA。" });
         }
 
-        user.TwoFactorEnabled = false;
         var now = DateTimeOffset.UtcNow;
+        // 重置是一个整体：因子撤销、恢复码清空、安全戳轮换、令牌吊销必须同进同退。
+        // 任一保存失败都不能返回 200——否则调用方会以为 MFA 已重置，实际旧因子仍有效。
+        await using var transaction = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(cancellationToken)
+            : null;
+        user.TwoFactorEnabled = false;
         foreach (var credential in await db.WebAuthnCredentials.Where(item => item.UserId == user.Id && item.RevokedAt == null).ToListAsync(cancellationToken)) credential.RevokedAt = credential.UpdatedAt = now;
         foreach (var factor in await db.TotpFactors.Where(item => item.UserId == user.Id && item.RevokedAt == null).ToListAsync(cancellationToken)) factor.RevokedAt = now;
-        await userManager.UpdateSecurityStampAsync(user);
-        await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: cancellationToken);
-        db.MfaRecoveryEvents.Add(new MfaRecoveryEvent { ActorUserId = actorId, TargetUserId = user.Id, Reason = "admin_reset", AuthenticationMethod = MfaClaimTypes.WebAuthn, CreatedAt = now });
+
+        // 恢复码是独立的 step-up 凭据：因子撤销后必须整体作废，不能留下“旧码仍可过 8 小时门禁”的尾巴。
+        var recoveryCodes = await db.MfaRecoveryCodes
+            .Where(code => code.UserId == user.Id)
+            .ToListAsync(cancellationToken);
+        db.MfaRecoveryCodes.RemoveRange(recoveryCodes);
+
+        var stamp = await userManager.UpdateSecurityStampAsync(user);
+        if (!stamp.Succeeded)
+        {
+            if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
+            return Problem(statusCode: StatusCodes.Status500InternalServerError, title: "重置两步验证失败",
+                detail: string.Join("; ", stamp.Errors.Select(error => error.Description)));
+        }
+
+        db.MfaRecoveryEvents.Add(new MfaRecoveryEvent
+        {
+            ActorUserId = actorId,
+            TargetUserId = user.Id,
+            Reason = MfaRecoveryEvent.AdminResetReason,
+            AuthenticationMethod = MfaClaimTypes.WebAuthn,
+            CreatedAt = now,
+        });
         await db.SaveChangesAsync(cancellationToken);
+        await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+
         await audit.RecordAsync(AdminAuditing.Entry(User!, AdminAuditAction.UserResetTwoFactor, "user", user.Id, new { recovery = true }, HttpContext.Connection.RemoteIpAddress?.ToString()), cancellationToken);
         await securityEvents.RecordAsync(SecurityEventEntryFor(
             "user.mfa_reset", user.Id, new { recovery = true }), cancellationToken);

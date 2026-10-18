@@ -193,6 +193,138 @@ public class MfaControllerTests
         Assert.False(string.IsNullOrWhiteSpace(token));
     }
 
+    [Fact]
+    public async Task AdminEnrollment_WithoutRecentAuthentication_IsForbidden()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var user = await SeedAdminAsync(provider, emailConfirmed: true);
+        var controller = CreateAdminMfaController(provider, user.Id, authenticatedAt: null);
+
+        Assert.IsType<ForbidResult>(await controller.EnrollmentOptions(CancellationToken.None));
+        Assert.IsType<ForbidResult>(await controller.BeginTotp(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task AdminEnrollment_WithFreshPasswordLogin_CanStartPasskeyCeremony()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var user = await SeedAdminAsync(provider, emailConfirmed: true);
+        var controller = CreateAdminMfaController(provider, user.Id, authenticatedAt: DateTimeOffset.UtcNow);
+
+        Assert.IsType<JsonResult>(await controller.EnrollmentOptions(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task AdminAssertTotp_IsRateLimitedPerUser()
+    {
+        var options = new AuthOptions();
+        options.RateLimit.MfaChallengeAccountPerMinute = 2;
+        using var provider = TestUserStoreHost.Create(options);
+        var user = await SeedAdminAsync(provider, emailConfirmed: true);
+        await SeedTotpFactorAsync(provider, user.Id);
+        var controller = CreateAdminMfaController(provider, user.Id, authenticatedAt: DateTimeOffset.UtcNow);
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var bad = Assert.IsType<BadRequestObjectResult>(await controller.AssertTotp(
+                new ConfirmTotpRequest { Code = "000000" }, CancellationToken.None));
+            Assert.Contains("验证码错误", bad.Value!.ToString(), StringComparison.Ordinal);
+        }
+
+        var limited = Assert.IsType<ObjectResult>(await controller.AssertTotp(
+            new ConfirmTotpRequest { Code = "000000" }, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status429TooManyRequests, limited.StatusCode);
+    }
+
+    [Fact]
+    public async Task AdminConfirmTotp_RejectsAlreadyConfirmedFactor()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var user = await SeedAdminAsync(provider, emailConfirmed: true);
+        var factorId = await SeedTotpFactorAsync(provider, user.Id);
+        var controller = CreateAdminMfaController(
+            provider, user.Id, authenticatedAt: DateTimeOffset.UtcNow, recentMfaMethod: MfaClaimTypes.Totp);
+
+        var result = Assert.IsType<BadRequestObjectResult>(await controller.ConfirmTotp(
+            new ConfirmTotpRequest { FactorId = factorId, Code = "000000" }, CancellationToken.None));
+
+        Assert.Contains("验证码错误", result.Value!.ToString(), StringComparison.Ordinal);
+    }
+
+    private static async Task<PandaUser> SeedAdminAsync(ServiceProvider provider, bool emailConfirmed)
+    {
+        var users = provider.GetRequiredService<UserService>();
+        var roles = provider.GetRequiredService<RoleService>();
+        if (!await roles.RoleExistsAsync(PandaUser.AdminRole))
+            Assert.True((await roles.CreateAsync(new PandaRole { Name = PandaUser.AdminRole })).Succeeded);
+        var user = new PandaUser
+        {
+            UserName = $"admin-{Guid.NewGuid():N}",
+            Email = $"{Guid.NewGuid():N}@example.com",
+            EmailConfirmed = emailConfirmed,
+        };
+        Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
+        Assert.True((await users.AddToRoleAsync(user, PandaUser.AdminRole)).Succeeded);
+        return user;
+    }
+
+    private static async Task<Guid> SeedTotpFactorAsync(ServiceProvider provider, string userId)
+    {
+        var db = provider.GetRequiredService<PandaAuthDbContext>();
+        var factorId = Guid.NewGuid();
+        var protector = new TotpSecretProtector(
+            Convert.FromBase64String("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="), "v1");
+        var protectedSecret = protector.Protect(userId, factorId, System.Security.Cryptography.RandomNumberGenerator.GetBytes(20));
+        db.TotpFactors.Add(new MfaTotpFactor
+        {
+            Id = factorId,
+            UserId = userId,
+            ConfirmedAt = DateTimeOffset.UtcNow,
+            CreatedAt = DateTimeOffset.UtcNow,
+            KeyVersion = protectedSecret.KeyVersion,
+            Nonce = protectedSecret.Nonce,
+            Ciphertext = protectedSecret.Ciphertext,
+            Tag = protectedSecret.Tag,
+        });
+        await db.SaveChangesAsync();
+        return factorId;
+    }
+
+    private static MfaController CreateAdminMfaController(
+        ServiceProvider provider, string userId, DateTimeOffset? authenticatedAt, string? recentMfaMethod = null)
+    {
+        var db = provider.GetRequiredService<PandaAuthDbContext>();
+        var context = new DefaultHttpContext { RequestServices = provider };
+        context.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("203.0.113.10");
+        var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, userId) };
+        if (authenticatedAt is not null)
+            claims.Add(new Claim(LoginSessionService.AuthenticatedAtClaim,
+                authenticatedAt.Value.ToUnixTimeSeconds().ToString()));
+        if (recentMfaMethod is not null)
+        {
+            claims.Add(new Claim(MfaClaimTypes.Method, recentMfaMethod));
+            claims.Add(new Claim(MfaClaimTypes.VerifiedAt,
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()));
+        }
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(claims, LoginSessionService.Scheme));
+        var totp = new TotpFactorService(db,
+            new TotpSecretProtector(Convert.FromBase64String("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="), "v1"), TimeProvider.System);
+        return new MfaController(
+            provider.GetRequiredService<UserService>(),
+            new WebAuthnCeremonyService(new Fido2(WebAuthnRelyingParty.Create("https://auth.example.test")),
+                db, new MfaChallengeStore(db, TimeProvider.System)),
+            totp,
+            provider.GetRequiredService<LoginSessionService>(),
+            db,
+            provider.GetRequiredService<ILoggerFactory>().CreateLogger<MfaController>(),
+            provider.GetRequiredService<LoginRateLimiter>(),
+            new MfaService(db, provider.GetRequiredService<UserService>(), totp,
+                provider.GetRequiredService<LoginSessionService>(), TimeProvider.System))
+        {
+            ControllerContext = new ControllerContext { HttpContext = context },
+        };
+    }
+
     private static MfaController CreateUserMfaController(ServiceProvider provider, string userId)
     {
         var db = provider.GetRequiredService<PandaAuthDbContext>();
