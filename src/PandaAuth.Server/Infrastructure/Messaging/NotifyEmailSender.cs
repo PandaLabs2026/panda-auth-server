@@ -73,6 +73,11 @@ public sealed class NotifyEmailSender : IEmailSender
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _token);
         }
 
+        if (!string.IsNullOrWhiteSpace(_options.NotifyProducer))
+        {
+            request.Headers.Add("X-Notify-Producer", _options.NotifyProducer);
+        }
+
         using var response = await _http.SendAsync(request, ct);
         if (!response.IsSuccessStatusCode)
         {
