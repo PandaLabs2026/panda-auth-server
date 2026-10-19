@@ -14,7 +14,7 @@ namespace PandaAuth.Server.Features.WebsiteAdmin;
 
 internal static class WebsiteAdminClientCommand
 {
-    private const string ClientId = FirstPartyClients.WebsiteAdmin;
+    private const string ClientId = FirstPartyClients.CloudOperationWeb;
     private const string Issuer = "https://auth.appliket.com/";
     private const string Root = "/etc/panda-auth/website-admin";
     [DllImport("libc")] private static extern uint geteuid();
@@ -73,7 +73,7 @@ internal static class WebsiteAdminClientCommand
             var descriptor = new OpenIddictApplicationDescriptor
             {
                 ClientId = ClientId, ClientType = ClientTypes.Confidential, ClientSecret = secret,
-                ConsentType = ConsentTypes.Implicit, DisplayName = "PandaLabs 官网运营后台",
+                ConsentType = ConsentTypes.Implicit, DisplayName = "PandaLabs 运维观测面",
                 RedirectUris = { callback }, PostLogoutRedirectUris = { logout },
                 Permissions = { Permissions.Endpoints.Authorization, Permissions.Endpoints.Token,
                     Permissions.Endpoints.EndSession, Permissions.Endpoints.Introspection, Permissions.Endpoints.Revocation,

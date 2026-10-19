@@ -41,11 +41,11 @@ public class DbSeederTests
 
     private const string FleetAdminWebClientSecret = "fleet-admin-web-test-secret";
 
-    private const string FleetHubWebRedirectUri = "https://appliket.com/callback/pandaauth";
+    private const string CloudConsoleWebRedirectUri = "https://appliket.com/callback/pandaauth";
 
-    private const string FleetHubWebPostLogoutUri = "https://appliket.com/callback/logout/pandaauth";
+    private const string CloudConsoleWebPostLogoutUri = "https://appliket.com/callback/logout/pandaauth";
 
-    private const string FleetHubWebClientSecret = "fleet-hub-web-test-secret";
+    private const string CloudConsoleWebClientSecret = "cloud-console-web-test-secret";
 
     // 密钥对账用例用的存量旧回调：刻意不用已退役域名，避免与域名退役检查的
     // 负断言夹具（`.cn` 命中数基线）重复计数。
@@ -207,9 +207,9 @@ public class DbSeederTests
     }
 
     [Fact]
-    public async Task FleetHubWebDisabledByDefault_DoesNotCreateClient()
+    public async Task CloudConsoleWebDisabledByDefault_DoesNotCreateClient()
     {
-        // fleet-hub-web 与 OasisWeb/FleetAdminWeb 同策略：非 PandaAuth 自带面板，默认关闭，
+        // cloud-console-web 与 OasisWeb/FleetAdminWeb 同策略：非 PandaAuth 自带面板，默认关闭，
         // 未显式开启时任何部署（含共享实例）都不得出现该客户端。
         var options = ValidOptions();
 
@@ -217,41 +217,41 @@ public class DbSeederTests
         await DbSeeder.SeedAsync(provider);
 
         var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
-        Assert.Null(await applications.FindByClientIdAsync("fleet-hub-web"));
+        Assert.Null(await applications.FindByClientIdAsync("cloud-console-web"));
     }
 
     [Fact]
-    public async Task FleetHubWebEnabled_CreatesConfidentialClientWithTrimmedPermissions()
+    public async Task CloudConsoleWebEnabled_CreatesConfidentialClientWithRolesButNoIntrospection()
     {
         var options = ValidOptions();
-        options.Seed.FleetHubWeb = new FleetHubWebSeedOptions
+        options.Seed.CloudConsoleWeb = new CloudConsoleWebSeedOptions
         {
             Enabled = true,
-            ClientSecret = FleetHubWebClientSecret,
-            RedirectUris = [FleetHubWebRedirectUri],
-            PostLogoutRedirectUris = [FleetHubWebPostLogoutUri],
+            ClientSecret = CloudConsoleWebClientSecret,
+            RedirectUris = [CloudConsoleWebRedirectUri],
+            PostLogoutRedirectUris = [CloudConsoleWebPostLogoutUri],
         };
 
         using var provider = BuildProvider(options);
         await DbSeeder.SeedAsync(provider);
 
         var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
-        var hub = await applications.FindByClientIdAsync("fleet-hub-web");
-        Assert.NotNull(hub);
-        Assert.True(await applications.ValidateClientSecretAsync(hub, FleetHubWebClientSecret));
-        Assert.Equal(ClientTypes.Confidential, await applications.GetClientTypeAsync(hub));
-        Assert.Contains(FleetHubWebRedirectUri, await applications.GetRedirectUrisAsync(hub));
-        Assert.Contains(FleetHubWebPostLogoutUri, await applications.GetPostLogoutRedirectUrisAsync(hub));
+        var console = await applications.FindByClientIdAsync("cloud-console-web");
+        Assert.NotNull(console);
+        Assert.True(await applications.ValidateClientSecretAsync(console, CloudConsoleWebClientSecret));
+        Assert.Equal(ClientTypes.Confidential, await applications.GetClientTypeAsync(console));
+        Assert.Contains(CloudConsoleWebRedirectUri, await applications.GetRedirectUrisAsync(console));
+        Assert.Contains(CloudConsoleWebPostLogoutUri, await applications.GetPostLogoutRedirectUrisAsync(console));
         // 第一方 Web 基础面：授权码 + 刷新令牌 + PKCE + 登出/吊销端点。
-        Assert.True(await applications.HasPermissionAsync(hub, Permissions.GrantTypes.AuthorizationCode));
-        Assert.True(await applications.HasPermissionAsync(hub, Permissions.GrantTypes.RefreshToken));
-        Assert.True(await applications.HasPermissionAsync(hub, Permissions.Endpoints.EndSession));
-        Assert.True(await applications.HasPermissionAsync(hub, Permissions.Endpoints.Revocation));
-        Assert.True(await applications.HasPermissionAsync(hub, Requirements.Features.ProofKeyForCodeExchange));
+        Assert.True(await applications.HasPermissionAsync(console, Permissions.GrantTypes.AuthorizationCode));
+        Assert.True(await applications.HasPermissionAsync(console, Permissions.GrantTypes.RefreshToken));
+        Assert.True(await applications.HasPermissionAsync(console, Permissions.Endpoints.EndSession));
+        Assert.True(await applications.HasPermissionAsync(console, Permissions.Endpoints.Revocation));
+        Assert.True(await applications.HasPermissionAsync(console, Requirements.Features.ProofKeyForCodeExchange));
         // roles 仅供 /cloud-admin 角色门；无内省端点（无资源方消费方）。
-        Assert.True(await applications.HasPermissionAsync(hub, Permissions.Scopes.Roles));
-        Assert.False(await applications.HasPermissionAsync(hub, Permissions.Endpoints.Introspection));
-        Assert.False(await applications.HasPermissionAsync(hub, Permissions.Prefixes.Scope + "fleet.read"));
+        Assert.True(await applications.HasPermissionAsync(console, Permissions.Scopes.Roles));
+        Assert.False(await applications.HasPermissionAsync(console, Permissions.Endpoints.Introspection));
+        Assert.False(await applications.HasPermissionAsync(console, Permissions.Prefixes.Scope + "fleet.read"));
     }
 
     [Fact]
@@ -878,12 +878,12 @@ public class DbSeederTests
             RedirectUris = [FleetAdminWebRedirectUri],
             PostLogoutRedirectUris = [FleetAdminWebPostLogoutUri],
         };
-        options.Seed.FleetHubWeb = new FleetHubWebSeedOptions
+        options.Seed.CloudConsoleWeb = new CloudConsoleWebSeedOptions
         {
             Enabled = true,
-            ClientSecret = FleetHubWebClientSecret,
-            RedirectUris = [FleetHubWebRedirectUri],
-            PostLogoutRedirectUris = [FleetHubWebPostLogoutUri],
+            ClientSecret = CloudConsoleWebClientSecret,
+            RedirectUris = [CloudConsoleWebRedirectUri],
+            PostLogoutRedirectUris = [CloudConsoleWebPostLogoutUri],
         };
         options.Seed.AsstWeb = new AsstWebSeedOptions
         {
@@ -937,7 +937,7 @@ public class DbSeederTests
         // 播种 ⊆ 保留名单（防漂移方向：新播种项必须登记）。
         Assert.All(seeded, clientId => Assert.Contains(clientId, FirstPartyClients.All));
         // 保留名单中除宿主命令注册的 website-admin 外全部实际播种（防名单空挂/播种静默跳过）。
-        Assert.All(FirstPartyClients.All.Where(id => id != FirstPartyClients.WebsiteAdmin),
+        Assert.All(FirstPartyClients.All.Where(id => id != FirstPartyClients.CloudOperationWeb),
             clientId => Assert.Contains(clientId, seeded));
     }
 

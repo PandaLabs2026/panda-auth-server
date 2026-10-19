@@ -121,7 +121,7 @@ public sealed class SeedOptions
 
     public FleetAdminWebSeedOptions FleetAdminWeb { get; set; } = new();
 
-    public FleetHubWebSeedOptions FleetHubWeb { get; set; } = new();
+    public CloudConsoleWebSeedOptions CloudConsoleWeb { get; set; } = new();
 
     public AsstWebSeedOptions AsstWeb { get; set; } = new();
 
@@ -200,14 +200,15 @@ public sealed class FleetAdminWebSeedOptions : FirstPartyWebSeedOptions
 }
 
 /// <summary>
-/// Panda Fleet Hub（panda-fleet-hub，组织 Web 应用统一入口）的 Web 客户端：机密、
-/// 授权码 + PKCE + 刷新令牌，走与 me-web 相同的 upsert 播种路径；权限集用裁剪版
-/// （无 roles、无内省——hub 是纯入口渲染层，清单在其 BFF 服务端持有，不消费角色与内省）。
-/// 默认关闭——与 OasisWeb 同策略，仅 Fleet 控制面部署经 Auth__Seed__FleetHubWeb__Enabled 显式开启。
+/// Panda Cloud Console（panda-cloud-console，组织 Web 应用统一入口 + /cloud-admin）的
+/// Web 客户端：机密、授权码 + PKCE + 刷新令牌，走与 me-web 相同的 upsert 播种路径；
+/// 权限集为第一方基础集含 roles（/cloud-admin 的 cloud-admin 角色门需要角色声明）、无内省。
+/// 默认关闭——与 OasisWeb 同策略，仅 Cloud 控制面部署经 Auth__Seed__CloudConsoleWeb__Enabled 显式开启。
+/// 前身 fleet-hub-web（2026-10-19 client id 改名双注册：新行由本种子创建，旧行留库作回滚锚）。
 /// </summary>
-public sealed class FleetHubWebSeedOptions : FirstPartyWebSeedOptions
+public sealed class CloudConsoleWebSeedOptions : FirstPartyWebSeedOptions
 {
-    /// <summary>默认关闭；生产经 Auth__Seed__FleetHubWeb__Enabled 显式开启。</summary>
+    /// <summary>默认关闭；生产经 Auth__Seed__CloudConsoleWeb__Enabled 显式开启。</summary>
     public override bool Enabled { get; set; }
 }
 
