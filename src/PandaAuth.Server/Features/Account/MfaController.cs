@@ -274,6 +274,7 @@ public sealed class MfaController(
         var user = await AdminAsync();
         if (user is null) return Forbid();
         if (!user.EmailConfirmed) return Forbid();
+        if (await RequireAdminEnrollmentAsync(user, cancellationToken) is { } restricted) return restricted;
         var ceremony = await ceremonies.BeginEnrollmentAsync(user, cancellationToken);
         return Json(new { ceremonyId = ceremony.Id, publicKey = ceremony.Options });
     }
@@ -286,9 +287,12 @@ public sealed class MfaController(
         if (user is null) return Forbid();
         if (!user.EmailConfirmed) return Forbid();
         if (request is null || request.Response is null) return BadRequest(new { error = "缺少 Passkey 响应。" });
+        if (await RequireAdminEnrollmentAsync(user, cancellationToken) is { } restricted) return restricted;
         try
         {
             await ceremonies.CompleteEnrollmentAsync(user, request.CeremonyId, request.Response, request.FriendlyName, cancellationToken);
+            // 新 Passkey 是刚刚由本人验证过的因子；标记后即可继续配置 TOTP 等后续操作。
+            await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.WebAuthn);
             await RecordSecurityEventAsync("admin.passkey_enrolled", user.Id, MfaClaimTypes.WebAuthn, null, cancellationToken);
             logger.LogInformation("Passkey registered adminId={UserId}", user.Id);
             return Ok(new { status = "ok" });
@@ -321,6 +325,7 @@ public sealed class MfaController(
         var user = await AdminAsync();
         if (user is null) return Forbid();
         if (request is null || request.Response is null) return BadRequest(new { error = "缺少 Passkey 响应。" });
+        if (RateGate(user.Id) is { } limited) return limited;
         try
         {
             await ceremonies.CompleteAssertionAsync(user, request.CeremonyId, request.Response, cancellationToken);
@@ -343,6 +348,7 @@ public sealed class MfaController(
         var user = await AdminAsync();
         if (user is null) return Forbid();
         if (!user.EmailConfirmed) return Forbid();
+        if (await RequireAdminEnrollmentAsync(user, cancellationToken) is { } restricted) return restricted;
         try
         {
             var enrollment = await totpFactors.BeginEnrollmentAsync(user.Id, cancellationToken);
@@ -359,6 +365,8 @@ public sealed class MfaController(
         if (user is null) return Forbid();
         if (!user.EmailConfirmed) return Forbid();
         if (request is null) return BadRequest(new { error = "请求体缺失。" });
+        if (await RequireAdminEnrollmentAsync(user, cancellationToken) is { } restricted) return restricted;
+        if (RateGate(user.Id) is { } limited) return limited;
         if (!await totpFactors.ConfirmAsync(user.Id, request.FactorId, request.Code, cancellationToken))
             return BadRequest(new { error = "验证码错误或已过期。" });
         await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.Totp);
@@ -369,10 +377,12 @@ public sealed class MfaController(
 
     [HttpPost("totp/assert")]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> AssertTotp([FromBody] ConfirmTotpRequest request, CancellationToken cancellationToken)
+    public async Task<IActionResult> AssertTotp([FromBody] ConfirmTotpRequest? request, CancellationToken cancellationToken)
     {
         var user = await AdminAsync();
         if (user is null) return Forbid();
+        if (request is null) return BadRequest(new { error = "请求体缺失。" });
+        if (RateGate(user.Id) is { } limited) return limited;
         if (!await totpFactors.VerifyAsync(user.Id, request.Code, cancellationToken))
             return BadRequest(new { error = "验证码错误、已过期或已被使用。" });
         await sessions.MarkMfaAsync(HttpContext, MfaClaimTypes.Totp);
@@ -386,6 +396,24 @@ public sealed class MfaController(
         var user = await users.GetUserAsync(User);
         return user is not null && (await users.GetRolesAsync(user)).Contains(PandaUser.AdminRole, StringComparer.OrdinalIgnoreCase)
             ? user : null;
+    }
+
+    /// <summary>
+    /// 管理员因子注册/确认的再认证门：与用户路径共用 MfaService 的近期认证策略。
+    /// 会话劫持者即使拿到管理员 Cookie，也不能直接把自己的 Passkey/TOTP 绑定到受害者账号。
+    /// </summary>
+    private async Task<IActionResult?> RequireAdminEnrollmentAsync(PandaUser user, CancellationToken cancellationToken)
+    {
+        if (mfa is null) return Forbid();
+        try
+        {
+            await mfa.RequireEnrollmentAsync(user.Id, User, cancellationToken);
+            return null;
+        }
+        catch (MfaPolicyException)
+        {
+            return Forbid();
+        }
     }
 
     /// <summary>

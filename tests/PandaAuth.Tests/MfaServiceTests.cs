@@ -152,6 +152,78 @@ public sealed class MfaServiceTests
     }
 
     [Fact]
+    public async Task FirstFactor_AfterAdminReset_IsBlockedForSessionIssuedBeforeReset()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "reset-before-login", Email = "reset-before-login@example.com", EmailConfirmed = true };
+        Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
+        var db = provider.GetRequiredService<PandaAuthDbContext>();
+        db.MfaRecoveryEvents.Add(new MfaRecoveryEvent
+        {
+            ActorUserId = "admin",
+            TargetUserId = user.Id,
+            Reason = MfaRecoveryEvent.AdminResetReason,
+            AuthenticationMethod = MfaClaimTypes.WebAuthn,
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        var service = CreateService(provider);
+
+        // 重置前签发的密码会话：即使仍在 5 分钟内，也不能用首因子解锁重新绑定。
+        await Assert.ThrowsAsync<MfaPolicyException>(() => service.BeginEnrollmentAsync(
+            user.Id,
+            Principal(user.Id, authenticatedAt: DateTimeOffset.UtcNow.AddMinutes(-1)),
+            MfaFactorType.Totp,
+            CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task FirstFactor_AfterAdminReset_AllowsFreshLoginIssuedAfterReset()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "reset-after-login", Email = "reset-after-login@example.com", EmailConfirmed = true };
+        Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
+        var db = provider.GetRequiredService<PandaAuthDbContext>();
+        db.MfaRecoveryEvents.Add(new MfaRecoveryEvent
+        {
+            ActorUserId = "admin",
+            TargetUserId = user.Id,
+            Reason = MfaRecoveryEvent.AdminResetReason,
+            AuthenticationMethod = MfaClaimTypes.WebAuthn,
+            CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+        });
+        await db.SaveChangesAsync();
+        var service = CreateService(provider);
+
+        var enrollment = await service.BeginEnrollmentAsync(
+            user.Id, Principal(user.Id, authenticatedAt: DateTimeOffset.UtcNow), MfaFactorType.Totp, CancellationToken.None);
+
+        Assert.NotEqual(Guid.Empty, enrollment.FactorId);
+    }
+
+    [Fact]
+    public async Task RevokeFactor_ClearsRecoveryCodes()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "revoke-codes", Email = "revoke-codes@example.com", EmailConfirmed = true };
+        Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
+        var db = provider.GetRequiredService<PandaAuthDbContext>();
+        db.TotpFactors.Add(new MfaTotpFactor { UserId = user.Id, Id = Guid.NewGuid(), ConfirmedAt = DateTimeOffset.UtcNow });
+        var passkey = new MfaWebAuthnCredential { UserId = user.Id, Id = Guid.NewGuid(), CredentialId = [1], PublicKeyCose = [2] };
+        db.WebAuthnCredentials.Add(passkey);
+        db.MfaRecoveryCodes.Add(new MfaRecoveryCode { UserId = user.Id, CodeHash = "00", Salt = "00" });
+        await db.SaveChangesAsync();
+        var service = CreateService(provider);
+
+        await service.RevokeFactorAsync(user.Id, passkey.Id, Principal(user.Id, recentMethod: MfaClaimTypes.Totp), CancellationToken.None);
+
+        Assert.Empty(await db.MfaRecoveryCodes.Where(code => code.UserId == user.Id).ToListAsync());
+    }
+
+    [Fact]
     public async Task FirstFactor_RequiresRecentLogin_NotStaleSession()
     {
         using var provider = TestUserStoreHost.Create();

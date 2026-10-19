@@ -39,10 +39,17 @@ public sealed class TotpFactorService(PandaAuthDbContext db, TotpSecretProtector
             $"?secret={encoded}&issuer=PandaAuth&algorithm=SHA1&digits=6&period=30");
     }
 
+    /// <summary>待确认因子有效期；超时未确认的 secret 不得在未来被悄悄激活。</summary>
+    public static readonly TimeSpan PendingLifetime = TimeSpan.FromMinutes(10);
+
     public async Task<bool> ConfirmAsync(string userId, Guid factorId, string code, CancellationToken cancellationToken)
     {
-        var factor = await db.TotpFactors.SingleOrDefaultAsync(item => item.Id == factorId && item.UserId == userId && item.RevokedAt == null, cancellationToken);
+        // 只允许确认“待确认”因子：已确认因子只能走 VerifyAsync/assert，不能借确认端点重新获得 MFA 事实。
+        var factor = await db.TotpFactors.SingleOrDefaultAsync(
+            item => item.Id == factorId && item.UserId == userId && item.RevokedAt == null && item.ConfirmedAt == null,
+            cancellationToken);
         if (factor is null) return false;
+        if (clock.GetUtcNow() - factor.CreatedAt > PendingLifetime) return false;
         var secret = protector.Unprotect(userId, factor.Id, new ProtectedTotpSecret(factor.KeyVersion, factor.Nonce, factor.Ciphertext, factor.Tag));
         if (!TotpVerifier.TryVerify(secret, code, clock.GetUtcNow(), factor.LastAcceptedTimeStep, out var step)) return false;
         factor.LastAcceptedTimeStep = step;
