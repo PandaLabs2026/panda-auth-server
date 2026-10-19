@@ -45,21 +45,43 @@ public sealed class NotifyEmailSender : IEmailSender
         }
     }
 
-    public async Task SendPasswordResetNoticeAsync(string email, CancellationToken ct)
+    public Task SendPasswordResetNoticeAsync(string email, CancellationToken ct) =>
+        SendTemplateAsync(email, "password-reset-notice", null, ct);
+
+    public Task SendEmailConfirmationAsync(string email, string token, CancellationToken ct) =>
+        SendTemplateAsync(email, "email-confirmation", TokenVariables(token), ct);
+
+    public Task SendEmailChangeConfirmationAsync(string email, string token, CancellationToken ct) =>
+        SendTemplateAsync(email, "email-change", TokenVariables(token), ct);
+
+    public Task SendPasswordResetTokenAsync(string email, string token, CancellationToken ct) =>
+        SendTemplateAsync(email, "password-reset-token", TokenVariables(token), ct);
+
+    public Task SendEmailChangeNoticeAsync(string email, CancellationToken ct) =>
+        SendTemplateAsync(email, "email-change-notice", null, ct);
+
+    private Task SendTemplateAsync(
+        string email,
+        string templateKey,
+        IReadOnlyDictionary<string, string>? variables,
+        CancellationToken ct)
     {
         var payload = new
         {
             tenantId = _options.NotifyTenantId,
             product = "panda-auth",
-            templateKey = "password-reset-notice",
+            templateKey,
             locale = "zh-CN",
             to = email,
-            variables = new Dictionary<string, string>(StringComparer.Ordinal),
-            idempotencyKey = BuildIdempotencyKey(email, "password-reset-notice", ""),
+            variables = variables ?? new Dictionary<string, string>(StringComparer.Ordinal),
+            idempotencyKey = BuildIdempotencyKey(email, templateKey, ""),
         };
 
-        await PostAsync("/v1/messages", payload, email, "template:password-reset-notice", ct);
+        return PostAsync("/v1/messages", payload, email, $"template:{templateKey}", ct);
     }
+
+    private static Dictionary<string, string> TokenVariables(string token) =>
+        new(StringComparer.Ordinal) { ["token"] = token };
 
     public async Task SendAsync(string email, string subject, string htmlBody, CancellationToken ct)
     {
