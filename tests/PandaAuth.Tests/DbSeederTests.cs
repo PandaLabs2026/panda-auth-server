@@ -849,11 +849,11 @@ public class DbSeederTests
 
         Assert.Contains("https://t0042-auth.s001.pandalabs.cn/me/callback/login/pandaauth",
             await applications.GetRedirectUrisAsync(meWeb));
-        Assert.Contains("https://t0042-auth.s001.pandalabs.cn/me/",
+        Assert.Contains("https://t0042-auth.s001.pandalabs.cn/me/callback/logout/pandaauth",
             await applications.GetPostLogoutRedirectUrisAsync(meWeb));
         Assert.Contains("https://t0042-auth.s001.pandalabs.cn/admin/callback/login/pandaauth",
             await applications.GetRedirectUrisAsync(adminWeb));
-        Assert.Contains("https://t0042-auth.s001.pandalabs.cn/admin/",
+        Assert.Contains("https://t0042-auth.s001.pandalabs.cn/admin/callback/logout/pandaauth",
             await applications.GetPostLogoutRedirectUrisAsync(adminWeb));
     }
 
