@@ -209,6 +209,90 @@ public sealed class NotifyEmailSenderTests
         }
     }
 
+    [Fact]
+    public async Task Token_emails_use_template_endpoints_and_variables()
+    {
+        var captures = new List<(string Path, string Key, string Token)>();
+        var tokenFile = Path.Combine(Path.GetTempPath(), $"notify-token-{Guid.NewGuid():N}");
+        File.WriteAllText(tokenFile, "test-token");
+        try
+        {
+            var options = new EmailOptions
+            {
+                NotifyUrl = "https://notify.example",
+                NotifyTenantId = "t0000",
+                NotifyTokenFile = tokenFile,
+            };
+            var handler = new StubHandler(request =>
+            {
+                using var document = JsonDocument.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+                var root = document.RootElement;
+                captures.Add((
+                    request.RequestUri!.AbsolutePath,
+                    root.GetProperty("templateKey").GetString()!,
+                    root.GetProperty("variables").GetProperty("token").GetString()!));
+                return new HttpResponseMessage(HttpStatusCode.Accepted);
+            });
+            var sender = new NotifyEmailSender(
+                new HttpClient(handler),
+                Options.Create(options),
+                NullLogger<NotifyEmailSender>.Instance);
+
+            await sender.SendEmailConfirmationAsync("person@example.test", "tok-1", CancellationToken.None);
+            await sender.SendEmailChangeConfirmationAsync("person@example.test", "tok-2", CancellationToken.None);
+            await sender.SendPasswordResetTokenAsync("person@example.test", "tok-3", CancellationToken.None);
+
+            Assert.Equal(3, captures.Count);
+            Assert.All(captures, item => Assert.Equal("/v1/messages", item.Path));
+            Assert.Equal(
+                new[] { "email-confirmation", "email-change", "password-reset-token" },
+                captures.Select(item => item.Key));
+            Assert.Equal(new[] { "tok-1", "tok-2", "tok-3" }, captures.Select(item => item.Token));
+        }
+        finally
+        {
+            File.Delete(tokenFile);
+        }
+    }
+
+    [Fact]
+    public async Task Email_change_notice_uses_the_template_endpoint()
+    {
+        string? path = null;
+        string? key = null;
+        var tokenFile = Path.Combine(Path.GetTempPath(), $"notify-token-{Guid.NewGuid():N}");
+        File.WriteAllText(tokenFile, "test-token");
+        try
+        {
+            var options = new EmailOptions
+            {
+                NotifyUrl = "https://notify.example",
+                NotifyTenantId = "t0000",
+                NotifyTokenFile = tokenFile,
+            };
+            var handler = new StubHandler(request =>
+            {
+                using var document = JsonDocument.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+                path = request.RequestUri!.AbsolutePath;
+                key = document.RootElement.GetProperty("templateKey").GetString();
+                return new HttpResponseMessage(HttpStatusCode.Accepted);
+            });
+            var sender = new NotifyEmailSender(
+                new HttpClient(handler),
+                Options.Create(options),
+                NullLogger<NotifyEmailSender>.Instance);
+
+            await sender.SendEmailChangeNoticeAsync("person@example.test", CancellationToken.None);
+
+            Assert.Equal("/v1/messages", path);
+            Assert.Equal("email-change-notice", key);
+        }
+        finally
+        {
+            File.Delete(tokenFile);
+        }
+    }
+
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> handler) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>

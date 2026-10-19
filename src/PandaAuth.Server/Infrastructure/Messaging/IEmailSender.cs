@@ -10,4 +10,28 @@ public interface IEmailSender
 
     /// <summary>密码重置成功后的安全通知：收件人是账号持有人，内容见 EmailTemplates.PasswordResetNotice。</summary>
     Task SendPasswordResetNoticeAsync(string email, CancellationToken ct);
+
+    Task SendEmailConfirmationAsync(string email, string token, CancellationToken ct)
+    {
+        var (subject, html) = EmailTemplates.EmailConfirmation(token);
+        return SendAsync(email, subject, html, ct);
+    }
+
+    Task SendEmailChangeConfirmationAsync(string email, string token, CancellationToken ct)
+    {
+        var (subject, html) = EmailTemplates.EmailChange(token);
+        return SendAsync(email, subject, html, ct);
+    }
+
+    Task SendPasswordResetTokenAsync(string email, string token, CancellationToken ct)
+    {
+        var (subject, html) = EmailTemplates.PasswordReset(token);
+        return SendAsync(email, subject, html, ct);
+    }
+
+    Task SendEmailChangeNoticeAsync(string email, CancellationToken ct)
+    {
+        var (subject, html) = EmailTemplates.EmailChangeNotice();
+        return SendAsync(email, subject, html, ct);
+    }
 }
