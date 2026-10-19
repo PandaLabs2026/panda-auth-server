@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using OpenIddict.Validation.AspNetCore;
+using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
 using PandaAuth.Shared;
 
@@ -52,7 +53,7 @@ public sealed class ManagementUsersController(UserService userManager, Managemen
         var total = await users.CountAsync(cancellationToken);
         var items = await users
             .OrderByDescending(user => user.CreatedAt)
-            .Skip((pageNumber - 1) * size)
+            .Skip(PaginationOffset.Calculate(pageNumber, size))
             .Take(size)
             .Select(user => new AdminUserSummary(
                 user.Id, user.UserName!, user.Email, user.Nickname, user.Status, user.CreatedAt))

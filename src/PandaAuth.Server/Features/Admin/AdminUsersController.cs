@@ -78,7 +78,7 @@ public sealed class AdminUsersController(
 
         var total = await users.CountAsync(cancellationToken);
         var items = await ordered
-            .Skip((pageNumber - 1) * size)
+            .Skip(PaginationOffset.Calculate(pageNumber, size))
             .Take(size)
             .Select(user => new AdminUserSummary(
                 user.Id, user.UserName!, user.Email, user.Nickname, user.Status, user.CreatedAt))

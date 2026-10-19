@@ -59,7 +59,7 @@ public sealed partial class ManagementClientsController(
         var total = await clients.CountAsync(cancellationToken);
         var rows = await clients
             .OrderBy(client => client.ClientId)
-            .Skip((pageNumber - 1) * size)
+            .Skip(PaginationOffset.Calculate(pageNumber, size))
             .Take(size)
             .Select(client => new
             {

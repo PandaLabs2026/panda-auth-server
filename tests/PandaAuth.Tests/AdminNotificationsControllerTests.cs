@@ -50,6 +50,23 @@ public class AdminNotificationsControllerTests
         return Assert.IsType<AdminPageResult<T>>(ok.Value);
     }
 
+    [Theory]
+    [InlineData(int.MaxValue)]
+    [InlineData(1_073_741_825)]
+    public async Task List_OverflowingOffset_ReturnsEmptyPage(int requestedPage)
+    {
+        var (controller, provider) = Create();
+        await using var ownedProvider = provider;
+        await SeedAsync(provider);
+
+        var page = PageOf<AdminNotificationEntry>(await controller.List(requestedPage, 20, CancellationToken.None));
+
+        Assert.Equal(3, page.Total);
+        Assert.Equal(requestedPage, page.Page);
+        Assert.Equal(20, page.PageSize);
+        Assert.Empty(page.Items);
+    }
+
     [Fact]
     public async Task List_ReturnsAuditEntriesInIdDescendingOrder()
     {

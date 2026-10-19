@@ -63,6 +63,24 @@ public class AdminClientsControllerTests
         await applications.CreateAsync(descriptor);
     }
 
+    [Theory]
+    [InlineData(int.MaxValue)]
+    [InlineData(1_073_741_825)]
+    public async Task List_OverflowingOffset_ReturnsEmptyPage(int requestedPage)
+    {
+        var (controller, provider) = Create();
+        await using var ownedProvider = provider;
+        await SeedConfidentialClientAsync(provider.GetRequiredService<IOpenIddictApplicationManager>(), "paging-client");
+
+        var result = Assert.IsType<OkObjectResult>(await controller.List(requestedPage, 20, CancellationToken.None));
+        var page = Assert.IsType<AdminPageResult<AdminClientSummary>>(result.Value);
+
+        Assert.Equal(1, page.Total);
+        Assert.Equal(requestedPage, page.Page);
+        Assert.Equal(20, page.PageSize);
+        Assert.Empty(page.Items);
+    }
+
     [Fact]
     public async Task List_ReturnsAllClientsPaged()
     {
