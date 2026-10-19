@@ -219,8 +219,7 @@ public sealed class CredentialController(
         await signInManager.SignOutAsync(HttpContext);
         if (!string.IsNullOrWhiteSpace(oldEmail))
         {
-            var notice = EmailTemplates.EmailChangeNotice();
-            try { await emailSender.SendAsync(oldEmail, notice.Subject, notice.Html, cancellationToken); }
+            try { await emailSender.SendEmailChangeNoticeAsync(oldEmail, cancellationToken); }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
                 logger.LogError(exception, "旧邮箱变更通知发送失败 userId={UserId}", user.Id);

@@ -76,8 +76,7 @@ public sealed class AccountVerificationService(
 
         var token = await IssueEmailVerificationAsync(
             user.Id, AccountVerificationPurpose.EmailConfirmation, user.Email, cancellationToken);
-        var template = EmailTemplates.EmailConfirmation(token);
-        await emailSender.SendAsync(user.Email, template.Subject, template.Html, cancellationToken);
+        await emailSender.SendEmailConfirmationAsync(user.Email, token, cancellationToken);
         return AccountVerificationResult.Success();
     }
 
@@ -154,8 +153,7 @@ public sealed class AccountVerificationService(
 
         var token = await IssueEmailVerificationAsync(
             user.Id, AccountVerificationPurpose.EmailChange, newEmail.Trim(), cancellationToken);
-        var template = EmailTemplates.EmailChange(token);
-        await emailSender.SendAsync(newEmail.Trim(), template.Subject, template.Html, cancellationToken);
+        await emailSender.SendEmailChangeConfirmationAsync(newEmail.Trim(), token, cancellationToken);
         return AccountVerificationResult.Success();
     }
 
@@ -252,8 +250,7 @@ public sealed class AccountVerificationService(
 
         if (eligible)
         {
-            var template = EmailTemplates.PasswordReset(token);
-            await emailSender.SendAsync(user!.Email!, template.Subject, template.Html, cancellationToken);
+            await emailSender.SendPasswordResetTokenAsync(user!.Email!, token, cancellationToken);
         }
 
         // The result deliberately has the same shape for known, unknown and ineligible accounts.
