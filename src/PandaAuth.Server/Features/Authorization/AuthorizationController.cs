@@ -4,6 +4,8 @@ using System.Security.Claims;
 using Microsoft.AspNetCore;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http.Extensions;
+using Microsoft.AspNetCore.WebUtilities;
 using PandaAuth.Server.Infrastructure.Security;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
@@ -52,17 +54,10 @@ public sealed class AuthorizationController(
         {
             // prompt=none：客户端声明不得出现交互界面——未认证时按 OIDC 必须把
             // error=login_required 302 回 redirect_uri，而不是把用户送去登录页。
-            if (request.HasPromptValue(PromptValues.None))
-            {
-                return Forbid(new AuthenticationProperties(new Dictionary<string, string?>
-                {
-                    [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.LoginRequired,
-                    [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = "用户未认证，而请求要求不进行交互（prompt=none）。",
-                }), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
-            }
+            if (request.HasPromptValue(PromptValues.None)) return LoginRequired("用户未认证，而请求要求不进行交互（prompt=none）。");
 
             return Challenge(
-                new AuthenticationProperties { RedirectUri = Request.Path + Request.QueryString },
+                new AuthenticationProperties { RedirectUri = BuildAuthenticationRedirectUri(request) },
                 LoginSessionService.Scheme);
         }
 
@@ -70,8 +65,9 @@ public sealed class AuthorizationController(
         if (!FleetHumanPrincipalClaims.TryReadAuthenticationTime(authResult.Principal, LoginSessionService.AuthenticatedAtClaim, out var authenticatedAt))
         {
             await signInManager.SignOutAsync(HttpContext);
+            if (request.HasPromptValue(PromptValues.None)) return LoginRequired("当前会话不包含有效的认证时间，且请求要求不进行交互（prompt=none）。");
             return Challenge(
-                new AuthenticationProperties { RedirectUri = Request.Path + Request.QueryString },
+                new AuthenticationProperties { RedirectUri = BuildAuthenticationRedirectUri(request) },
                 LoginSessionService.Scheme);
         }
 
@@ -100,12 +96,14 @@ public sealed class AuthorizationController(
 
         // prompt=login / max_age 超龄：客户端要求一次比当前会话更新的认证。先注销当前会话再挑战，
         // 强制回登录页——静默放行会让过期会话继续发码，auth_time 语义失真（Fleet auth_time 契约）。
-        if (request.HasPromptValue(PromptValues.Login) ||
-            ExceedsMaxAge(request.MaxAge, authenticatedAt, clock.GetUtcNow().ToUnixTimeSeconds()))
+        var requiresReauthentication = request.HasPromptValue(PromptValues.Login) ||
+            ExceedsMaxAge(request.MaxAge, authenticatedAt, clock.GetUtcNow().ToUnixTimeSeconds());
+        if (requiresReauthentication)
         {
             await signInManager.SignOutAsync(HttpContext);
+            if (request.HasPromptValue(PromptValues.None)) return LoginRequired("当前会话不满足认证新鲜度要求，且请求要求不进行交互（prompt=none）。");
             return Challenge(
-                new AuthenticationProperties { RedirectUri = Request.Path + Request.QueryString },
+                new AuthenticationProperties { RedirectUri = BuildAuthenticationRedirectUri(request) },
                 LoginSessionService.Scheme);
         }
 
@@ -329,4 +327,36 @@ public sealed class AuthorizationController(
     /// </summary>
     internal static bool ExceedsMaxAge(long? maxAge, long authenticatedAtSeconds, long nowSeconds)
         => maxAge is { } limit && (limit == 0 || nowSeconds - authenticatedAtSeconds > limit);
+
+    private ForbidResult LoginRequired(string description)
+        => Forbid(new AuthenticationProperties(new Dictionary<string, string?>
+        {
+            [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.LoginRequired,
+            [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = description,
+        }), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+
+    // A real interactive login satisfies prompt=login and max_age=0 for this authorization transaction.
+    // Remove only those satisfied requirements from the protected local return URL; preserve the rest
+    // of the authorization request (state, nonce, PKCE, scopes, redirect URI, and other prompt values).
+    private string BuildAuthenticationRedirectUri(OpenIddictRequest request)
+    {
+        var query = QueryHelpers.ParseQuery(Request.QueryString.Value ?? string.Empty);
+        var builder = new QueryBuilder();
+        foreach (var (key, values) in query)
+        {
+            if (string.Equals(key, "prompt", StringComparison.OrdinalIgnoreCase) && request.HasPromptValue(PromptValues.Login))
+            {
+                var prompts = values.SelectMany(value => (value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                    .Where(value => !string.Equals(value, PromptValues.Login, StringComparison.Ordinal));
+                var remaining = string.Join(' ', prompts);
+                if (remaining.Length > 0) builder.Add(key, remaining);
+                continue;
+            }
+
+            if (string.Equals(key, "max_age", StringComparison.OrdinalIgnoreCase) && request.MaxAge == 0) continue;
+            foreach (var value in values) builder.Add(key, value ?? string.Empty);
+        }
+
+        return Request.PathBase + Request.Path + builder.ToQueryString();
+    }
 }

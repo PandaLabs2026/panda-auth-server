@@ -282,6 +282,22 @@ public sealed class AdminUsersController(
         var generated = string.IsNullOrEmpty(request?.NewPassword);
         var password = generated ? AdminPasswordGenerator.Generate() : request!.NewPassword!;
 
+        // Once a valid reset is accepted, finish its security side effects even if the browser
+        // disconnects. Keep the user password, outstanding recovery proofs, token revocation and
+        // audit rows in one database transaction where supported.
+        cancellationToken.ThrowIfCancellationRequested();
+        await using var transaction = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(cancellationToken)
+            : null;
+
+        var now = DateTimeOffset.UtcNow;
+        var pendingPasswordResets = await db.PasswordResetRequests
+            .Where(item => item.Purpose == PasswordResetPurpose.PasswordReset &&
+                           item.SubjectId == user.Id && item.ConsumedAt == null)
+            .ToListAsync(CancellationToken.None);
+        foreach (var pending in pendingPasswordResets)
+            pending.ConsumedAt = now;
+
         // ReplacePasswordAsync（新哈希+安全戳轮换）经 UserService 单次 SaveAsync 落库：
         // 密码策略校验先于任何写入，失败即零变更（不存在「已移除旧密码再回滚」的中间态）；
         // 并发冲突由 UserService 内部以重载-重试消化。
@@ -293,13 +309,14 @@ public sealed class AdminUsersController(
         }
 
         await userManager.UpdateSecurityStampAsync(user);
-        await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: cancellationToken);
+        await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: CancellationToken.None);
         await audit.RecordAsync(
             AdminAuditing.Entry(User!, AdminAuditAction.UserResetPassword, "user", user.Id,
                 new { userName = user.UserName, generated }, HttpContext.Connection.RemoteIpAddress?.ToString()),
-            cancellationToken);
+            CancellationToken.None);
         await securityEvents.RecordAsync(SecurityEventEntryFor(
-            "user.password_reset", user.Id, new { generated }), cancellationToken);
+            "user.password_reset", user.Id, new { generated }), CancellationToken.None);
+        if (transaction is not null) await transaction.CommitAsync(CancellationToken.None);
         logger.LogInformation(
             "管理员 {Actor} 重置了用户 {UserId}（{UserName}）的密码。", User.FindFirst(Claims.Subject)?.Value, user.Id, user.UserName);
 
