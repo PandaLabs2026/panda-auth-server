@@ -135,6 +135,8 @@ public sealed class SeedOptions
 
     public MgmtSeedOptions Mgmt { get; set; } = new();
 
+    public SessionStateSeedOptions SessionState { get; set; } = new();
+
     public DemoSeedOptions Demo { get; set; } = new();
 }
 
@@ -340,4 +342,15 @@ public sealed class DemoSeedOptions
 
     /// <summary>demo-service 机密客户端密钥；开启 Demo 播种时必填，经 Auth__Seed__Demo__ServiceSecret 注入。</summary>
     public string ServiceSecret { get; set; } = string.Empty;
+}
+
+
+public sealed class SessionStateSeedOptions
+{
+    /// <summary>是否播种专用 Admin/Me 会话撤销客户端；默认关闭，启用时两个机密均须单独注入。</summary>
+    public bool Enabled { get; set; }
+
+    public string AdminClientSecret { get; set; } = string.Empty;
+
+    public string MeClientSecret { get; set; } = string.Empty;
 }

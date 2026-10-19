@@ -965,6 +965,26 @@ namespace PandaAuth.Server.Migrations
                     b.ToTable("panda_security_events", (string)null);
                 });
 
+            modelBuilder.Entity("PandaAuth.Server.Domain.SessionRevocation", b =>
+                {
+                    b.Property<string>("ClientId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("SessionIdHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("ClientId", "SessionIdHash");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.ToTable("panda_session_revocations", (string)null);
+                });
+
             modelBuilder.Entity("PandaAuth.Server.Domain.SigningKeyRecord", b =>
                 {
                     b.Property<string>("KeyId")

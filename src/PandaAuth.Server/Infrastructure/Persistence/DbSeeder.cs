@@ -146,6 +146,12 @@ public static class DbSeeder
             await SeedMgmtScopesAsync(scopes);
             await SeedMgmtApplicationAsync(applications, logger, db, options.Seed.Mgmt);
         }
+
+        if (options.Seed.SessionState.Enabled)
+        {
+            await SeedSessionStateScopeAsync(scopes);
+            await SeedSessionStateApplicationsAsync(applications, logger, db, options.Seed.SessionState);
+        }
     }
 
     private static async Task SeedFleetScopesAsync(IOpenIddictScopeManager scopes)
@@ -272,6 +278,67 @@ public static class DbSeeder
                 DisplayName = $"PandaAuth Management API: {name}",
                 Resources = { Features.Management.MgmtApiAuthorization.Audience },
             });
+        }
+    }
+
+    private static async Task SeedSessionStateScopeAsync(IOpenIddictScopeManager scopes)
+    {
+        if (await scopes.FindByNameAsync(PandaAuthSessionApi.Scope) is not null) return;
+
+        await scopes.CreateAsync(new OpenIddictScopeDescriptor
+        {
+            Name = PandaAuthSessionApi.Scope,
+            DisplayName = "PandaAuth first-party session revocation",
+            Resources = { PandaAuthSessionApi.Audience },
+        });
+    }
+
+    private static async Task SeedSessionStateApplicationsAsync(
+        IOpenIddictApplicationManager applications, ILogger? logger, PandaAuthDbContext? db, SessionStateSeedOptions options)
+    {
+        await SeedSessionStateApplicationAsync(applications, logger, db, PandaAuthSessionApi.AdminClientId,
+            "PandaAuth Admin session state", options.AdminClientSecret, "Auth:Seed:SessionState:AdminClientSecret");
+        await SeedSessionStateApplicationAsync(applications, logger, db, PandaAuthSessionApi.MeClientId,
+            "PandaAuth Me session state", options.MeClientSecret, "Auth:Seed:SessionState:MeClientSecret");
+    }
+
+    private static async Task SeedSessionStateApplicationAsync(
+        IOpenIddictApplicationManager applications, ILogger? logger, PandaAuthDbContext? db,
+        string clientId, string displayName, string secret, string configKey)
+    {
+        if (string.IsNullOrWhiteSpace(secret))
+            throw new InvalidOperationException($"缺少 {configKey} 配置（专用会话 API 机密客户端密钥）。");
+
+        var existing = await applications.FindByClientIdAsync(clientId);
+        if (existing is null)
+        {
+            await applications.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = clientId,
+                ClientType = ClientTypes.Confidential,
+                ClientSecret = secret,
+                ConsentType = ConsentTypes.Implicit,
+                DisplayName = displayName,
+                Permissions =
+                {
+                    Permissions.Endpoints.Token,
+                    Permissions.GrantTypes.ClientCredentials,
+                    Permissions.Prefixes.Scope + PandaAuthSessionApi.Scope,
+                },
+            });
+            return;
+        }
+
+        await ReconcileApplicationPermissionsAsync(applications, existing,
+        [
+            Permissions.Endpoints.Token,
+            Permissions.GrantTypes.ClientCredentials,
+            Permissions.Prefixes.Scope + PandaAuthSessionApi.Scope,
+        ]);
+        if (!await applications.ValidateClientSecretAsync(existing, secret))
+        {
+            await WarnSecretRewriteAsync(logger, db, clientId, configKey);
+            await applications.UpdateAsync(existing, secret);
         }
     }
 

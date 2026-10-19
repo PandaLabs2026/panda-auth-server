@@ -14,6 +14,7 @@ using PandaAuth.Server.Configuration;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Admin;
 using PandaAuth.Server.Features.Management;
+using PandaAuth.Server.Features.SessionState;
 using PandaAuth.Server.Features.Tokens;
 using PandaAuth.Server.Infrastructure.Messaging;
 using PandaAuth.Server.Infrastructure.Persistence;
@@ -193,7 +194,8 @@ openIddict.AddServer(options =>
             OpenIddictConstants.Scopes.Profile,
             OpenIddictConstants.Scopes.Roles,
             OpenIddictConstants.Scopes.OfflineAccess,
-            "api");
+            "api",
+            PandaAuthSessionApi.Scope);
         // 控制面七 scope 单一事实源在 Share（PandaAuthScopes.FleetAll），注册与 seed 共用。
         options.RegisterScopes([.. PandaAuthScopes.FleetAll]);
 
@@ -250,6 +252,8 @@ builder.Services.AddAuthorization(options => options.AddPolicy(AdminApiAuthoriza
 // 替代控制是专用机密客户端、最小 scope、部署面总开关、速率限制与写审计。
 builder.Services.AddAuthorization(options =>
 {
+    options.AddPolicy(SessionStateAuthorization.PolicyName, policy =>
+        policy.RequireAssertion(context => SessionStateAuthorization.HasAudienceAndScope(context.User)));
     options.AddPolicy(MgmtApiAuthorization.ClientsReadPolicy, MgmtApiAuthorization.RequireScope(MgmtApiAuthorization.ClientsReadScope));
     options.AddPolicy(MgmtApiAuthorization.ClientsWritePolicy, MgmtApiAuthorization.RequireScope(MgmtApiAuthorization.ClientsWriteScope));
     options.AddPolicy(MgmtApiAuthorization.UsersReadPolicy, MgmtApiAuthorization.RequireScope(MgmtApiAuthorization.UsersReadScope));
@@ -279,6 +283,8 @@ builder.Services.AddScoped<SecurityEventWriter>();
 builder.Services.AddScoped<ClaimsPolicyService>();
 builder.Services.AddScoped<ExternalIdentityService>();
 builder.Services.AddScoped<SessionSecurityService>();
+builder.Services.AddScoped<SessionRevocationService>();
+builder.Services.AddHostedService<SessionRevocationCleanupService>();
 // 接口注册：Admin 控制器以 ITokenRevoker 依赖（测试可替换；实现不变）。
 builder.Services.AddScoped<ITokenRevoker, TokenRevocationService>();
 // 登录时间侧信道拉平用的 dummy 哈希：必须单例（只算一次哈希），校验仍用 scoped hasher。
