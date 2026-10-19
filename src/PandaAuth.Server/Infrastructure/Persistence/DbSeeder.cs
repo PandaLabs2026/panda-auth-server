@@ -100,11 +100,11 @@ public static class DbSeeder
 
         // Panda Fleet Hub 只部署在 Fleet 控制面（专用 PandaAuth 实例）；回调不参与租户路由展开；
         // 权限集用裁剪版（无 roles scope、无 Introspection 端点——纯入口层，不消费角色与内省）。
-        if (options.Seed.FleetHubWeb.Enabled)
+        if (options.Seed.CloudConsoleWeb.Enabled)
         {
             await SeedFirstPartyWebApplicationAsync(
-                applications, logger, db, FirstPartyClients.FleetHubWeb, "Panda Fleet Hub", "Auth:Seed:FleetHubWeb", options.Seed.FleetHubWeb,
-                permissions: FleetHubWebPermissions());
+                applications, logger, db, FirstPartyClients.CloudConsoleWeb, "Panda Cloud Console", "Auth:Seed:CloudConsoleWeb", options.Seed.CloudConsoleWeb,
+                permissions: CloudConsoleWebPermissions());
         }
 
         // Panda Assistant 客户端族（PANDA-INFRA-R1，panda-asst ADR 0095）：默认关闭，
@@ -661,12 +661,12 @@ public static class DbSeeder
     ];
 
     /// <summary>
-    /// fleet-hub-web 权限集 = 第一方 Web 基础集（含 roles、无内省端点）。
-    /// Hub 入口仍对全部已认证用户开放；roles 仅用于 `/cloud-admin` 的
+    /// cloud-console-web 权限集 = 第一方 Web 基础集（含 roles、无内省端点）。
+    /// Console 入口仍对全部已认证用户开放；roles 仅用于 `/cloud-admin` 的
     /// `cloud-admin` 角色门，授权仍由 PandaAuth 角色管理。
     /// Revocation 保留：登出走 RP-initiated signout + revoke。
     /// </summary>
-    private static string[] FleetHubWebPermissions() =>
+    private static string[] CloudConsoleWebPermissions() =>
     [
         Permissions.Endpoints.Authorization,
         Permissions.Endpoints.Token,
