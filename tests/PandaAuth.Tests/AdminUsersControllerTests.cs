@@ -177,6 +177,19 @@ public class AdminUsersControllerTests
     {
         var (controller, provider, revoker) = Create();
         var user = await SeedUserAsync(provider, "ivan");
+        user.EmailConfirmed = true;
+        await provider.GetRequiredService<UserService>().UpdateAsync(user);
+        var db = provider.GetRequiredService<PandaAuthDbContext>();
+        var pendingReset = new PasswordResetRequest
+        {
+            SubjectId = user.Id,
+            NormalizedTarget = "IVAN@EXAMPLE.COM",
+            TokenHash = "pending-reset-token-hash",
+            CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(20),
+        };
+        db.PasswordResetRequests.Add(pendingReset);
+        await db.SaveChangesAsync();
         // 快照值而不是引用：user 是被跟踪的实体，控制器操作会就地改它。
         var stampBefore = user.SecurityStamp;
 
@@ -191,8 +204,27 @@ public class AdminUsersControllerTests
         // 安全戳被刷新（Cookie 会话失效口径）。
         Assert.NotEqual(stampBefore, reloaded!.SecurityStamp);
         Assert.Equal([user.Id], revoker.RevokedUsers);
+        Assert.NotNull((await db.PasswordResetRequests.SingleAsync()).ConsumedAt);
         Assert.Equal(AdminAuditAction.UserResetPassword,
             Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable()).Action);
+    }
+
+    [Fact]
+    public async Task ResetPassword_CompletesRevocationAndAuditAfterRequestCancellation()
+    {
+        var (controller, provider, revoker) = Create();
+        var user = await SeedUserAsync(provider, "cancelled-reset");
+        using var cancellation = new CancellationTokenSource();
+        revoker.OnUserRevoked = () => cancellation.Cancel();
+
+        var result = await controller.ResetPassword(user.Id, null, cancellation.Token);
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.False(revoker.LastUserRevocationTokenCanBeCanceled);
+        Assert.Equal(user.Id, Assert.Single(revoker.RevokedUsers));
+        Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
+        Assert.Contains(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents.AsEnumerable(),
+            entry => entry.EventType == "user.password_reset");
     }
 
     [Fact]

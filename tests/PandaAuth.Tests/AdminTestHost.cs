@@ -80,9 +80,15 @@ internal sealed class StubTokenRevoker : ITokenRevoker
 
     public List<string> RevokedClients { get; } = [];
 
+    public bool LastUserRevocationTokenCanBeCanceled { get; private set; }
+
+    public Action? OnUserRevoked { get; set; }
+
     public Task RevokeUserTokensAsync(string userId, string? clientId = null, CancellationToken cancellationToken = default)
     {
         RevokedUsers.Add(userId);
+        LastUserRevocationTokenCanBeCanceled = cancellationToken.CanBeCanceled;
+        OnUserRevoked?.Invoke();
         return Task.CompletedTask;
     }
 
