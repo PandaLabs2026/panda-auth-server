@@ -17,6 +17,8 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
 
     public DbSet<SecurityEvent> SecurityEvents => Set<SecurityEvent>();
 
+    public DbSet<SessionRevocation> SessionRevocations => Set<SessionRevocation>();
+
     public DbSet<PandaUserClaim> UserClaims => Set<PandaUserClaim>();
 
     public DbSet<PandaRoleClaim> RoleClaims => Set<PandaRoleClaim>();
@@ -97,6 +99,15 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
             entity.ToTable("admin_notification_cursors");
             entity.HasKey(x => x.AdminUserId);
             entity.Property(x => x.AdminUserId).HasMaxLength(450);
+        });
+
+        builder.Entity<SessionRevocation>(entity =>
+        {
+            entity.ToTable("panda_session_revocations");
+            entity.HasKey(x => new { x.ClientId, x.SessionIdHash });
+            entity.Property(x => x.ClientId).HasMaxLength(128).IsRequired();
+            entity.Property(x => x.SessionIdHash).HasMaxLength(64).IsRequired();
+            entity.HasIndex(x => x.ExpiresAt);
         });
 
         builder.Entity<SecurityEvent>(entity =>

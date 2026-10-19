@@ -30,6 +30,51 @@ public sealed class ManagementApiE2eTests
     private const string MgmtSecret = "mgmt-api-e2e-secret";
 
     [PostgresFact]
+    public async Task SessionStateClientCredentials_CanCheckAndRevokeSession_ButMgmtClientCannot()
+    {
+        await using var database = await TestDatabase.CreateAsync();
+        await database.SeedAsync(seedSessionState: true);
+        await using var factory = new MgmtFactory(database.ConnectionString, mgmtEnabled: true);
+        using var client = factory.CreateClient();
+
+        var sessionToken = await GetSessionStateTokenAsync(client, PandaAuthSessionApi.AdminClientId, "admin-session-secret");
+        using var checkRequest = new HttpRequestMessage(HttpMethod.Post, PandaAuthSessionApi.Check)
+        {
+            Content = JsonContent.Create(new SessionStateCheckRequest("legacy-session-001")),
+        };
+        checkRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", sessionToken);
+        using var beforeRevoke = await client.SendAsync(checkRequest);
+        Assert.Equal(HttpStatusCode.OK, beforeRevoke.StatusCode);
+        Assert.Equal("no-store", beforeRevoke.Headers.CacheControl?.ToString());
+        Assert.False((await beforeRevoke.Content.ReadFromJsonAsync<SessionStateCheckResponse>())!.Revoked);
+
+        using var revokeRequest = new HttpRequestMessage(HttpMethod.Post, PandaAuthSessionApi.Revoke)
+        {
+            Content = JsonContent.Create(new SessionStateRevokeRequest("legacy-session-001")),
+        };
+        revokeRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", sessionToken);
+        using var revoked = await client.SendAsync(revokeRequest);
+        Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+
+        using var afterRevokeRequest = new HttpRequestMessage(HttpMethod.Post, PandaAuthSessionApi.Check)
+        {
+            Content = JsonContent.Create(new SessionStateCheckRequest("legacy-session-001")),
+        };
+        afterRevokeRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", sessionToken);
+        using var afterRevoke = await client.SendAsync(afterRevokeRequest);
+        Assert.True((await afterRevoke.Content.ReadFromJsonAsync<SessionStateCheckResponse>())!.Revoked);
+
+        var mgmtToken = await GetTokenAsync(client, PandaAuthMgmtApi.UsersReadScope);
+        using var forbiddenRequest = new HttpRequestMessage(HttpMethod.Post, PandaAuthSessionApi.Check)
+        {
+            Content = JsonContent.Create(new SessionStateCheckRequest("legacy-session-001")),
+        };
+        forbiddenRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", mgmtToken);
+        using var forbidden = await client.SendAsync(forbiddenRequest);
+        Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
+    }
+
+    [PostgresFact]
     public async Task MgmtToken_CanCallUsersEndpoint_AndReceivesZeroCredentialProjection()
     {
         await using var database = await TestDatabase.CreateAsync();
@@ -209,6 +254,22 @@ public sealed class ManagementApiE2eTests
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    private static async Task<string> GetSessionStateTokenAsync(HttpClient client, string clientId, string secret)
+    {
+        using var issued = await client.PostAsync("/connect/token", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["client_id"] = clientId,
+            ["client_secret"] = secret,
+            ["grant_type"] = "client_credentials",
+            ["scope"] = PandaAuthSessionApi.Scope,
+        }));
+        var body = await issued.Content.ReadAsStringAsync();
+        Assert.True(issued.IsSuccessStatusCode, $"session-state token request returned {(int)issued.StatusCode}: {body}");
+        var token = await issued.Content.ReadFromJsonAsync<TokenResponse>();
+        Assert.False(string.IsNullOrWhiteSpace(token?.AccessToken), $"session-state token response 200 without access_token: {body}");
+        return token!.AccessToken!;
+    }
+
     private static async Task<string> GetTokenAsync(HttpClient client, string? scope)
     {
         var form = new Dictionary<string, string>
@@ -290,7 +351,7 @@ public sealed class ManagementApiE2eTests
         /// 种子走真实 DbSeeder（mgmt 开关开启）——作用域实体、资源绑定与 mgmt-api 客户端
         /// 与生产同一条代码路径；再补一个用户与一个无管理 scope 的交互式客户端作反向用例。
         /// </summary>
-        public async Task SeedAsync()
+        public async Task SeedAsync(bool seedSessionState = false)
         {
             // 先迁移建表，再跑真实 DbSeeder 与用例数据。
             await using (var db = new PandaAuthDbContext(new DbContextOptionsBuilder<PandaAuthDbContext>()
@@ -315,6 +376,12 @@ public sealed class ManagementApiE2eTests
                     Fleet = new FleetSeedOptions { Enabled = false },
                     Demo = new DemoSeedOptions { Enabled = false },
                     Mgmt = new MgmtSeedOptions { Enabled = true, ClientSecret = MgmtSecret },
+                    SessionState = new SessionStateSeedOptions
+                    {
+                        Enabled = seedSessionState,
+                        AdminClientSecret = "admin-session-secret",
+                        MeClientSecret = "me-session-secret",
+                    },
                 },
             }));
             await using var provider = services.BuildServiceProvider();
