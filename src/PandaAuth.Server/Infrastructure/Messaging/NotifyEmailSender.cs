@@ -47,8 +47,18 @@ public sealed class NotifyEmailSender : IEmailSender
 
     public async Task SendPasswordResetNoticeAsync(string email, CancellationToken ct)
     {
-        var (subject, html) = EmailTemplates.PasswordResetNotice();
-        await SendAsync(email, subject, html, ct);
+        var payload = new
+        {
+            tenantId = _options.NotifyTenantId,
+            product = "panda-auth",
+            templateKey = "password-reset-notice",
+            locale = "zh-CN",
+            to = email,
+            variables = new Dictionary<string, string>(StringComparer.Ordinal),
+            idempotencyKey = BuildIdempotencyKey(email, "password-reset-notice", ""),
+        };
+
+        await PostAsync("/v1/messages", payload, email, "template:password-reset-notice", ct);
     }
 
     public async Task SendAsync(string email, string subject, string htmlBody, CancellationToken ct)
@@ -64,12 +74,17 @@ public sealed class NotifyEmailSender : IEmailSender
             idempotencyKey = BuildIdempotencyKey(email, subject, htmlBody),
         };
 
+        await PostAsync("/v1/messages/raw", payload, email, subject, ct);
+    }
+
+    private async Task PostAsync(string path, object payload, string email, string subjectForLog, CancellationToken ct)
+    {
         Exception? lastError = null;
         foreach (var baseUrl in _urls)
         {
             using var request = new HttpRequestMessage(
                 HttpMethod.Post,
-                new Uri(new Uri(baseUrl.TrimEnd('/') + "/"), "v1/messages/raw"))
+                new Uri(new Uri(baseUrl.TrimEnd('/') + "/"), path.TrimStart('/')))
             {
                 Content = JsonContent.Create(payload),
             };
@@ -109,7 +124,7 @@ public sealed class NotifyEmailSender : IEmailSender
                 }
             }
 
-            _logger.LogInformation("Notify transactional delivery accepted email={Email} subject={Subject}", MaskEmail(email), subject);
+            _logger.LogInformation("Notify transactional delivery accepted email={Email} subject={Subject}", MaskEmail(email), subjectForLog);
             return;
         }
 

@@ -164,6 +164,51 @@ public sealed class NotifyEmailSenderTests
         }
     }
 
+    [Fact]
+    public async Task Password_reset_notice_uses_the_template_endpoint()
+    {
+        HttpRequestMessage? captured = null;
+        string? body = null;
+        var tokenFile = Path.Combine(Path.GetTempPath(), $"notify-token-{Guid.NewGuid():N}");
+        File.WriteAllText(tokenFile, "test-token");
+        try
+        {
+            var options = new EmailOptions
+            {
+                NotifyUrl = "https://notify.example",
+                NotifyTenantId = "t0000",
+                NotifyTokenFile = tokenFile,
+            };
+            var handler = new StubHandler(request =>
+            {
+                captured = request;
+                body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+                return new HttpResponseMessage(HttpStatusCode.Accepted);
+            });
+            var sender = new NotifyEmailSender(
+                new HttpClient(handler),
+                Options.Create(options),
+                NullLogger<NotifyEmailSender>.Instance);
+
+            await sender.SendPasswordResetNoticeAsync("person@example.test", CancellationToken.None);
+
+            Assert.NotNull(captured);
+            Assert.Equal("https://notify.example/v1/messages", captured!.RequestUri!.ToString());
+            using var document = JsonDocument.Parse(body!);
+            var root = document.RootElement;
+            Assert.Equal("panda-auth", root.GetProperty("product").GetString());
+            Assert.Equal("t0000", root.GetProperty("tenantId").GetString());
+            Assert.Equal("password-reset-notice", root.GetProperty("templateKey").GetString());
+            Assert.Equal("zh-CN", root.GetProperty("locale").GetString());
+            Assert.Empty(root.GetProperty("variables").EnumerateObject());
+            Assert.StartsWith("auth:", root.GetProperty("idempotencyKey").GetString()!);
+        }
+        finally
+        {
+            File.Delete(tokenFile);
+        }
+    }
+
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> handler) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
