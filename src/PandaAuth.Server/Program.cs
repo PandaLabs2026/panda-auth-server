@@ -1,4 +1,5 @@
 using System.Net;
+using System.Security.Cryptography.X509Certificates;
 using Fido2NetLib;
 using Fido2NetLib.Serialization;
 using Microsoft.AspNetCore.Authentication;
@@ -283,19 +284,57 @@ builder.Services.AddScoped<ITokenRevoker, TokenRevocationService>();
 // 登录时间侧信道拉平用的 dummy 哈希：必须单例（只算一次哈希），校验仍用 scoped hasher。
 builder.Services.AddSingleton<DummyPasswordHash>();
 
-// ---- 邮件通道（Resend）----
-// 生产：缺 Email:ApiKey / Email:FromAddress 启动即失败（密钥经 compose 注入）；typed client
-// 让 HttpClient 处理器轮换由工厂管理。开发：DevEmailSender 验证码落日志，零外部依赖。
+// ---- 邮件通道（Resend direct / panda-notify）----
+// P1 transport-first: Email:Transport=Notify keeps the existing product templates but
+// routes delivery through the shared gateway (outbox/retry/audit). Resend remains the
+// explicit break-glass path. Development still uses DevEmailSender.
 // 注意：注册在 builder 阶段做环境判断用 builder.Environment（app 变量此时尚未创建）。
+var emailTransport = builder.Configuration["Email:Transport"] ?? "Resend";
 builder.Services.AddOptions<EmailOptions>()
     .Bind(builder.Configuration.GetSection(EmailOptions.SectionName))
-    .Validate(options => !builder.Environment.IsProduction()
-        || (!string.IsNullOrWhiteSpace(options.ApiKey) && !string.IsNullOrWhiteSpace(options.FromAddress)),
-        "生产环境必须配置 Email:ApiKey 与 Email:FromAddress。")
+    .Validate(options =>
+    {
+        if (!builder.Environment.IsProduction())
+        {
+            return true;
+        }
+
+        if (options.Transport.Equals("Resend", StringComparison.OrdinalIgnoreCase))
+        {
+            return !string.IsNullOrWhiteSpace(options.ApiKey) && !string.IsNullOrWhiteSpace(options.FromAddress);
+        }
+
+        if (options.Transport.Equals("Notify", StringComparison.OrdinalIgnoreCase))
+        {
+            return (!string.IsNullOrWhiteSpace(options.NotifyUrl) || !string.IsNullOrWhiteSpace(options.NotifyUrls))
+                   && !string.IsNullOrWhiteSpace(options.NotifyTenantId)
+                   && (!string.IsNullOrWhiteSpace(options.NotifyTokenFile)
+                       || !string.IsNullOrWhiteSpace(options.NotifyClientCertificateFile));
+        }
+
+        return false;
+    }, "生产环境邮件通道配置不完整：Resend 需要 ApiKey/FromAddress；Notify 需要 NotifyUrl/NotifyTenantId 及 token 或客户端证书。")
     .ValidateOnStart();
 if (builder.Environment.IsProduction())
 {
-    builder.Services.AddHttpClient<IEmailSender, ResendEmailSender>();
+    if (emailTransport.Equals("Notify", StringComparison.OrdinalIgnoreCase))
+    {
+        builder.Services
+            .AddHttpClient<IEmailSender, NotifyEmailSender>(client => client.Timeout = TimeSpan.FromSeconds(15))
+            .ConfigurePrimaryHttpMessageHandler(services =>
+            {
+                var options = services.GetRequiredService<IOptions<EmailOptions>>().Value;
+                return NotifyTransportHandler.Create(options);
+            });
+    }
+    else if (emailTransport.Equals("Resend", StringComparison.OrdinalIgnoreCase))
+    {
+        builder.Services.AddHttpClient<IEmailSender, ResendEmailSender>();
+    }
+    else
+    {
+        throw new InvalidOperationException($"Unsupported Email:Transport '{emailTransport}'.");
+    }
 }
 else
 {
