@@ -120,10 +120,10 @@ internal static class PermissionCatalog
     private static readonly HashSet<string> Known =
         Groups.SelectMany(group => group.Options).ToHashSet(StringComparer.Ordinal);
 
-    /// <summary>已知权限，或「scp: + 非空且不含空白的后缀」的自定义 scope 授权形态。</summary>
-    public static bool IsAllowed(string permission)
-        => Known.Contains(permission)
-            || (permission.StartsWith(Permissions.Prefixes.Scope, StringComparison.Ordinal)
-                && permission.Length > Permissions.Prefixes.Scope.Length
-                && !permission.Any(char.IsWhiteSpace));
+    /// <summary>
+    /// 只允许目录内的已知权限。Admin 面不再接受任意 `scp:` 后缀——否则管理员可把
+    /// `scp:mgmt.clients.write`/`scp:fleet.purge` 授予任意客户端并轮换其密钥，绕过
+    /// Management API 的保留客户端边界，铸造跨系统机器令牌。
+    /// </summary>
+    public static bool IsAllowed(string permission) => Known.Contains(permission);
 }

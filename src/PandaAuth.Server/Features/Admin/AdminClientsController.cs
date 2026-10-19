@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using OpenIddict.Abstractions;
 using OpenIddict.EntityFrameworkCore.Models;
 using OpenIddict.Validation.AspNetCore;
+using PandaAuth.Server.Features.Tokens;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
 using PandaAuth.Shared;
@@ -24,7 +25,8 @@ public sealed class AdminClientsController(
     IOpenIddictApplicationManager applications,
     AdminAuditWriter audit,
     SecurityEventWriter securityEvents,
-    ILogger<AdminClientsController> logger) : Controller
+    ILogger<AdminClientsController> logger,
+    ITokenRevoker? tokenRevoker = null) : Controller
 {
     internal const int MaxPageSize = 50;
     internal const int DefaultPageSize = 20;
@@ -40,13 +42,27 @@ public sealed class AdminClientsController(
 
         var clients = dbContext.Set<OpenIddictEntityFrameworkCoreApplication>().AsNoTracking();
         var total = await clients.CountAsync(cancellationToken);
-        var items = await clients
+        var rows = await clients
             .OrderBy(client => client.ClientId)
             .Skip((pageNumber - 1) * size)
             .Take(size)
-            .Select(client => new AdminClientSummary(
-                client.ClientId!, client.DisplayName, client.ClientType!, client.ConsentType!))
+            .Select(client => new
+            {
+                ClientId = client.ClientId!,
+                client.DisplayName,
+                ClientType = client.ClientType!,
+                client.ConsentType,
+            })
             .ToListAsync(cancellationToken);
+        // 保留名单是进程内静态集合，不能在 EF 投影里翻译；分页后内存映射即可。
+        var items = rows
+            .Select(client => new AdminClientSummary(
+                client.ClientId,
+                client.DisplayName,
+                client.ClientType,
+                client.ConsentType!,
+                FirstPartyClients.All.Contains(client.ClientId)))
+            .ToList();
 
         return Ok(new AdminPageResult<AdminClientSummary>(items, total, pageNumber, size));
     }
@@ -80,6 +96,11 @@ public sealed class AdminClientsController(
         if (application is null)
         {
             return NotFound();
+        }
+
+        if (IsReserved(clientId))
+        {
+            return ReservedClient();
         }
 
         if (request is null)
@@ -122,6 +143,7 @@ public sealed class AdminClientsController(
 
         await applications.PopulateAsync(application, updated);
         await applications.UpdateAsync(application);
+        await RevokeClientTokensAsync(clientId, cancellationToken);
 
         await audit.RecordAsync(
             AdminAuditing.Entry(User!, AdminAuditAction.ClientUpdateUris, "client", clientId,
@@ -151,6 +173,11 @@ public sealed class AdminClientsController(
             return NotFound();
         }
 
+        if (IsReserved(clientId))
+        {
+            return ReservedClient();
+        }
+
         if (request is null)
         {
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "请求体缺失");
@@ -171,6 +198,7 @@ public sealed class AdminClientsController(
         }
 
         var previous = (await applications.GetPermissionsAsync(application)).ToArray();
+        var removedPermissions = previous.Except(permissions, StringComparer.Ordinal).ToArray();
 
         var updated = new OpenIddictApplicationDescriptor();
         await applications.PopulateAsync(updated, application);
@@ -182,6 +210,11 @@ public sealed class AdminClientsController(
 
         await applications.PopulateAsync(application, updated);
         await applications.UpdateAsync(application);
+        // 只在下调（移除旧权限）时吊销令牌：升级权限不应把在线客户端全部踢下线。
+        if (removedPermissions.Length > 0)
+        {
+            await RevokeClientTokensAsync(clientId, cancellationToken);
+        }
 
         await audit.RecordAsync(
             AdminAuditing.Entry(User!, AdminAuditAction.ClientUpdatePermissions, "client", clientId,
@@ -199,8 +232,8 @@ public sealed class AdminClientsController(
 
     /// <summary>
     /// 轮换客户端密钥：生成 32 字节随机值，明文仅本次响应返回一次，库内只落哈希。
-    /// ⚠️ 若轮换的是 admin-web / me-web 自身，须同步更新服务器 env 并重跑 --migrate 对账，
-    /// 否则该客户端以旧密钥刷新令牌会全部失败（UI 已有提示，这里不再拦截）。
+    /// 第一方/平台客户端由部署流程（env + 种子对账）维护，Admin 面一律只读；非保留客户端
+    /// 轮换后会吊销其既有令牌，避免“新密钥生效、旧会话仍可用”的假轮换。
     /// </summary>
     [HttpPost("{clientId}/rotate-secret")]
     public async Task<IActionResult> RotateSecret(string clientId, CancellationToken cancellationToken)
@@ -212,6 +245,11 @@ public sealed class AdminClientsController(
             return NotFound();
         }
 
+        if (IsReserved(clientId))
+        {
+            return ReservedClient();
+        }
+
         if (!string.Equals(await applications.GetClientTypeAsync(application), ClientTypes.Confidential, StringComparison.Ordinal))
         {
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "非机密客户端",
@@ -221,6 +259,8 @@ public sealed class AdminClientsController(
         var secret = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
         // 必须走 UpdateAsync(application, secret)：唯一会重新哈希的路径（DbSeeder 注释的实证结论）。
         await applications.UpdateAsync(application, secret);
+        // 新密钥生效后旧密钥签发的令牌不再可信；一并吊销，避免轮换只换门槛不换会话。
+        await RevokeClientTokensAsync(clientId, cancellationToken);
 
         await audit.RecordAsync(
             AdminAuditing.Entry(User!, AdminAuditAction.ClientRotateSecret, "client", clientId,
@@ -238,15 +278,33 @@ public sealed class AdminClientsController(
 
     internal static async Task<AdminClientDetail> BuildDetailAsync(
         IOpenIddictApplicationManager applications, object application)
-        => new(
-            (await applications.GetClientIdAsync(application))!,
+    {
+        var clientId = (await applications.GetClientIdAsync(application))!;
+        return new(
+            clientId,
             await applications.GetDisplayNameAsync(application),
             (await applications.GetClientTypeAsync(application)) ?? string.Empty,
             (await applications.GetConsentTypeAsync(application)) ?? string.Empty,
             [.. await applications.GetRedirectUrisAsync(application)],
             [.. await applications.GetPostLogoutRedirectUrisAsync(application)],
             [.. await applications.GetPermissionsAsync(application)],
-            [.. await applications.GetRequirementsAsync(application)]);
+            [.. await applications.GetRequirementsAsync(application)],
+            FirstPartyClients.All.Contains(clientId));
+    }
+
+    private static bool IsReserved(string clientId) => FirstPartyClients.All.Contains(clientId);
+
+    private IActionResult ReservedClient()
+        => Problem(statusCode: StatusCodes.Status400BadRequest, title: "保留客户端",
+            detail: "第一方/平台客户端（含 fleet-api、mgmt-api、admin-web 等）只允许部署流程或种子配置维护，管理台不提供写操作。");
+
+    private async Task RevokeClientTokensAsync(string clientId, CancellationToken cancellationToken)
+    {
+        if (tokenRevoker is not null)
+        {
+            await tokenRevoker.RevokeClientTokensAsync(clientId, cancellationToken);
+        }
+    }
 
     private static bool IsAbsoluteHttpUri(string value)
         => Uri.TryCreate(value, UriKind.Absolute, out var uri)

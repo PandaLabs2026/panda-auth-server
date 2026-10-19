@@ -57,13 +57,26 @@ public sealed partial class ManagementClientsController(
 
         var clients = dbContext.Set<OpenIddictEntityFrameworkCoreApplication>().AsNoTracking();
         var total = await clients.CountAsync(cancellationToken);
-        var items = await clients
+        var rows = await clients
             .OrderBy(client => client.ClientId)
             .Skip((pageNumber - 1) * size)
             .Take(size)
-            .Select(client => new AdminClientSummary(
-                client.ClientId!, client.DisplayName, client.ClientType!, client.ConsentType!))
+            .Select(client => new
+            {
+                ClientId = client.ClientId!,
+                client.DisplayName,
+                ClientType = client.ClientType!,
+                client.ConsentType,
+            })
             .ToListAsync(cancellationToken);
+        var items = rows
+            .Select(client => new AdminClientSummary(
+                client.ClientId,
+                client.DisplayName,
+                client.ClientType,
+                client.ConsentType!,
+                FirstPartyClients.All.Contains(client.ClientId)))
+            .ToList();
 
         return Ok(new AdminPageResult<AdminClientSummary>(items, total, pageNumber, size));
     }

@@ -108,9 +108,9 @@ public class AdminSupportTests
     [InlineData(OpenIddictConstants.Permissions.Endpoints.Authorization)]
     [InlineData(OpenIddictConstants.Permissions.GrantTypes.RefreshToken)]
     [InlineData(OpenIddictConstants.Permissions.Prefixes.Scope + "offline_access")]
-    [InlineData(OpenIddictConstants.Permissions.Prefixes.Scope + "my-custom-api")]
+    [InlineData(OpenIddictConstants.Permissions.Prefixes.Scope + "api")]
     [InlineData(OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange)]
-    public void PermissionCatalog_AllowsKnownAndScpPrefixed(string permission)
+    public void PermissionCatalog_AllowsKnownPermissionsOnly(string permission)
         => Assert.True(PermissionCatalog.IsAllowed(permission));
 
     [Theory]
@@ -120,6 +120,9 @@ public class AdminSupportTests
     [InlineData("scp:")]
     [InlineData("endpoint:authorization")]
     [InlineData("scp: with space")]
+    [InlineData("scp:my-custom-api")]
+    [InlineData("scp:mgmt.clients.write")]
+    [InlineData("scp:fleet.purge")]
     public void PermissionCatalog_RejectsUnknownOrMalformed(string permission)
         => Assert.False(PermissionCatalog.IsAllowed(permission));
 

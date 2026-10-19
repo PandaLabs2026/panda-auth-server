@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using OpenIddict.Abstractions;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Persistence;
+using PandaAuth.Shared;
 
 namespace PandaAuth.Server.Infrastructure.Security;
 
@@ -14,6 +15,8 @@ public sealed class ClaimsPolicyService(PandaAuthDbContext db)
         ClaimTypes.NameIdentifier, ClaimTypes.Name, ClaimTypes.Email,
         OpenIddictConstants.Claims.AuthenticationTime, OpenIddictConstants.Claims.Name,
         LoginSessionService.AuthenticatedAtClaim,
+        // 租户声明由服务端从已校验主机写入；自定义 claim 不得覆盖/伪造。
+        PandaAuthClaims.TenantId, PandaAuthClaims.TenantHost,
     ];
 
     public async Task<AccountResult> AddUserClaimAsync(
