@@ -83,6 +83,15 @@ public class PortalAuthTimeProtocolTests
             Assert.True(response.Headers.Location?.OriginalString.Contains("/account/login", StringComparison.Ordinal) == true);
             Assert.True(response.Headers.TryGetValues("Set-Cookie", out var deleted) &&
                 deleted.Any(value => value.StartsWith(LoginSessionService.Scheme + "=;", StringComparison.Ordinal)));
+            if (fault == "missing")
+            {
+                using var noneRequest = new HttpRequestMessage(HttpMethod.Get, authorize + "&prompt=none");
+                noneRequest.Headers.Add("Cookie", oldCookie);
+                var noneResponse = await oldClient.SendAsync(noneRequest);
+                Assert.True(noneResponse.StatusCode == HttpStatusCode.Redirect);
+                Assert.Contains("error=login_required", noneResponse.Headers.Location!.OriginalString, StringComparison.Ordinal);
+                Assert.DoesNotContain("/account/login", noneResponse.Headers.Location.OriginalString, StringComparison.Ordinal);
+            }
         }
         using var relogin = fixture.Browser();
         await fixture.LoginAsync(relogin, authorize);
@@ -106,6 +115,25 @@ public class PortalAuthTimeProtocolTests
     }
 
     [PostgresFact]
+    public async Task PromptLogin_UnAuthenticated_CompletesOriginalAuthorizationAfterOneRealLogin()
+    {
+        await using var fixture = await ProtocolFixture.CreateAsync();
+        using var client = fixture.Browser();
+        var authorize = fixture.AuthorizationUrl(profile: false) + "&prompt=consent%20login";
+
+        var challenge = await client.GetAsync(authorize);
+        var login = await fixture.CompleteLoginChallengeAsync(client, challenge);
+        Assert.True(login.StatusCode == HttpStatusCode.Redirect);
+        Assert.DoesNotContain("prompt=login", login.Headers.Location!.OriginalString, StringComparison.Ordinal);
+        Assert.Contains("prompt=consent", login.Headers.Location.OriginalString, StringComparison.Ordinal);
+        Assert.Contains("code_challenge=", login.Headers.Location.OriginalString, StringComparison.Ordinal);
+        Assert.Contains("state=portal-time-state", login.Headers.Location.OriginalString, StringComparison.Ordinal);
+        var payload = await fixture.ValidateIdTokenAsync(client,
+            await fixture.CodeExchangeAsync(client, login.Headers.Location.OriginalString));
+        Assert.Equal(fixture.Clock.GetUtcNow().ToUnixTimeSeconds(), payload.GetProperty(Claims.AuthenticationTime).GetInt64());
+    }
+
+    [PostgresFact]
     public async Task PromptLogin_Authenticated_SignsOutAndForcesLoginPageThenFlowStillCompletes()
     {
         await using var fixture = await ProtocolFixture.CreateAsync();
@@ -121,9 +149,16 @@ public class PortalAuthTimeProtocolTests
         Assert.True(forced.Headers.TryGetValues("Set-Cookie", out var deleted) &&
             deleted.Any(value => value.StartsWith(LoginSessionService.Scheme + "=;", StringComparison.Ordinal)));
 
-        // 重新登录后正常授权流回归不变：仍能走到发码。
-        await fixture.LoginAsync(client, authorize);
-        await fixture.CodeExchangeAsync(client, authorize);
+        // 完成实际登录回跳；续程只移除已满足的 prompt=login，其他 OIDC 参数仍须原样有效。
+        var login = await fixture.CompleteLoginChallengeAsync(client, forced);
+        Assert.True(login.StatusCode == HttpStatusCode.Redirect);
+        var resumed = login.Headers.Location!;
+        Assert.Contains("state=portal-time-state", resumed.OriginalString, StringComparison.Ordinal);
+        Assert.Contains("nonce=portal-time-nonce", resumed.OriginalString, StringComparison.Ordinal);
+        Assert.DoesNotContain("prompt=login", resumed.OriginalString, StringComparison.Ordinal);
+        var payload = await fixture.ValidateIdTokenAsync(client,
+            await fixture.CodeExchangeAsync(client, resumed.OriginalString));
+        Assert.Equal(fixture.Clock.GetUtcNow().ToUnixTimeSeconds(), payload.GetProperty(Claims.AuthenticationTime).GetInt64());
     }
 
     [PostgresFact]
@@ -139,17 +174,64 @@ public class PortalAuthTimeProtocolTests
         Assert.True(zero.StatusCode == HttpStatusCode.Redirect);
         Assert.Contains("/account/login", zero.Headers.Location!.OriginalString, StringComparison.Ordinal);
 
-        // 重新登录（auth_time 重置为当前钟），时钟推进 61 秒后 max_age=60 超龄 → 强制重认证；
-        // max_age=3600 仍在龄内 → 静默续签发码（正常流回归）。
-        await fixture.LoginAsync(client, authorize);
+        // max_age=0 的真实登录完成当前事务；同一秒内旧 Cookie 不能被复用。
+        var zeroLogin = await fixture.CompleteLoginChallengeAsync(client, zero);
+        Assert.True(zeroLogin.StatusCode == HttpStatusCode.Redirect);
+        Assert.DoesNotContain("max_age=0", zeroLogin.Headers.Location!.OriginalString, StringComparison.Ordinal);
+        var zeroPayload = await fixture.ValidateIdTokenAsync(client,
+            await fixture.CodeExchangeAsync(client, zeroLogin.Headers.Location!.OriginalString));
+        Assert.Equal(fixture.Clock.GetUtcNow().ToUnixTimeSeconds(), zeroPayload.GetProperty(Claims.AuthenticationTime).GetInt64());
+
+        // 新的 max_age=0 授权事务仍必须重新认证；正数 max_age 则沿用既有边界语义。
+        var secondZero = await client.GetAsync(authorize + "&max_age=0");
+        Assert.Contains("/account/login", secondZero.Headers.Location!.OriginalString, StringComparison.Ordinal);
+        var secondLogin = await fixture.CompleteLoginChallengeAsync(client, secondZero);
+        Assert.True(secondLogin.StatusCode == HttpStatusCode.Redirect);
+
         fixture.Clock.Advance(TimeSpan.FromSeconds(61));
         var beyond = await client.GetAsync(authorize + "&max_age=60");
         Assert.True(beyond.StatusCode == HttpStatusCode.Redirect);
         Assert.Contains("/account/login", beyond.Headers.Location!.OriginalString, StringComparison.Ordinal);
 
-        await fixture.LoginAsync(client, authorize);
+        await fixture.CompleteLoginChallengeAsync(client, beyond);
         fixture.Clock.Advance(TimeSpan.FromSeconds(10));
         await fixture.CodeExchangeAsync(client, authorize + "&max_age=3600");
+    }
+
+    [PostgresFact]
+    public async Task PromptNone_WithExpiredAuthenticationAge_ReturnsLoginRequiredWithoutInteraction()
+    {
+        await using var fixture = await ProtocolFixture.CreateAsync();
+        using var client = fixture.Browser();
+        var authorize = fixture.AuthorizationUrl(profile: false);
+        await fixture.LoginAsync(client, authorize);
+
+        var expired = await client.GetAsync(authorize + "&max_age=0&prompt=none");
+
+        Assert.True(expired.StatusCode == HttpStatusCode.Redirect);
+        Assert.Contains("error=login_required", expired.Headers.Location!.Query, StringComparison.Ordinal);
+        Assert.DoesNotContain("/account/login", expired.Headers.Location!.OriginalString, StringComparison.Ordinal);
+    }
+
+    [PostgresFact]
+    public async Task FormPostAuthorizationResponse_HasNarrowScriptCspAllowance()
+    {
+        await using var fixture = await ProtocolFixture.CreateAsync();
+        using var client = fixture.Browser();
+        var authorize = fixture.AuthorizationUrl(profile: false);
+        await fixture.LoginAsync(client, authorize);
+
+        using var response = await client.GetAsync(authorize + "&response_mode=form_post");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var csp = Assert.Single(response.Headers.GetValues("Content-Security-Policy"));
+        Assert.Contains("script-src 'self' 'sha256-j7OoGArf6XW6YY4cAyS3riSSvrJRqpSi1fOF9vQ5SrI='", csp, StringComparison.Ordinal);
+        var scriptDirective = csp.Split(';').Single(directive => directive.TrimStart().StartsWith("script-src", StringComparison.Ordinal));
+        Assert.DoesNotContain("unsafe-inline", scriptDirective, StringComparison.Ordinal);
+        Assert.Contains("<script>document.form.submit();</script>", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+
+        using var queryResponse = await client.GetAsync(authorize);
+        Assert.DoesNotContain("script-src", Assert.Single(queryResponse.Headers.GetValues("Content-Security-Policy")), StringComparison.Ordinal);
     }
 
     [PostgresFact]
@@ -436,17 +518,26 @@ public class PortalAuthTimeProtocolTests
         {
             var response = await client.GetAsync(authorize);
             Assert.True(response.StatusCode == HttpStatusCode.Redirect);
-            var page = await client.GetAsync(response.Headers.Location!.PathAndQuery);
-            var hidden = Regex.Match(await page.Content.ReadAsStringAsync(), "name=\"__RequestVerificationToken\"[^>]*value=\"([^\"]+)\"");
+            var login = await CompleteLoginChallengeAsync(client, response);
+            return login.Headers.GetValues("Set-Cookie").Single(value => value.StartsWith(LoginSessionService.Scheme + "=", StringComparison.Ordinal)).Split(';')[0];
+        }
+
+        public async Task<HttpResponseMessage> CompleteLoginChallengeAsync(HttpClient client, HttpResponseMessage challenge)
+        {
+            Assert.True(challenge.StatusCode == HttpStatusCode.Redirect);
+            var page = await client.GetAsync(challenge.Headers.Location!.PathAndQuery);
+            var html = await page.Content.ReadAsStringAsync();
+            var hidden = Regex.Match(html, "name=\"__RequestVerificationToken\"[^>]*value=\"([^\"]+)\"");
             Assert.True(hidden.Success);
+            var returnUrl = Regex.Match(html, "name=\"ReturnUrl\"[^>]*value=\"([^\"]+)\"");
+            Assert.True(returnUrl.Success);
             using var form = new FormUrlEncodedContent(new Dictionary<string, string>
             {
                 ["__RequestVerificationToken"] = WebUtility.HtmlDecode(hidden.Groups[1].Value),
-                ["UserName"] = "portal-time-user", ["Password"] = _password, ["ReturnUrl"] = authorize,
+                ["UserName"] = "portal-time-user", ["Password"] = _password,
+                ["ReturnUrl"] = WebUtility.HtmlDecode(returnUrl.Groups[1].Value),
             });
-            var login = await client.PostAsync("/account/login", form);
-            Assert.True(login.StatusCode == HttpStatusCode.Redirect);
-            return login.Headers.GetValues("Set-Cookie").Single(value => value.StartsWith(LoginSessionService.Scheme + "=", StringComparison.Ordinal)).Split(';')[0];
+            return await client.PostAsync("/account/login", form);
         }
 
         public async Task<HttpResponseMessage> CodeExchangeResponseAsync(HttpClient client, string authorize)
