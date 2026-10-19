@@ -661,11 +661,26 @@ public static class DbSeeder
     ];
 
     /// <summary>
-    /// fleet-hub-web 权限集 = asst 客户端同款裁剪集（无 roles、无内省端点）；
-    /// hub 是纯入口渲染层，授权完全在 PandaAuth，清单在 BFF 服务端持有。
+    /// fleet-hub-web 权限集 = 第一方 Web 基础集（含 roles、无内省端点）。
+    /// Hub 入口仍对全部已认证用户开放；roles 仅用于 `/cloud-admin` 的
+    /// `cloud-admin` 角色门，授权仍由 PandaAuth 角色管理。
     /// Revocation 保留：登出走 RP-initiated signout + revoke。
     /// </summary>
-    private static string[] FleetHubWebPermissions() => AsstClientPermissions();
+    private static string[] FleetHubWebPermissions() =>
+    [
+        Permissions.Endpoints.Authorization,
+        Permissions.Endpoints.Token,
+        Permissions.Endpoints.EndSession,
+        Permissions.Endpoints.Revocation,
+        Permissions.GrantTypes.AuthorizationCode,
+        Permissions.GrantTypes.RefreshToken,
+        Permissions.ResponseTypes.Code,
+        Permissions.Scopes.Email,
+        Permissions.Scopes.Profile,
+        Permissions.Scopes.Roles,
+        Permissions.Prefixes.Scope + Scopes.OfflineAccess,
+        Requirements.Features.ProofKeyForCodeExchange,
+    ];
 
     private static string[] ExpandTenantRedirectUris(
         string[] configuredUris,

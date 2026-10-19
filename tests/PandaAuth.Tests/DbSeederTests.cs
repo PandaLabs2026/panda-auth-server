@@ -248,8 +248,8 @@ public class DbSeederTests
         Assert.True(await applications.HasPermissionAsync(hub, Permissions.Endpoints.EndSession));
         Assert.True(await applications.HasPermissionAsync(hub, Permissions.Endpoints.Revocation));
         Assert.True(await applications.HasPermissionAsync(hub, Requirements.Features.ProofKeyForCodeExchange));
-        // 裁剪面：无 roles scope（授权在 PandaAuth，hub 不消费角色）、无内省端点（无资源方消费方）。
-        Assert.False(await applications.HasPermissionAsync(hub, Permissions.Scopes.Roles));
+        // roles 仅供 /cloud-admin 角色门；无内省端点（无资源方消费方）。
+        Assert.True(await applications.HasPermissionAsync(hub, Permissions.Scopes.Roles));
         Assert.False(await applications.HasPermissionAsync(hub, Permissions.Endpoints.Introspection));
         Assert.False(await applications.HasPermissionAsync(hub, Permissions.Prefixes.Scope + "fleet.read"));
     }
