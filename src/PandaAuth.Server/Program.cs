@@ -99,6 +99,7 @@ builder.Services.AddScoped<TenantContextAccessor>();
 builder.Services.AddScoped<ITenantContextAccessor>(services => services.GetRequiredService<TenantContextAccessor>());
 // 签名密钥周期误配会让旧 Access Token 在旧密钥退役后静默验签失败，必须在读取密钥表之前失败关闭。
 authOptions.Keys.Validate();
+authOptions.Retention.Validate();
 authOptions.Mfa.Validate(builder.Environment.IsProduction());
 
 builder.Services.AddDbContext<PandaAuthDbContext>(options =>
@@ -352,6 +353,7 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<AccountVerificationService>();
 // login_logs / admin_audit_logs 保留策略：后台按天删除超期审计记录（Auth:Audit:RetentionDays，默认 90 天）。
 builder.Services.AddHostedService<LoginLogRetentionService>();
+builder.Services.AddHostedService<SecurityDataRetentionService>();
 // /healthz 必须反映核心依赖：空检查会对「数据库停摆」假绿（门户状态页据此渲染组件状态）。
 // DbContextCheck 执行 CanConnectAsync，库不可达时健康端点转为 503。
 builder.Services.AddHealthChecks().AddDbContextCheck<PandaAuthDbContext>();
