@@ -540,7 +540,8 @@ public class PortalAuthTimeProtocolTests
         public static async Task<ProtocolFixture> CreateAsync(bool refresh = false, string? codeFault = null, string? refreshFault = null)
         {
             var admin = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("PANDA_AUTH_TEST_POSTGRES"));
-            if (admin.Host != "127.0.0.1" || admin.Port != 43823 || admin.Database != "postgres")
+            PostgresTestBoundary.ValidateEndpoint(admin, PostgresTestBoundary.SharedMode);
+            if (admin.Database != "postgres")
                 throw new InvalidOperationException("Auth protocol fixture requires the approved task loopback cluster/admin database.");
             var name = "panda_auth_portal_test_" + Guid.NewGuid().ToString("N");
             await using (var connection = new NpgsqlConnection(admin.ConnectionString))
@@ -695,8 +696,8 @@ public class PortalAuthTimeProtocolTests
         {
             await Factory.DisposeAsync();
             var builder = new NpgsqlConnectionStringBuilder(_connection);
-            if (builder.Host != "127.0.0.1" || builder.Port != 43823 ||
-                builder.Database is null || !Regex.IsMatch(builder.Database, "^panda_auth_portal_test_[0-9a-f]{32}$", RegexOptions.CultureInvariant))
+            PostgresTestBoundary.ValidateEndpoint(builder, PostgresTestBoundary.SharedMode);
+            if (builder.Database is null || !Regex.IsMatch(builder.Database, "^panda_auth_portal_test_[0-9a-f]{32}$", RegexOptions.CultureInvariant))
                 throw new InvalidOperationException("Refusing cleanup outside this task-owned Auth database.");
             await using var db = Context();
             await db.Database.EnsureDeletedAsync();
