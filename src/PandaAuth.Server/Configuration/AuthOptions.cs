@@ -23,6 +23,7 @@ public sealed class AuthOptions
     public RateLimitOptions RateLimit { get; set; } = new();
 
     public AuditOptions Audit { get; set; } = new();
+    public AuthRetentionOptions Retention { get; set; } = new();
 
     public SigningKeyOptions Keys { get; set; } = new();
 
