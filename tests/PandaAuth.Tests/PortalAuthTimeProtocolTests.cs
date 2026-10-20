@@ -23,6 +23,7 @@ using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
 using PandaAuth.Server.Infrastructure.Security.Mfa;
+using PandaAuth.Shared;
 using Xunit;
 using static OpenIddict.Abstractions.OpenIddictConstants;
 
@@ -30,6 +31,97 @@ namespace PandaAuth.Tests;
 
 public class PortalAuthTimeProtocolTests
 {
+    [PostgresFact]
+    public async Task Userinfo_RealBearer_GetAndPost_RespectProfileScope()
+    {
+        await using var fixture = await ProtocolFixture.CreateAsync();
+        foreach (var profile in new[] { false, true })
+        {
+            using var client = fixture.Browser();
+            var authorize = fixture.AuthorizationUrl(profile);
+            await fixture.LoginAsync(client, authorize);
+            var token = await fixture.CodeExchangeAsync(client, authorize);
+            foreach (var method in new[] { HttpMethod.Get, HttpMethod.Post })
+            {
+                using var request = UserinfoRequest(method, token.GetProperty("access_token").GetString()!);
+                using var response = await client.SendAsync(request);
+                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+                using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                Assert.True(body.RootElement.TryGetProperty(Claims.Subject, out _));
+                Assert.Equal(profile, body.RootElement.TryGetProperty(Claims.Name, out _));
+                Assert.Equal(profile, body.RootElement.TryGetProperty(PandaAuthClaims.Nickname, out _));
+                Assert.False(body.RootElement.TryGetProperty(Claims.Email, out _));
+                Assert.False(body.RootElement.TryGetProperty(Claims.Role, out _));
+            }
+        }
+    }
+
+    [PostgresFact]
+    public async Task Userinfo_ExistingBearer_RejectsFrozenDeletedAndMissingUser()
+    {
+        await using var fixture = await ProtocolFixture.CreateAsync();
+        using var client = fixture.Browser();
+        var authorize = fixture.AuthorizationUrl(profile: true);
+        await fixture.LoginAsync(client, authorize);
+        var token = (await fixture.CodeExchangeAsync(client, authorize)).GetProperty("access_token").GetString()!;
+        foreach (var status in new[] { UserStatus.Frozen, UserStatus.Deleted })
+        {
+            await using (var scope = fixture.Factory.Services.CreateAsyncScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+                var user = await db.Users.SingleAsync(user => user.UserName == "portal-time-user");
+                user.Status = status;
+                await db.SaveChangesAsync();
+            }
+            using var request = UserinfoRequest(HttpMethod.Get, token);
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+            Assert.Null(response.Headers.Location);
+        }
+        await using (var scope = fixture.Factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+            db.Users.Remove(await db.Users.SingleAsync(user => user.UserName == "portal-time-user"));
+            await db.SaveChangesAsync();
+        }
+        using var deletedRequest = UserinfoRequest(HttpMethod.Post, token);
+        using var deletedResponse = await client.SendAsync(deletedRequest);
+        Assert.Equal(HttpStatusCode.Unauthorized, deletedResponse.StatusCode);
+        Assert.Null(deletedResponse.Headers.Location);
+    }
+
+    [PostgresFact]
+    public async Task Userinfo_RejectsMachineAndInvalidBearer_WithoutHtmlRedirect()
+    {
+        await using var fixture = await ProtocolFixture.CreateAsync();
+        using var client = fixture.Browser();
+        using var form = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["client_id"] = "machine-time-fixture", ["client_secret"] = fixture.MachineSecret,
+            ["grant_type"] = GrantTypes.ClientCredentials, ["scope"] = "api",
+        });
+        using var tokenResponse = await client.PostAsync("/connect/token", form);
+        Assert.Equal(HttpStatusCode.OK, tokenResponse.StatusCode);
+        using var token = JsonDocument.Parse(await tokenResponse.Content.ReadAsStringAsync());
+        foreach (var value in new[] { "invalid-bearer", token.RootElement.GetProperty("access_token").GetString()! })
+            foreach (var method in new[] { HttpMethod.Get, HttpMethod.Post })
+            {
+                using var request = UserinfoRequest(method, value);
+                using var response = await client.SendAsync(request);
+                Assert.True(response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden);
+                Assert.Null(response.Headers.Location);
+                Assert.NotEqual("text/html", response.Content.Headers.ContentType?.MediaType);
+            }
+    }
+
+    private static HttpRequestMessage UserinfoRequest(HttpMethod method, string token)
+    {
+        var request = new HttpRequestMessage(method, "/connect/userinfo");
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        if (method == HttpMethod.Post) request.Content = new FormUrlEncodedContent(new Dictionary<string, string>());
+        return request;
+    }
+
     [PostgresFact]
     public async Task RealLoginCookie_CodePkce_SignedIdTokenPreservesOriginalNumericTimeAndMinimalName()
     {

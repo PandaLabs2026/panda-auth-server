@@ -177,13 +177,32 @@ public sealed class AuthorizationController(
         }
 
         var principal = result.Principal;
+        var subjects = principal.FindAll(Claims.Subject).ToArray();
+        var subjectTypes = principal.FindAll(PandaAuthClaims.SubjectType).ToArray();
+        if (subjects.Length != 1 || string.IsNullOrWhiteSpace(subjects[0].Value) ||
+            subjectTypes.Length > 1 ||
+            (subjectTypes.Length == 1 && subjectTypes[0].Value != PandaAuthClaims.SubjectTypes.Human))
+        {
+            return UserinfoError(Errors.InvalidToken);
+        }
+        if (!principal.HasScope(Scopes.OpenId))
+        {
+            return UserinfoError(Errors.InsufficientScope);
+        }
+        // Token validation authenticates the bearer; current account state is a
+        // separate check. Do not expand claims from the database after issuance.
+        var user = await userManager.FindByIdAsync(subjects[0].Value);
+        if (user is null || user.Status != UserStatus.Active)
+        {
+            return UserinfoError(Errors.InvalidToken);
+        }
         var response = new Dictionary<string, object?>
         {
-            [Claims.Subject] = principal.GetClaim(Claims.Subject) ?? string.Empty,
+            [Claims.Subject] = subjects[0].Value,
         };
 
         var name = principal.GetClaim(Claims.Name);
-        if (!string.IsNullOrEmpty(name))
+        if (principal.HasScope(Scopes.Profile) && !string.IsNullOrEmpty(name))
         {
             response[Claims.Name] = name;
         }
@@ -319,6 +338,13 @@ public sealed class AuthorizationController(
         {
             [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.InvalidGrant,
             [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = description,
+        }), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+
+    private IActionResult UserinfoError(string error)
+        => Forbid(new AuthenticationProperties(new Dictionary<string, string?>
+        {
+            [OpenIddictServerAspNetCoreConstants.Properties.Error] = error,
+            [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = "The access token cannot be used for userinfo.",
         }), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
 
     /// <summary>
