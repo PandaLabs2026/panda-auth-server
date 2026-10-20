@@ -42,6 +42,28 @@ public class AdminAuditControllerTests
         return Assert.IsType<AdminPageResult<T>>(ok.Value);
     }
 
+    [Theory]
+    [InlineData(int.MaxValue)]
+    [InlineData(1_073_741_825)]
+    public async Task Lists_OverflowingOffset_ReturnEmptyPages(int requestedPage)
+    {
+        var (controller, provider) = Create();
+        await using var ownedProvider = provider;
+        await SeedAsync(provider);
+
+        var logins = PageOf<AdminLoginLogEntry>(await controller.Logins(null, null, null, null, requestedPage, 20, CancellationToken.None));
+        var admin = PageOf<AdminAuditLogEntry>(await controller.Admin(null, null, null, null, requestedPage, 20, CancellationToken.None));
+
+        Assert.Equal(3, logins.Total);
+        Assert.Equal(2, admin.Total);
+        Assert.Equal(requestedPage, logins.Page);
+        Assert.Equal(requestedPage, admin.Page);
+        Assert.Equal(20, logins.PageSize);
+        Assert.Equal(20, admin.PageSize);
+        Assert.Empty(logins.Items);
+        Assert.Empty(admin.Items);
+    }
+
     [Fact]
     public async Task LoginAudit_FiltersByUserSuccessAndTimeRange()
     {

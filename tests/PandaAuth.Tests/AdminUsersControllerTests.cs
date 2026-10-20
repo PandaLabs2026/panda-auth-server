@@ -49,6 +49,23 @@ public class AdminUsersControllerTests
         return Assert.IsType<AdminPageResult<AdminUserSummary>>(ok.Value);
     }
 
+    [Theory]
+    [InlineData(int.MaxValue)]
+    [InlineData(1_073_741_825)]
+    public async Task List_OverflowingOffset_ReturnsEmptyPage(int requestedPage)
+    {
+        var (controller, provider, _) = Create();
+        await using var ownedProvider = provider;
+        await SeedUserAsync(provider, "paging-user");
+
+        var page = PageOf(await controller.List(null, null, requestedPage, 20, null, null, CancellationToken.None));
+
+        Assert.Equal(1, page.Total);
+        Assert.Equal(requestedPage, page.Page);
+        Assert.Equal(20, page.PageSize);
+        Assert.Empty(page.Items);
+    }
+
     [Fact]
     public async Task List_FiltersByQueryStatusAndPages()
     {

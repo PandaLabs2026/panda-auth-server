@@ -56,7 +56,7 @@ public sealed class AdminAuditController(PandaAuthDbContext dbContext) : Control
         var items = await logs
             .OrderByDescending(log => log.CreatedAt)
             .ThenBy(log => log.Id)
-            .Skip((pageNumber - 1) * size)
+            .Skip(PaginationOffset.Calculate(pageNumber, size))
             .Take(size)
             .Select(log => new AdminLoginLogEntry(
                 log.Id, log.UserId, log.UserName, log.ClientId, log.IpAddress, log.UserAgent,
@@ -107,7 +107,7 @@ public sealed class AdminAuditController(PandaAuthDbContext dbContext) : Control
         var items = await logs
             .OrderByDescending(log => log.CreatedAt)
             .ThenBy(log => log.Id)
-            .Skip((pageNumber - 1) * size)
+            .Skip(PaginationOffset.Calculate(pageNumber, size))
             .Take(size)
             .Select(log => new AdminAuditLogEntry(
                 log.Id, log.ActorUserId, log.ActorUserName, log.Action,

@@ -36,7 +36,7 @@ public sealed class AdminNotificationsController(PandaAuthDbContext dbContext) :
         var total = await logs.CountAsync(cancellationToken);
         var items = await logs
             .OrderByDescending(log => log.Id)
-            .Skip((pageNumber - 1) * size)
+            .Skip(PaginationOffset.Calculate(pageNumber, size))
             .Take(size)
             .Select(log => new AdminNotificationEntry(
                 log.Id, log.ActorUserId, log.ActorUserName, log.Action,
