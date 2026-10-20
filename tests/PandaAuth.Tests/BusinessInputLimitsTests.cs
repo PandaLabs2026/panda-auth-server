@@ -15,6 +15,52 @@ namespace PandaAuth.Tests;
 public sealed class BusinessInputLimitsTests
 {
     [Theory]
+    [InlineData(2349)]
+    [InlineData(8192)]
+    public void Oidc_ReturnUrl_Uses_A_Separate_Bounded_Limit(int length)
+    {
+        var returnUrl = "/connect/authorize?state=".PadRight(length, 'x');
+        Assert.Empty(BusinessInputLimits.Validate("returnUrl", returnUrl));
+        foreach (var model in ReturnUrlModels(returnUrl))
+            Assert.Empty(BusinessInputLimits.Validate("model", model));
+    }
+
+    [Fact]
+    public void Oversized_ReturnUrl_Is_Rejected_On_Get_And_All_Account_Forms()
+    {
+        var returnUrl = "/" + new string('x', 8192);
+        Assert.Contains("returnUrl", BusinessInputLimits.Validate("returnUrl", returnUrl));
+        foreach (var model in ReturnUrlModels(returnUrl))
+            Assert.Contains("ReturnUrl", BusinessInputLimits.Validate("model", model));
+        Assert.Contains("RedirectUris", BusinessInputLimits.Validate("request",
+            new AdminRedirectUrisRequest(["https://example.test/".PadRight(2049, 'x')], [])));
+    }
+
+    [Fact]
+    public void Html_Login_Filter_Preserves_Normal_Oidc_Context_Without_ModelState_Error()
+    {
+        var returnUrl = "/connect/authorize?client_id=admin-web&state=" + new string('x', 2400);
+        foreach (var model in new object[] { returnUrl, new LoginViewModel { UserName = "fixture", ReturnUrl = returnUrl } })
+        {
+            var context = Context(System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(AccountController)));
+            context.ActionArguments[model is string ? "returnUrl" : "model"] = model;
+            new BusinessInputLimitFilter().OnActionExecuting(context);
+            Assert.True(context.ModelState.IsValid);
+            Assert.Null(context.Result);
+        }
+    }
+
+    private static object[] ReturnUrlModels(string returnUrl) =>
+    [
+        new LoginViewModel { UserName = "fixture", ReturnUrl = returnUrl },
+        new ForgotPasswordViewModel { ReturnUrl = returnUrl },
+        new ResetPasswordViewModel { ReturnUrl = returnUrl },
+        new ChangePasswordViewModel { ReturnUrl = returnUrl },
+        new ChangeEmailViewModel { ReturnUrl = returnUrl },
+        new ConfirmEmailChangeViewModel { ReturnUrl = returnUrl }
+    ];
+
+    [Theory]
     [InlineData("query", 256)]
     [InlineData("userId", 450)]
     [InlineData("id", 450)]
