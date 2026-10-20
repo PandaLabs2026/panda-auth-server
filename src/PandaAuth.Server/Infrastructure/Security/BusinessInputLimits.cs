@@ -9,6 +9,9 @@ internal static class BusinessInputLimits
     internal const int Name = 256, Identifier = 450, ClientId = 100, Nickname = 128,
         Region = 64, DisplayName = 256, ClaimType = 128, ClaimValue = 2048,
         Scope = 128, Url = 2048, RedirectCount = 32, PermissionCount = 128, NewPassword = 1024;
+    // OIDC authorization context includes protected state and PKCE parameters;
+    // it is longer than a registered callback URI. Local-redirect checks remain in the actions.
+    internal const int ReturnUrl = 8192;
 
     public static IReadOnlyList<string> Validate(string name, object? value)
     {
@@ -45,7 +48,7 @@ internal static class BusinessInputLimits
                     case "clientid": Text(name, text, ClientId); break;
                     case "query": case "username": case "actor": case "action":
                         Text(name, text, Name, true); break;
-                    case "returnurl": Text(name, text, Url); break;
+                    case "returnurl": Text(name, text, ReturnUrl); break;
                 }
                 break;
             case AdminCreateUserRequest request:
@@ -87,28 +90,28 @@ internal static class BusinessInputLimits
                 break;
             case LoginViewModel model:
                 Text("UserName", model.UserName, Name, true);
-                Text("ReturnUrl", model.ReturnUrl, Url);
+                Text("ReturnUrl", model.ReturnUrl, ReturnUrl);
                 break;
             case ForgotPasswordViewModel model:
                 Text("Email", model.Email, Name, true);
-                Text("ReturnUrl", model.ReturnUrl, Url);
+                Text("ReturnUrl", model.ReturnUrl, ReturnUrl);
                 break;
             case ResetPasswordViewModel model:
                 Text("Email", model.Email, Name, true);
                 Text("NewPassword", model.NewPassword, NewPassword);
-                Text("ReturnUrl", model.ReturnUrl, Url);
+                Text("ReturnUrl", model.ReturnUrl, ReturnUrl);
                 break;
             case ChangePasswordViewModel model:
                 Text("NewPassword", model.NewPassword, NewPassword);
-                Text("ReturnUrl", model.ReturnUrl, Url);
+                Text("ReturnUrl", model.ReturnUrl, ReturnUrl);
                 break;
             case ChangeEmailViewModel model:
                 Text("NewEmail", model.NewEmail, Name, true);
-                Text("ReturnUrl", model.ReturnUrl, Url);
+                Text("ReturnUrl", model.ReturnUrl, ReturnUrl);
                 break;
             case ConfirmEmailChangeViewModel model:
                 Text("NewEmail", model.NewEmail, Name, true);
-                Text("ReturnUrl", model.ReturnUrl, Url);
+                Text("ReturnUrl", model.ReturnUrl, ReturnUrl);
                 break;
         }
         return errors.Distinct(StringComparer.Ordinal).ToArray();
