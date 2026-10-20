@@ -108,6 +108,8 @@ public sealed class SigningKeyOptions
 
 public sealed class SeedOptions
 {
+    public SeedPermissionReconciliationMode PermissionReconciliationMode { get; set; } = SeedPermissionReconciliationMode.AddMissing;
+    public string[] ExactPermissionClientIds { get; set; } = [];
     /// <summary>总开关；false 时跳过全部种子数据（含管理员、me-web 与 demo 客户端）。</summary>
     public bool Enabled { get; set; } = true;
 
@@ -139,6 +141,8 @@ public sealed class SeedOptions
 
     public DemoSeedOptions Demo { get; set; } = new();
 }
+
+public enum SeedPermissionReconciliationMode { AddMissing, Exact }
 
 public sealed class AdminSeedOptions
 {

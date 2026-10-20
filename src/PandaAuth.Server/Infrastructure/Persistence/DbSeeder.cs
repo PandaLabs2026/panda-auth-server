@@ -16,6 +16,7 @@ public static class DbSeeder
     public static async Task SeedAsync(IServiceProvider services)
     {
         var options = services.GetRequiredService<IOptions<AuthOptions>>().Value;
+        SeedPermissionPolicy.Validate(options.Seed);
         if (!options.Seed.Enabled)
         {
             return;
@@ -28,6 +29,7 @@ public static class DbSeeder
         // 密钥改写告警与审计的载体：migrate 上下文两者齐备；测试宿主可能缺 logger（GetService 容忍 null）。
         var logger = services.GetService<ILoggerFactory>()?.CreateLogger("PandaAuth.Server.Infrastructure.Persistence.DbSeeder");
         var db = services.GetService<PandaAuthDbContext>();
+        var reconciliation = new SeedPermissionReconciler(applications, options.Seed, db, logger, services.GetService<TimeProvider>() ?? TimeProvider.System);
 
         if (!await roleManager.RoleExistsAsync(PandaUser.AdminRole))
         {
@@ -65,19 +67,19 @@ public static class DbSeeder
 
         if (options.Seed.Demo.Enabled)
         {
-            await SeedDemoApplicationsAsync(applications, options.Seed.Demo);
+            await SeedDemoApplicationsAsync(applications, reconciliation, options.Seed.Demo);
         }
 
         if (options.Seed.Me.Enabled)
         {
-            await SeedFirstPartyWebApplicationAsync(applications, logger, db, FirstPartyClients.MeWeb, "PandaAuth 账户中心", "Auth:Seed:Me", options.Seed.Me, options.TenantRouting, "me",
+            await SeedFirstPartyWebApplicationAsync(applications, reconciliation, logger, db, FirstPartyClients.MeWeb, "PandaAuth 账户中心", "Auth:Seed:Me", options.Seed.Me, options.TenantRouting, "me",
                 postLogoutSuffix: "callback/logout/pandaauth");
         }
 
         if (options.Seed.AdminWeb.Enabled)
         {
             await SeedFirstPartyWebApplicationAsync(
-                applications, logger, db, FirstPartyClients.AdminWeb, "PandaAuth 管理后台", "Auth:Seed:AdminWeb", options.Seed.AdminWeb, options.TenantRouting, "admin",
+                applications, reconciliation, logger, db, FirstPartyClients.AdminWeb, "PandaAuth 管理后台", "Auth:Seed:AdminWeb", options.Seed.AdminWeb, options.TenantRouting, "admin",
                 postLogoutSuffix: "callback/logout/pandaauth");
         }
 
@@ -86,7 +88,7 @@ public static class DbSeeder
         if (options.Seed.OasisWeb.Enabled)
         {
             await SeedFirstPartyWebApplicationAsync(
-                applications, logger, db, FirstPartyClients.OasisWeb, "Oasis 工作台", "Auth:Seed:OasisWeb", options.Seed.OasisWeb,
+                applications, reconciliation, logger, db, FirstPartyClients.OasisWeb, "Oasis 工作台", "Auth:Seed:OasisWeb", options.Seed.OasisWeb,
                 permissions: OasisWebPermissions());
         }
 
@@ -94,7 +96,7 @@ public static class DbSeeder
         if (options.Seed.FleetAdminWeb.Enabled)
         {
             await SeedFirstPartyWebApplicationAsync(
-                applications, logger, db, FirstPartyClients.FleetAdminWeb, "Panda Fleet 管理台", "Auth:Seed:FleetAdminWeb", options.Seed.FleetAdminWeb,
+                applications, reconciliation, logger, db, FirstPartyClients.FleetAdminWeb, "Panda Fleet 管理台", "Auth:Seed:FleetAdminWeb", options.Seed.FleetAdminWeb,
                 permissions: FleetAdminWebPermissions());
         }
 
@@ -103,7 +105,7 @@ public static class DbSeeder
         if (options.Seed.CloudConsoleWeb.Enabled)
         {
             await SeedFirstPartyWebApplicationAsync(
-                applications, logger, db, FirstPartyClients.CloudConsoleWeb, "Panda Cloud Console", "Auth:Seed:CloudConsoleWeb", options.Seed.CloudConsoleWeb,
+                applications, reconciliation, logger, db, FirstPartyClients.CloudConsoleWeb, "Panda Cloud Console", "Auth:Seed:CloudConsoleWeb", options.Seed.CloudConsoleWeb,
                 permissions: CloudConsoleWebPermissions());
         }
 
@@ -112,7 +114,7 @@ public static class DbSeeder
         if (options.Seed.AsstWeb.Enabled)
         {
             await SeedFirstPartyWebApplicationAsync(
-                applications, logger, db, FirstPartyClients.AsstWeb, "熊猫助理工作台", "Auth:Seed:AsstWeb", options.Seed.AsstWeb,
+                applications, reconciliation, logger, db, FirstPartyClients.AsstWeb, "熊猫助理工作台", "Auth:Seed:AsstWeb", options.Seed.AsstWeb,
                 options.TenantRouting, "app", AsstClientPermissions(), TenantProduct.PandaAssistant,
                 postLogoutSuffix: "callback/logout/pandaauth");
         }
@@ -120,37 +122,37 @@ public static class DbSeeder
         if (options.Seed.AsstAdmin.Enabled)
         {
             await SeedFirstPartyWebApplicationAsync(
-                applications, logger, db, FirstPartyClients.AsstAdmin, "熊猫助理管理后台", "Auth:Seed:AsstAdmin", options.Seed.AsstAdmin,
+                applications, reconciliation, logger, db, FirstPartyClients.AsstAdmin, "熊猫助理管理后台", "Auth:Seed:AsstAdmin", options.Seed.AsstAdmin,
                 options.TenantRouting, "admin", AsstClientPermissions(), TenantProduct.PandaAssistant,
                 postLogoutSuffix: "callback/logout/pandaauth");
         }
 
         if (options.Seed.AsstMobile.Enabled)
         {
-            await SeedAsstMobileApplicationAsync(applications, options.Seed.AsstMobile);
+            await SeedAsstMobileApplicationAsync(applications, reconciliation, options.Seed.AsstMobile);
         }
 
         if (options.Seed.AsstServer.Enabled)
         {
-            await SeedAsstServerApplicationAsync(applications, logger, db, options.Seed.AsstServer);
+            await SeedAsstServerApplicationAsync(applications, reconciliation, logger, db, options.Seed.AsstServer);
         }
 
         if (options.Seed.Fleet.Enabled)
         {
             await SeedFleetScopesAsync(scopes);
-            await SeedFleetApplicationAsync(applications, logger, db, options.Seed.Fleet);
+            await SeedFleetApplicationAsync(applications, reconciliation, logger, db, options.Seed.Fleet);
         }
 
         if (options.Seed.Mgmt.Enabled)
         {
             await SeedMgmtScopesAsync(scopes);
-            await SeedMgmtApplicationAsync(applications, logger, db, options.Seed.Mgmt);
+            await SeedMgmtApplicationAsync(applications, reconciliation, logger, db, options.Seed.Mgmt);
         }
 
         if (options.Seed.SessionState.Enabled)
         {
             await SeedSessionStateScopeAsync(scopes);
-            await SeedSessionStateApplicationsAsync(applications, logger, db, options.Seed.SessionState);
+            await SeedSessionStateApplicationsAsync(applications, reconciliation, logger, db, options.Seed.SessionState);
         }
     }
 
@@ -169,7 +171,7 @@ public static class DbSeeder
         }
     }
 
-    private static async Task SeedFleetApplicationAsync(IOpenIddictApplicationManager applications, ILogger? logger, PandaAuthDbContext? db, FleetSeedOptions fleet)
+    private static async Task SeedFleetApplicationAsync(IOpenIddictApplicationManager applications, SeedPermissionReconciler reconciliation, ILogger? logger, PandaAuthDbContext? db, FleetSeedOptions fleet)
     {
         if (string.IsNullOrWhiteSpace(fleet.ClientSecret))
         {
@@ -205,7 +207,7 @@ public static class DbSeeder
         // 顺序颠倒会覆盖新哈希，见 SeedFirstPartyWebApplicationAsync 尾部注释）：
         // 契约新增 scope 时为存量客户端补权限白名单；缺权限时 token 请求直接 invalid_scope
         // （fleet.platform.operate 2026-10-11 由隔离 e2e harness 首跑暴露）。
-        await ReconcileApplicationPermissionsAsync(applications, existing,
+        await reconciliation.ApplyAsync(existing,
         [
             Permissions.Endpoints.Token,
             Permissions.Endpoints.Introspection,
@@ -218,42 +220,6 @@ public static class DbSeeder
             await WarnSecretRewriteAsync(logger, db, "fleet-api", "Auth:Seed:Fleet");
             await applications.UpdateAsync(existing, fleet.ClientSecret);
         }
-    }
-
-    /// <summary>
-    /// 存量客户端的权限白名单对账：把期望权限集中缺失的项补回（只增不删——历史多授的权限不在
-    /// 普通 migrate 里悄悄回收，回收必须走显式变更）。返回是否发生了写回。
-    /// 走 descriptor Populate 往返而非 2-arg UpdateAsync：后者会重新加盐哈希密钥（见 web 侧注释）。
-    /// </summary>
-    private static async Task<bool> ReconcileApplicationPermissionsAsync(
-        IOpenIddictApplicationManager applications,
-        object application,
-        IEnumerable<string> expected)
-    {
-        List<string>? missing = null;
-        foreach (var permission in expected)
-        {
-            if (!await applications.HasPermissionAsync(application, permission))
-            {
-                (missing ??= []).Add(permission);
-            }
-        }
-
-        if (missing is null)
-        {
-            return false;
-        }
-
-        var probe = new OpenIddictApplicationDescriptor();
-        await applications.PopulateAsync(probe, application);
-        foreach (var permission in missing)
-        {
-            probe.Permissions.Add(permission);
-        }
-
-        await applications.PopulateAsync(application, probe);
-        await applications.UpdateAsync(application);
-        return true;
     }
 
     /// <summary>
@@ -294,16 +260,16 @@ public static class DbSeeder
     }
 
     private static async Task SeedSessionStateApplicationsAsync(
-        IOpenIddictApplicationManager applications, ILogger? logger, PandaAuthDbContext? db, SessionStateSeedOptions options)
+        IOpenIddictApplicationManager applications, SeedPermissionReconciler reconciliation, ILogger? logger, PandaAuthDbContext? db, SessionStateSeedOptions options)
     {
-        await SeedSessionStateApplicationAsync(applications, logger, db, PandaAuthSessionApi.AdminClientId,
+        await SeedSessionStateApplicationAsync(applications, reconciliation, logger, db, PandaAuthSessionApi.AdminClientId,
             "PandaAuth Admin session state", options.AdminClientSecret, "Auth:Seed:SessionState:AdminClientSecret");
-        await SeedSessionStateApplicationAsync(applications, logger, db, PandaAuthSessionApi.MeClientId,
+        await SeedSessionStateApplicationAsync(applications, reconciliation, logger, db, PandaAuthSessionApi.MeClientId,
             "PandaAuth Me session state", options.MeClientSecret, "Auth:Seed:SessionState:MeClientSecret");
     }
 
     private static async Task SeedSessionStateApplicationAsync(
-        IOpenIddictApplicationManager applications, ILogger? logger, PandaAuthDbContext? db,
+        IOpenIddictApplicationManager applications, SeedPermissionReconciler reconciliation, ILogger? logger, PandaAuthDbContext? db,
         string clientId, string displayName, string secret, string configKey)
     {
         if (string.IsNullOrWhiteSpace(secret))
@@ -329,7 +295,7 @@ public static class DbSeeder
             return;
         }
 
-        await ReconcileApplicationPermissionsAsync(applications, existing,
+        await reconciliation.ApplyAsync(existing,
         [
             Permissions.Endpoints.Token,
             Permissions.GrantTypes.ClientCredentials,
@@ -342,7 +308,7 @@ public static class DbSeeder
         }
     }
 
-    private static async Task SeedMgmtApplicationAsync(IOpenIddictApplicationManager applications, ILogger? logger, PandaAuthDbContext? db, MgmtSeedOptions mgmt)
+    private static async Task SeedMgmtApplicationAsync(IOpenIddictApplicationManager applications, SeedPermissionReconciler reconciliation, ILogger? logger, PandaAuthDbContext? db, MgmtSeedOptions mgmt)
     {
         if (string.IsNullOrWhiteSpace(mgmt.ClientSecret))
         {
@@ -350,10 +316,7 @@ public static class DbSeeder
                 "Auth:Seed:Mgmt:Enabled=true 但缺少 Auth:Seed:Mgmt:ClientSecret 配置（mgmt-api 机密客户端密钥）。");
         }
 
-        var existing = await applications.FindByClientIdAsync(FirstPartyClients.MgmtApi);
-        if (existing is null)
-        {
-            await applications.CreateAsync(new OpenIddictApplicationDescriptor
+        var descriptor = new OpenIddictApplicationDescriptor
             {
                 ClientId = FirstPartyClients.MgmtApi,
                 ClientType = ClientTypes.Confidential,
@@ -370,10 +333,15 @@ public static class DbSeeder
                     Permissions.Prefixes.Scope + Features.Management.MgmtApiAuthorization.ClientsWriteScope,
                     Permissions.Prefixes.Scope + Features.Management.MgmtApiAuthorization.UsersReadScope,
                 },
-            });
+            };
+        var existing = await applications.FindByClientIdAsync(FirstPartyClients.MgmtApi);
+        if (existing is null)
+        {
+            await applications.CreateAsync(descriptor);
             return;
         }
 
+        await reconciliation.ApplyAsync(existing, descriptor.Permissions);
         if (!await applications.ValidateClientSecretAsync(existing, mgmt.ClientSecret))
         {
             await WarnSecretRewriteAsync(logger, db, "mgmt-api", "Auth:Seed:Mgmt");
@@ -382,8 +350,14 @@ public static class DbSeeder
     }
 
     /// <summary>demo 三客户端：默认关闭播种；开启后密钥必须经配置注入，源码不内置任何密钥常量。</summary>
-    private static async Task SeedDemoApplicationsAsync(IOpenIddictApplicationManager applications, DemoSeedOptions demo)
+    private static async Task SeedDemoApplicationsAsync(IOpenIddictApplicationManager applications, SeedPermissionReconciler reconciliation, DemoSeedOptions demo)
     {
+        async Task UpsertAsync(OpenIddictApplicationDescriptor descriptor)
+        {
+            var existing = await applications.FindByClientIdAsync(descriptor.ClientId!);
+            if (existing is null) await applications.CreateAsync(descriptor);
+            else await reconciliation.ApplyAsync(existing, descriptor.Permissions);
+        }
         if (demo.WebSecret.Length == 0)
         {
             throw new InvalidOperationException(
@@ -397,9 +371,8 @@ public static class DbSeeder
         }
 
         // demo-public：公共客户端（模拟移动端/桌面端），授权码 + 强制 PKCE + 刷新令牌。
-        if (await applications.FindByClientIdAsync(FirstPartyClients.DemoPublic) is null)
         {
-            await applications.CreateAsync(new OpenIddictApplicationDescriptor
+            await UpsertAsync(new OpenIddictApplicationDescriptor
             {
                 ClientId = FirstPartyClients.DemoPublic,
                 ClientType = ClientTypes.Public,
@@ -426,9 +399,8 @@ public static class DbSeeder
         }
 
         // demo-web：机密客户端（模拟传统 Web 应用后端托管凭证），授权码 + PKCE + 刷新令牌。
-        if (await applications.FindByClientIdAsync(FirstPartyClients.DemoWeb) is null)
         {
-            await applications.CreateAsync(new OpenIddictApplicationDescriptor
+            await UpsertAsync(new OpenIddictApplicationDescriptor
             {
                 ClientId = FirstPartyClients.DemoWeb,
                 ClientType = ClientTypes.Confidential,
@@ -456,9 +428,8 @@ public static class DbSeeder
         }
 
         // demo-service：机密客户端，客户端凭证模式（服务间调用）。
-        if (await applications.FindByClientIdAsync(FirstPartyClients.DemoService) is null)
         {
-            await applications.CreateAsync(new OpenIddictApplicationDescriptor
+            await UpsertAsync(new OpenIddictApplicationDescriptor
             {
                 ClientId = FirstPartyClients.DemoService,
                 ClientType = ClientTypes.Confidential,
@@ -512,6 +483,7 @@ public static class DbSeeder
 
     private static async Task SeedFirstPartyWebApplicationAsync(
         IOpenIddictApplicationManager applications,
+        SeedPermissionReconciler reconciliation,
         ILogger? logger,
         PandaAuthDbContext? db,
         string clientId,
@@ -580,7 +552,7 @@ public static class DbSeeder
         // 权限对账（先行）：契约新增 scope 时按本客户端的期望权限集补齐白名单——缺权限时
         // authorize 请求里的该 scope 会被剥掉、令牌永远拿不到它（fleet.platform.operate
         // 2026-10-11 由隔离 e2e harness 首跑暴露）。只对账期望集，oasis-web 等裁剪集不被放大。
-        var reconcilePermissions = await ReconcileApplicationPermissionsAsync(applications, existing, permissions);
+        var reconcilePermissions = await reconciliation.ApplyAsync(existing, permissions);
         var replaceRedirectUris = redirectUris.Length > 0;
         var replacePostLogoutRedirectUris = postLogoutRedirectUris.Length > 0;
 
@@ -776,7 +748,7 @@ public static class DbSeeder
     /// asst-mobile（公共客户端 / PKCE）的 upsert 播种：无密钥，仅回调白名单订正；
     /// 回调为 App Links（https://t####-asst.sNNN.../app/callback/mobile），全部经配置注入。
     /// </summary>
-    private static async Task SeedAsstMobileApplicationAsync(IOpenIddictApplicationManager applications, AsstMobileSeedOptions seed)
+    private static async Task SeedAsstMobileApplicationAsync(IOpenIddictApplicationManager applications, SeedPermissionReconciler reconciliation, AsstMobileSeedOptions seed)
     {
         var existing = await applications.FindByClientIdAsync(FirstPartyClients.AsstMobile);
         if (existing is null)
@@ -810,6 +782,7 @@ public static class DbSeeder
             return;
         }
 
+        await reconciliation.ApplyAsync(existing, AsstClientPermissions());
         var replaceRedirectUris = seed.RedirectUris.Length > 0;
         var replacePostLogout = seed.PostLogoutRedirectUris.Length > 0;
         if (!replaceRedirectUris && !replacePostLogout)
@@ -841,7 +814,7 @@ public static class DbSeeder
     /// asst-server（资源方机密客户端）：仅内省端点权限——换发端点（panda-asst /auth/oidc/exchange）
     /// 以本客户端凭据对用户令牌做一次性 introspection；无回调、无授权码面。
     /// </summary>
-    private static async Task SeedAsstServerApplicationAsync(IOpenIddictApplicationManager applications, ILogger? logger, PandaAuthDbContext? db, AsstServerSeedOptions seed)
+    private static async Task SeedAsstServerApplicationAsync(IOpenIddictApplicationManager applications, SeedPermissionReconciler reconciliation, ILogger? logger, PandaAuthDbContext? db, AsstServerSeedOptions seed)
     {
         if (string.IsNullOrWhiteSpace(seed.ClientSecret))
         {
@@ -866,6 +839,7 @@ public static class DbSeeder
             return;
         }
 
+        await reconciliation.ApplyAsync(existing, [Permissions.Endpoints.Introspection]);
         if (!await applications.ValidateClientSecretAsync(existing, seed.ClientSecret))
         {
             await WarnSecretRewriteAsync(logger, db, "asst-server", "Auth:Seed:AsstServer");
