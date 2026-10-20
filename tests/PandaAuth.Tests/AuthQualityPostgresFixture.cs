@@ -28,7 +28,8 @@ internal sealed class AuthQualityPostgresFixture : IAsyncDisposable
     internal static async Task<AuthQualityPostgresFixture> CreateAsync(IInterceptor? interceptor = null)
     {
         var builder = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("PANDA_AUTH_TEST_POSTGRES"));
-        if (builder.Host != "127.0.0.1" || builder.Port != 43823 || builder.Database != "postgres")
+        PostgresTestBoundary.ValidateEndpoint(builder, PostgresTestBoundary.SharedMode);
+        if (builder.Database != "postgres")
             throw new InvalidOperationException("Quality tests require the approved disposable loopback PostgreSQL cluster.");
         var name = "panda_auth_quality_" + Guid.NewGuid().ToString("N");
         await using (var admin = new NpgsqlConnection(builder.ConnectionString))
@@ -52,8 +53,8 @@ internal sealed class AuthQualityPostgresFixture : IAsyncDisposable
     {
         await Services.DisposeAsync();
         var builder = new NpgsqlConnectionStringBuilder(connection);
-        if (builder.Host != "127.0.0.1" || builder.Port != 43823 ||
-            builder.Database is null || !Regex.IsMatch(builder.Database, "^panda_auth_quality_[0-9a-f]{32}$"))
+        PostgresTestBoundary.ValidateEndpoint(builder, PostgresTestBoundary.SharedMode);
+        if (builder.Database is null || !Regex.IsMatch(builder.Database, "^panda_auth_quality_[0-9a-f]{32}$"))
             throw new InvalidOperationException("Refusing cleanup outside the task-owned quality database.");
         await using var db = new PandaAuthDbContext(new DbContextOptionsBuilder<PandaAuthDbContext>()
             .UseNpgsql(connection).UseOpenIddict().Options);
