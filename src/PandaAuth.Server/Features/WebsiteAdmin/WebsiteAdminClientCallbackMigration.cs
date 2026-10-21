@@ -4,6 +4,21 @@ namespace PandaAuth.Server.Features.WebsiteAdmin;
 
 internal static class WebsiteAdminClientCallbackMigration
 {
+    private static readonly HashSet<Uri> PreviousOperationRedirectUris =
+        [new("https://appliket.com/operation/signin-oidc")];
+    private static readonly HashSet<Uri> PreviousOperationLogoutUris =
+        [new("https://appliket.com/operation/signout-callback-oidc")];
+    private static readonly HashSet<Uri> PreviousAdminAndOperationRedirectUris =
+    [
+        new("https://appliket.com/admin/signin-oidc"),
+        new("https://appliket.com/operation/signin-oidc")
+    ];
+    private static readonly HashSet<Uri> PreviousAdminAndOperationLogoutUris =
+    [
+        new("https://appliket.com/admin/signout-callback-oidc"),
+        new("https://appliket.com/operation/signout-callback-oidc")
+    ];
+
     internal static void Apply(
         OpenIddictApplicationDescriptor descriptor,
         IReadOnlySet<Uri> expectedRedirectUris,
@@ -24,7 +39,12 @@ internal static class WebsiteAdminClientCallbackMigration
             descriptor.PostLogoutRedirectUris.ToHashSet().SetEquals(target.PostLogoutRedirectUris))
             return;
 
-        if (expectedRedirectUris.Count != 1 || expectedPostLogoutRedirectUris.Count != 1 ||
+        var knownPreviousState =
+            expectedRedirectUris.SetEquals(PreviousOperationRedirectUris) &&
+            expectedPostLogoutRedirectUris.SetEquals(PreviousOperationLogoutUris) ||
+            expectedRedirectUris.SetEquals(PreviousAdminAndOperationRedirectUris) &&
+            expectedPostLogoutRedirectUris.SetEquals(PreviousAdminAndOperationLogoutUris);
+        if (!knownPreviousState ||
             !descriptor.RedirectUris.ToHashSet().SetEquals(expectedRedirectUris) ||
             !descriptor.PostLogoutRedirectUris.ToHashSet().SetEquals(expectedPostLogoutRedirectUris))
         {
