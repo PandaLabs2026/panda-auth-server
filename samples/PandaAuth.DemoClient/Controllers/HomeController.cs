@@ -35,7 +35,7 @@ public sealed class HomeController(OpenIddictClientService clientService, IConfi
     {
         var result = await HttpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
         ViewData["HasAccessToken"] = result.Properties?.GetTokenValue("access_token") is not null;
-        ViewData["HasRefreshToken"] = User.FindFirst("refresh_token") is not null;
+        ViewData["HasRefreshToken"] = result.Properties?.GetTokenValue("refresh_token") is not null;
         return View();
     }
 
@@ -44,7 +44,8 @@ public sealed class HomeController(OpenIddictClientService clientService, IConfi
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Refresh(CancellationToken cancellationToken)
     {
-        var refreshToken = User.FindFirst("refresh_token")?.Value;
+        var ticket = await HttpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+        var refreshToken = ticket.Properties?.GetTokenValue("refresh_token");
         if (string.IsNullOrEmpty(refreshToken))
         {
             return RedirectToAction(nameof(Profile));
@@ -68,7 +69,8 @@ public sealed class HomeController(OpenIddictClientService clientService, IConfi
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Revoke(CancellationToken cancellationToken)
     {
-        var refreshToken = User.FindFirst("refresh_token")?.Value;
+        var ticket = await HttpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+        var refreshToken = ticket.Properties?.GetTokenValue("refresh_token");
         if (!string.IsNullOrEmpty(refreshToken))
         {
             await clientService.RevokeTokenAsync(new OpenIddictClientModels.RevocationRequest
@@ -105,7 +107,7 @@ public sealed class HomeController(OpenIddictClientService clientService, IConfi
 
         var redirectUri = result.Properties.RedirectUri ?? "/profile";
         await SignInWithTokensAsync(result.Principal,
-            result.Properties.GetTokenValue("access_token"),
+            result.Properties.GetTokenValue("backchannel_access_token"),
             result.Properties.GetTokenValue("refresh_token"));
 
         return LocalRedirect(redirectUri);
@@ -136,7 +138,6 @@ public sealed class HomeController(OpenIddictClientService clientService, IConfi
         if (refreshToken is not null)
         {
             tokens.Add(new AuthenticationToken { Name = "refresh_token", Value = refreshToken });
-            identity.AddClaim(new Claim("refresh_token", refreshToken));
         }
         properties.StoreTokens(tokens);
 
