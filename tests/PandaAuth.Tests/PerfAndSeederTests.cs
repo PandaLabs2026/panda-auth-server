@@ -179,6 +179,7 @@ public class PerfAndSeederTests
         [
             new Claim(ClaimTypes.NameIdentifier, user.Id),
             new Claim(LoginSessionService.StampClaim, stampOverride ?? user.SecurityStamp ?? ""),
+            new Claim(PandaAuth.Shared.PandaAuthClaims.SsoSessionId, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         ], LoginSessionService.Scheme));
         var ticket = new AuthenticationTicket(principal, LoginSessionService.Scheme);
         return new CookieValidatePrincipalContext(

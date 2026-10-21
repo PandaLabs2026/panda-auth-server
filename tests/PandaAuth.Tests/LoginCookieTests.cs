@@ -15,6 +15,24 @@ namespace PandaAuth.Tests;
 public class LoginCookieTests
 {
     [Fact]
+    public async Task LegacyCookieWithoutSharedIdentity_RequiresFreshLogin()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "legacy-session-fixture" };
+        await users.CreateAsync(user, "Fixture!Password123");
+        var cookie = await IssueAsync(provider, user);
+        var format = provider.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationOptions>>()
+            .Get(LoginSessionService.Scheme).TicketDataFormat;
+        var ticket = format.Unprotect(cookie[(LoginSessionService.Scheme.Length + 1)..])!;
+        var legacyPrincipal = new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(
+            ticket.Principal.Claims.Where(c => c.Type != PandaAuthClaims.SsoSessionId), LoginSessionService.Scheme));
+        var legacyCookie = LoginSessionService.Scheme + "=" + format.Protect(new AuthenticationTicket(legacyPrincipal, ticket.Properties, ticket.AuthenticationScheme));
+        using var scope = provider.CreateScope();
+        Assert.False((await Context(scope.ServiceProvider, legacyCookie).AuthenticateAsync(LoginSessionService.Scheme)).Succeeded);
+    }
+
+    [Fact]
     public async Task SharedLogout_RejectsOnlyTheSelectedDeviceCookie()
     {
         using var provider = TestUserStoreHost.Create();

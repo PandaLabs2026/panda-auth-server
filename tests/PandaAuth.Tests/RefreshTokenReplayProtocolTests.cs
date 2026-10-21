@@ -56,7 +56,7 @@ public sealed class RefreshTokenReplayProtocolTests
             Assert.Equal(HttpStatusCode.OK, exchanged.StatusCode);
             return ((await exchanged.Content.ReadFromJsonAsync<TokenResponse>())!, sid);
         }
-        using var api = factory.CreateClient();
+        using var api = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
         async Task<bool> ActiveAsync(string token)
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, "/connect/introspect")
@@ -115,6 +115,13 @@ public sealed class RefreshTokenReplayProtocolTests
         }));
         Assert.Equal(HttpStatusCode.BadRequest, refreshed.StatusCode);
         Assert.Contains("invalid_grant", await refreshed.Content.ReadAsStringAsync());
+        // RP-initiated logout must revoke the group even without the IDP browser Cookie.
+        Assert.NotNull(b.Token.IdentityToken);
+        using var endSession = await api.GetAsync("/connect/logout?client_id=replay-client"
+            + "&post_logout_redirect_uri=" + Uri.EscapeDataString("http://localhost/logout")
+            + "&id_token_hint=" + Uri.EscapeDataString(b.Token.IdentityToken!));
+        Assert.Equal(HttpStatusCode.Redirect, endSession.StatusCode);
+        Assert.False(await ActiveAsync(b.Token.AccessToken!));
     }
 
     [PostgresFact]
@@ -323,7 +330,8 @@ public sealed class RefreshTokenReplayProtocolTests
     private sealed record TokenResponse(
         [property: System.Text.Json.Serialization.JsonPropertyName("access_token")] string? AccessToken,
         [property: System.Text.Json.Serialization.JsonPropertyName("refresh_token")] string? RefreshToken,
-        [property: System.Text.Json.Serialization.JsonPropertyName("scope")] string? Scope);
+        [property: System.Text.Json.Serialization.JsonPropertyName("scope")] string? Scope,
+        [property: System.Text.Json.Serialization.JsonPropertyName("id_token")] string? IdentityToken = null);
 
     private sealed class ProtocolFactory(string connectionString) : WebApplicationFactory<Program>
     {
@@ -423,11 +431,13 @@ public sealed class RefreshTokenReplayProtocolTests
                 ClientType = OpenIddictConstants.ClientTypes.Public,
                 ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
                 RedirectUris = { new Uri("http://localhost/callback") },
+                PostLogoutRedirectUris = { new Uri("http://localhost/logout") },
                 Permissions =
                 {
                     OpenIddictConstants.Permissions.Endpoints.Authorization,
                     OpenIddictConstants.Permissions.Endpoints.Token,
                     OpenIddictConstants.Permissions.Endpoints.Revocation,
+                    OpenIddictConstants.Permissions.Endpoints.EndSession,
                     OpenIddictConstants.Permissions.Prefixes.Scope + "fleet.read",
                     OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
                     OpenIddictConstants.Permissions.GrantTypes.RefreshToken,

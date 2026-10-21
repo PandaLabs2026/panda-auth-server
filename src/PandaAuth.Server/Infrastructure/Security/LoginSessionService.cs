@@ -93,6 +93,7 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock)
         [
             new Claim(ClaimTypes.NameIdentifier, current.Id),
             new Claim(StampClaim, current.SecurityStamp ?? ""),
+            new Claim(PandaAuthClaims.SsoSessionId, Guid.NewGuid().ToString("N")),
         ], ReconfigurationScheme));
         await context.SignInAsync(ReconfigurationScheme, principal,
             new AuthenticationProperties { IsPersistent = false, AllowRefresh = false });
@@ -152,12 +153,7 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock)
     {
         var principal = context.Principal!;
         var ids = principal.FindAll(PandaAuthClaims.SsoSessionId).ToArray();
-        if (ids.Length == 0 && principal.Identity is ClaimsIdentity identity)
-        {
-            identity.AddClaim(new Claim(PandaAuthClaims.SsoSessionId, Guid.NewGuid().ToString("N")));
-            context.ShouldRenew = true;
-        }
-        else if (ids.Length != 1 || !Guid.TryParseExact(ids[0].Value, "N", out _))
+        if (ids.Length != 1 || !Guid.TryParseExact(ids[0].Value, "N", out _))
         {
             context.RejectPrincipal();
             await context.HttpContext.SignOutAsync(Scheme);
