@@ -21,6 +21,31 @@ namespace PandaAuth.Tests;
 public class PortalClientRegistrationPostgresTests
 {
     [PostgresFact]
+    public async Task ExistingRolesClient_ProducesIdempotentReceiptWithoutChangingRegistration()
+    {
+        await using var fixture = await RegistrationDatabase.CreateAsync();
+        var descriptor = PortalClientRequest.Descriptor("owned-existing-roles");
+        descriptor.Permissions.Add(OpenIddictConstants.Permissions.Scopes.Roles);
+        await using (var scope = fixture.Provider.CreateAsyncScope())
+            await scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>().CreateAsync(descriptor);
+        var raw = Request("owned-existing-roles");
+        var receipt = await fixture.Service.ExecuteAsync(raw);
+        Assert.Equal(receipt, await fixture.Service.ExecuteAsync(raw));
+        using var json = JsonDocument.Parse(receipt);
+        Assert.Equal("existing", json.RootElement.GetProperty("result").GetString());
+        Assert.Contains("scp:roles", json.RootElement.GetProperty("permissions").EnumerateArray().Select(x => x.GetString()));
+        await using (var scope = fixture.Provider.CreateAsyncScope())
+        {
+            var manager = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+            var app = await manager.FindByClientIdAsync("owned-existing-roles");
+            var actual = new OpenIddictApplicationDescriptor();
+            await manager.PopulateAsync(actual, app!);
+            Assert.Equal(PortalClientRequest.RegistrationDigest(descriptor), PortalClientRequest.RegistrationDigest(actual));
+        }
+        Assert.Equal((1, 1), await fixture.CountsAsync());
+    }
+
+    [PostgresFact]
     public async Task Register_ActuallyCreatesPublicClientAndDurableOperation()
     {
         await using var fixture = await RegistrationDatabase.CreateAsync();
@@ -117,7 +142,7 @@ public class PortalClientRegistrationPostgresTests
     [PostgresFact]
     public async Task ExistingMismatchedRegistration_IsNeverOverwrittenOrRecordedAsSuccess()
     {
-        foreach (var field in new[] { "secret", "type", "consent", "grant", "redirect", "pkce" })
+        foreach (var field in new[] { "secret", "type", "consent", "grant", "redirect", "pkce", "roles-extra" })
         {
             await using var fixture = await RegistrationDatabase.CreateAsync();
             await using (var scope = fixture.Provider.CreateAsyncScope())
@@ -127,6 +152,7 @@ public class PortalClientRegistrationPostgresTests
                 if (field == "type") { descriptor.ClientType = "confidential"; descriptor.ClientSecret = "synthetic-type-secret"; }
                 if (field == "consent") descriptor.ConsentType = "explicit";
                 if (field == "grant") descriptor.Permissions.Add("gt:refresh_token");
+                if (field == "roles-extra") { descriptor.Permissions.Add(OpenIddictConstants.Permissions.Scopes.Roles); descriptor.Permissions.Add("gt:refresh_token"); }
                 if (field == "redirect") descriptor.RedirectUris.Add(new Uri("https://foreign.invalid/callback"));
                 if (field == "pkce") descriptor.Requirements.Clear();
                 await scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>().CreateAsync(descriptor);

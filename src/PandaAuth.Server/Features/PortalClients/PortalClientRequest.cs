@@ -122,7 +122,7 @@ internal sealed record PortalClientRequest(JsonElement Json, string Digest, bool
             ["operationId"] = request.OperationId, ["requestDigest"] = request.Digest, ["clientId"] = descriptor.ClientId,
             ["result"] = result, ["clientType"] = descriptor.ClientType, ["consentType"] = descriptor.ConsentType, ["issuer"] = Issuer,
             ["redirectUris"] = new[] { Callback }, ["postLogoutRedirectUris"] = new[] { LogoutCallback },
-            ["permissions"] = PermissionsSet.Order(StringComparer.Ordinal).ToArray(), ["requirements"] = RequirementsSet,
+            ["permissions"] = descriptor.Permissions.Order(StringComparer.Ordinal).ToArray(), ["requirements"] = descriptor.Requirements.Order(StringComparer.Ordinal).ToArray(),
             ["registrationDigest"] = RegistrationDigest(descriptor), ["authMetaSource"] = request["authMetaSource"], ["authServerSource"] = request["authServerSource"],
             ["planReference"] = request["planReference"], ["executionReference"] = request["executionReference"], ["executor"] = Executor, ["observedUtc"] = Timestamp(now),
         };

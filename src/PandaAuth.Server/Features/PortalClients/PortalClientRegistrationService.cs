@@ -125,8 +125,17 @@ internal sealed class PortalClientRegistrationService(IServiceScopeFactory scope
         var descriptor = new OpenIddictApplicationDescriptor();
         await manager.PopulateAsync(descriptor, application);
         Require(application.ClientSecret is null && descriptor.ClientSecret is null && descriptor.ClientId is not null &&
-            RegistrationDigest(descriptor) == RegistrationDigest(Descriptor(descriptor.ClientId)), "registration-mismatch");
+            MatchesSupportedRegistration(descriptor), "registration-mismatch");
         return descriptor;
+    }
+    private static bool MatchesSupportedRegistration(OpenIddictApplicationDescriptor descriptor)
+    {
+        var expected = Descriptor(descriptor.ClientId!);
+        var actual = RegistrationDigest(descriptor);
+        if (actual == RegistrationDigest(expected)) return true;
+        // Preserve an existing Portal roles grant; do not add permissions to a client.
+        expected.Permissions.Add(OpenIddictConstants.Permissions.Scopes.Roles);
+        return actual == RegistrationDigest(expected);
     }
     private static JsonElement ReceiptJson(PortalOperationRecord record) => ClosedJson(Encoding.UTF8.GetBytes(record.ReceiptRaw));
     private static void BindOriginal(PortalClientRequest request, PortalOperationRecord original, JsonElement receipt)
