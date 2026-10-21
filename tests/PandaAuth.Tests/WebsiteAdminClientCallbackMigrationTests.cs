@@ -53,6 +53,48 @@ public sealed class WebsiteAdminClientCallbackMigrationTests
     }
 
     [Fact]
+    public void Already_at_target_is_a_noop_even_with_original_preconditions()
+    {
+        var target = Target();
+        var descriptor = new OpenIddictApplicationDescriptor
+        {
+            ClientId = "cloud-operation-web",
+            ClientSecret = "retained-secret-value",
+            DisplayName = "Retained display",
+            Permissions = { OpenIddictConstants.Permissions.Endpoints.Authorization },
+            Requirements = { OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange }
+        };
+        descriptor.RedirectUris.UnionWith(target.RedirectUris);
+        descriptor.PostLogoutRedirectUris.UnionWith(target.PostLogoutRedirectUris);
+        var original = Snapshot(descriptor);
+
+        WebsiteAdminClientCallbackMigration.Apply(descriptor,
+            new HashSet<Uri> { new("https://appliket.com/operation/signin-oidc") },
+            new HashSet<Uri> { new("https://appliket.com/operation/signout-callback-oidc") }, target);
+
+        Assert.Equal(original, Snapshot(descriptor));
+    }
+
+    [Fact]
+    public void Partial_target_is_not_treated_as_a_completed_migration()
+    {
+        var target = Target();
+        var descriptor = new OpenIddictApplicationDescriptor
+        {
+            ClientId = "cloud-operation-web",
+            PostLogoutRedirectUris = { new Uri("https://appliket.com/operation/signout-callback-oidc") }
+        };
+        descriptor.RedirectUris.UnionWith(target.RedirectUris);
+        var original = Snapshot(descriptor);
+
+        Assert.Throws<InvalidOperationException>(() => WebsiteAdminClientCallbackMigration.Apply(descriptor,
+            new HashSet<Uri> { new("https://appliket.com/operation/signin-oidc") },
+            new HashSet<Uri> { new("https://appliket.com/operation/signout-callback-oidc") }, target));
+
+        Assert.Equal(original, Snapshot(descriptor));
+    }
+
+    [Fact]
     public void Callback_set_drift_fails_without_mutating_the_descriptor()
     {
         var expectedRedirects = new HashSet<Uri> { new("https://appliket.com/operation/signin-oidc") };
