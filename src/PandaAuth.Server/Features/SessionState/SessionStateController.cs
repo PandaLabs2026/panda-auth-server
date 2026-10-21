@@ -11,7 +11,7 @@ namespace PandaAuth.Server.Features.SessionState;
 [Authorize(
     AuthenticationSchemes = OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme,
     Policy = SessionStateAuthorization.PolicyName)]
-public sealed class SessionStateController(SessionRevocationService revocations) : ControllerBase
+public sealed class SessionStateController(SessionRevocationService revocations, IConfiguration? configuration = null) : ControllerBase
 {
     [HttpPost("check")]
     public async Task<ActionResult<SessionStateCheckResponse>> Check(
@@ -63,6 +63,8 @@ public sealed class SessionStateController(SessionRevocationService revocations)
         Response.Headers.CacheControl = "no-store";
         if (!TryGetClientId(out _)) return Forbid();
         if (!TryGetSsoId(request?.SessionId, out var sid)) return BadRequest();
+        if (configuration?.GetValue<bool>(PandaAuthSessionApi.SharedLogoutEnabled) != true)
+            return StatusCode(StatusCodes.Status503ServiceUnavailable);
         await revocations.RevokeAsync(PandaAuthSessionApi.SsoPartition, sid, cancellationToken);
         return NoContent();
     }

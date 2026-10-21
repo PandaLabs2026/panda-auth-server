@@ -244,7 +244,9 @@ public sealed class AuthorizationController(
     public async Task<IActionResult> Logout()
     {
         // A validated id_token_hint identifies the login group even if the IDP Cookie is absent.
-        if (HttpContext.GetOpenIddictServerRequest() is not null)
+        if (HttpContext.GetOpenIddictServerRequest() is not null &&
+            HttpContext.RequestServices.GetRequiredService<IConfiguration>()
+                .GetValue<bool>(PandaAuthSessionApi.SharedLogoutEnabled))
         {
             var protocol = await HttpContext.AuthenticateAsync(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
             var hintedSid = protocol.Principal?.FindFirstValue(PandaAuthClaims.SsoSessionId);

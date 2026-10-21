@@ -337,6 +337,7 @@ public sealed class RefreshTokenReplayProtocolTests
     {
         private readonly ProtocolHostContentRoot _root = new(connectionString, new Dictionary<string, string>
         {
+            [PandaAuth.Shared.PandaAuthSessionApi.SharedLogoutEnabled] = "true",
             ["Auth:Issuer"] = "http://localhost/", ["Auth:HttpsRequired"] = "false", ["Auth:Seed:Enabled"] = "false",
             ["Logging:LogLevel:Default"] = "Warning", ["Logging:LogLevel:Microsoft.AspNetCore"] = "Warning",
         });

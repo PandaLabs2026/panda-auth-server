@@ -21,7 +21,7 @@ public sealed record LoginOutcome(
     PandaUser? User = null,
     bool RequiresMfaReconfiguration = false);
 
-public sealed class LoginSessionService(UserService users, TimeProvider clock)
+public sealed class LoginSessionService(UserService users, TimeProvider clock, IConfiguration? configuration = null)
 {
     public const string Scheme = "PandaAuth.Login.v2";
     public const string ReconfigurationScheme = "PandaAuth.MfaReconfiguration.v1";
@@ -78,7 +78,8 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock)
     public async Task SignOutAsync(HttpContext context)
     {
         var ticket = await context.AuthenticateAsync(Scheme);
-        if (ticket.Principal?.FindFirstValue(PandaAuthClaims.SsoSessionId) is { } sid)
+        if (configuration?.GetValue<bool>(PandaAuthSessionApi.SharedLogoutEnabled) == true &&
+            ticket.Principal?.FindFirstValue(PandaAuthClaims.SsoSessionId) is { } sid)
             await context.RequestServices.GetRequiredService<SessionRevocationService>()
                 .RevokeAsync(PandaAuthSessionApi.SsoPartition, sid, context.RequestAborted);
         await context.SignOutAsync(Scheme);
