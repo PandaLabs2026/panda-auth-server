@@ -53,6 +53,43 @@ public sealed class WebsiteAdminClientCallbackMigrationTests
     }
 
     [Fact]
+    public void Replaces_the_exact_live_legacy_admin_and_operation_callback_sets()
+    {
+        var beforeRedirects = new HashSet<Uri>
+        {
+            new("https://appliket.com/admin/signin-oidc"),
+            new("https://appliket.com/operation/signin-oidc")
+        };
+        var beforeLogouts = new HashSet<Uri>
+        {
+            new("https://appliket.com/admin/signout-callback-oidc"),
+            new("https://appliket.com/operation/signout-callback-oidc")
+        };
+        var descriptor = new OpenIddictApplicationDescriptor
+        {
+            ClientId = "cloud-operation-web",
+            ClientSecret = "retained-secret-value",
+            ClientType = OpenIddictConstants.ClientTypes.Confidential,
+            ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+            DisplayName = "PandaLabs 运维观测面"
+        };
+        descriptor.RedirectUris.UnionWith(beforeRedirects);
+        descriptor.PostLogoutRedirectUris.UnionWith(beforeLogouts);
+        var original = Snapshot(descriptor);
+
+        WebsiteAdminClientCallbackMigration.Apply(descriptor, beforeRedirects, beforeLogouts, Target());
+
+        var target = Target();
+        Assert.Equal(target.RedirectUris.OrderBy(uri => uri.Host), descriptor.RedirectUris.OrderBy(uri => uri.Host));
+        Assert.Equal(target.PostLogoutRedirectUris.OrderBy(uri => uri.Host), descriptor.PostLogoutRedirectUris.OrderBy(uri => uri.Host));
+        Assert.Equal(original with
+        {
+            RedirectUris = JoinUris(descriptor.RedirectUris),
+            PostLogoutRedirectUris = JoinUris(descriptor.PostLogoutRedirectUris)
+        }, Snapshot(descriptor));
+    }
+
+    [Fact]
     public void Already_at_target_is_a_noop_even_with_original_preconditions()
     {
         var target = Target();
@@ -105,6 +142,36 @@ public sealed class WebsiteAdminClientCallbackMigrationTests
             ClientSecret = "retained-secret-value",
             RedirectUris = { new Uri("https://other.appliket.com/operation/signin-oidc") },
             PostLogoutRedirectUris = { new Uri("https://appliket.com/operation/signout-callback-oidc") }
+        };
+        var original = Snapshot(descriptor);
+
+        Assert.Throws<InvalidOperationException>(() => WebsiteAdminClientCallbackMigration.Apply(
+            descriptor, expectedRedirects, expectedLogouts, Target()));
+
+        Assert.Equal(original, Snapshot(descriptor));
+    }
+
+    [Fact]
+    public void Unregistered_callback_in_the_exact_precondition_fails_without_mutation()
+    {
+        var unexpected = new Uri("https://other.appliket.com/operation/signin-oidc");
+        var expectedRedirects = new HashSet<Uri>
+        {
+            new("https://appliket.com/admin/signin-oidc"),
+            new("https://appliket.com/operation/signin-oidc"),
+            unexpected
+        };
+        var expectedLogouts = new HashSet<Uri>
+        {
+            new("https://appliket.com/admin/signout-callback-oidc"),
+            new("https://appliket.com/operation/signout-callback-oidc")
+        };
+        var descriptor = new OpenIddictApplicationDescriptor
+        {
+            RedirectUris = { new("https://appliket.com/admin/signin-oidc"),
+                new("https://appliket.com/operation/signin-oidc"), unexpected },
+            PostLogoutRedirectUris = { new("https://appliket.com/admin/signout-callback-oidc"),
+                new("https://appliket.com/operation/signout-callback-oidc") }
         };
         var original = Snapshot(descriptor);
 
