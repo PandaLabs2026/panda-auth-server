@@ -11,7 +11,7 @@ namespace PandaAuth.Server.Features.SessionState;
 [Authorize(
     AuthenticationSchemes = OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme,
     Policy = SessionStateAuthorization.PolicyName)]
-public sealed class SessionStateController(SessionRevocationService revocations) : ControllerBase
+public sealed class SessionStateController(SessionRevocationService revocations, IConfiguration? configuration = null) : ControllerBase
 {
     [HttpPost("check")]
     public async Task<ActionResult<SessionStateCheckResponse>> Check(
@@ -43,6 +43,36 @@ public sealed class SessionStateController(SessionRevocationService revocations)
     {
         clientId = User.FindFirst(OpenIddict.Abstractions.OpenIddictConstants.Claims.ClientId)?.Value ?? string.Empty;
         return clientId is PandaAuthSessionApi.AdminClientId or PandaAuthSessionApi.MeClientId;
+    }
+
+    [HttpPost("sso/check")]
+    public async Task<ActionResult<SessionStateCheckResponse>> CheckSso(
+        [FromBody] SessionStateCheckRequest? request, CancellationToken cancellationToken)
+    {
+        Response.Headers.CacheControl = "no-store";
+        if (!TryGetClientId(out _)) return Forbid();
+        if (!TryGetSsoId(request?.SessionId, out var sid)) return BadRequest();
+        return Ok(new SessionStateCheckResponse(await revocations.IsRevokedAsync(
+            PandaAuthSessionApi.SsoPartition, sid, cancellationToken)));
+    }
+
+    [HttpPost("sso/revoke")]
+    public async Task<IActionResult> RevokeSso(
+        [FromBody] SessionStateRevokeRequest? request, CancellationToken cancellationToken)
+    {
+        Response.Headers.CacheControl = "no-store";
+        if (!TryGetClientId(out _)) return Forbid();
+        if (!TryGetSsoId(request?.SessionId, out var sid)) return BadRequest();
+        if (configuration?.GetValue<bool>(PandaAuthSessionApi.SharedLogoutEnabled) != true)
+            return StatusCode(StatusCodes.Status503ServiceUnavailable);
+        await revocations.RevokeAsync(PandaAuthSessionApi.SsoPartition, sid, cancellationToken);
+        return NoContent();
+    }
+
+    private static bool TryGetSsoId(string? value, out string sid)
+    {
+        sid = value ?? string.Empty;
+        return Guid.TryParseExact(sid, "N", out _);
     }
 
     private static bool TryGetSessionId(string? value, out string sessionId)

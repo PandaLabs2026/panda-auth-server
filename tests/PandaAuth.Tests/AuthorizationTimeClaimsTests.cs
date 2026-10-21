@@ -5,6 +5,7 @@ using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Authorization;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Shared;
 using Xunit;
 using static OpenIddict.Abstractions.OpenIddictConstants;
 
@@ -12,6 +13,28 @@ namespace PandaAuth.Tests;
 
 public class AuthorizationTimeClaimsTests
 {
+    [Fact]
+    public async Task SharedSession_IsInheritedFromVerifiedSourceAndSurvivesTokenReissue()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var user = await UserAsync(provider);
+        var source = Source("1700000000");
+        const string sid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        ((ClaimsIdentity)source.Identity!).AddClaim(new Claim(PandaAuthClaims.SsoSessionId, sid));
+        var controller = TestUserStoreHost.CreateAuthorizationController(provider);
+        var issued = await controller.CreatePrincipalAsync(user, [Scopes.OpenId], source);
+        var claim = Assert.Single(issued.FindAll(PandaAuthClaims.SsoSessionId));
+        Assert.Equal(sid, claim.Value);
+        Assert.Contains(Destinations.IdentityToken, claim.GetDestinations());
+        var refreshed = await controller.CreatePrincipalAsync(user, [Scopes.OpenId], issued, Claims.AuthenticationTime);
+        Assert.Equal(sid, Assert.Single(refreshed.FindAll(PandaAuthClaims.SsoSessionId)).Value);
+        ((ClaimsIdentity)source.Identity!).AddClaim(new Claim(PandaAuthClaims.SsoSessionId, sid));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => controller.CreatePrincipalAsync(user, [Scopes.OpenId], source));
+        var policy = provider.GetRequiredService<ClaimsPolicyService>();
+        Assert.False((await policy.AddUserClaimAsync(user.Id, PandaAuthClaims.SsoSessionId, sid, Scopes.OpenId)).Succeeded);
+        Assert.False((await policy.AddUserClaimAsync(user.Id, PandaAuthClaims.SubjectType, "machine", Scopes.OpenId)).Succeeded);
+    }
+
     [Fact]
     public void ExceedsMaxAge_PinsBoundarySemantics()
     {

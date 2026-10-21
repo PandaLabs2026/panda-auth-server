@@ -243,6 +243,17 @@ public sealed class AuthorizationController(
     [HttpPost("logout")]
     public async Task<IActionResult> Logout()
     {
+        // A validated id_token_hint identifies the login group even if the IDP Cookie is absent.
+        if (HttpContext.GetOpenIddictServerRequest() is not null &&
+            HttpContext.RequestServices.GetRequiredService<IConfiguration>()
+                .GetValue<bool>(PandaAuthSessionApi.SharedLogoutEnabled))
+        {
+            var protocol = await HttpContext.AuthenticateAsync(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+            var hintedSid = protocol.Principal?.FindFirstValue(PandaAuthClaims.SsoSessionId);
+            if (Guid.TryParseExact(hintedSid, "N", out _))
+                await HttpContext.RequestServices.GetRequiredService<PandaAuth.Server.Features.SessionState.SessionRevocationService>()
+                    .RevokeAsync(PandaAuthSessionApi.SsoPartition, hintedSid, HttpContext.RequestAborted);
+        }
         // 尽力注销本地登录 Cookie；OpenIddict 负责校验 post_logout_redirect_uri 并完成协议层登出。
         if (User.Identity?.IsAuthenticated == true)
         {
@@ -274,6 +285,13 @@ public sealed class AuthorizationController(
         // 人类主体事实（subject_type=human + 标准 auth_time 整秒）经 FleetHumanPrincipalClaims 从
         // 受信登录凭据继承；缺失/畸形/重复即抛出（上层转 invalid grant），绝不回退合成 "now"。
         identity.AddClaims(FleetHumanPrincipalClaims.Build(mfaSource, authenticationTimeClaim));
+        var sessionIds = mfaSource?.FindAll(PandaAuthClaims.SsoSessionId).ToArray() ?? [];
+        if (sessionIds.Length > 0)
+        {
+            if (sessionIds.Length != 1 || !Guid.TryParseExact(sessionIds[0].Value, "N", out _))
+                throw new InvalidOperationException("Invalid login session identity.");
+            identity.AddClaim(new Claim(PandaAuthClaims.SsoSessionId, sessionIds[0].Value));
+        }
 
         if (tenantContextAccessor.Current is { } tenant)
         {
@@ -326,7 +344,7 @@ public sealed class AuthorizationController(
         principal.SetDestinations(claim => claim.Type switch
         {
             // auth_time 与 subject_type 是控制面 introspection 契约面：必须随 AT 投影到内省结果。
-            Claims.AuthenticationTime or PandaAuthClaims.SubjectType => [Destinations.AccessToken, Destinations.IdentityToken],
+            Claims.AuthenticationTime or PandaAuthClaims.SubjectType or PandaAuthClaims.SsoSessionId => [Destinations.AccessToken, Destinations.IdentityToken],
             Claims.Name when principal.HasScope(Scopes.Profile) => [Destinations.AccessToken, Destinations.IdentityToken],
             _ => [Destinations.AccessToken],
         });

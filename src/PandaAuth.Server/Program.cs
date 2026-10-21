@@ -189,6 +189,8 @@ openIddict.AddServer(options =>
             .SetRefreshTokenLifetime(TimeSpan.FromDays(14))
             .SetAuthorizationCodeLifetime(TimeSpan.FromMinutes(5));
         options.Configure(RefreshTokenPolicy.Configure);
+        options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ProcessAuthenticationContext>(handler =>
+            handler.UseScopedHandler<RejectRevokedSsoSession>().SetOrder(int.MaxValue));
 
         options.RegisterScopes(
             OpenIddictConstants.Scopes.OpenId,
@@ -240,6 +242,8 @@ openIddict.AddServer(options =>
         // Make TokenRevocationService effective for API requests: revoked token entries
         // must not continue to authenticate merely because the token is self-contained.
         options.EnableTokenEntryValidation();
+        options.AddEventHandler<OpenIddict.Validation.OpenIddictValidationEvents.ProcessAuthenticationContext>(handler =>
+            handler.UseScopedHandler<RejectRevokedSsoBearer>().SetOrder(int.MaxValue));
     });
 
 // Admin API 角色门禁：按 claim 短名（"role"）断言而非 Roles=——后者走 IsInRole，
