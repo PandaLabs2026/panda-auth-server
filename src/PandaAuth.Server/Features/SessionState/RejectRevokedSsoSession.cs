@@ -17,7 +17,8 @@ public sealed class RejectRevokedSsoSession(SessionRevocationService revocations
         foreach (var principal in principals)
         {
             var ids = principal?.FindAll(PandaAuthClaims.SsoSessionId).ToArray() ?? [];
-            if (principal is null || (ids.Length == 0 && principal.FindFirstValue(PandaAuthClaims.SubjectType) == PandaAuthClaims.SubjectTypes.Machine))
+            var kinds = principal?.FindAll(PandaAuthClaims.SubjectType).ToArray() ?? [];
+            if (principal is null || (ids.Length == 0 && kinds.Length == 1 && kinds[0].Value == PandaAuthClaims.SubjectTypes.Machine))
                 continue; // Machine identities have no browser login session.
             if (ids.Length != 1 || !Guid.TryParseExact(ids[0].Value, "N", out _)
                 || await revocations.IsRevokedAsync(PandaAuthSessionApi.SsoPartition, ids[0].Value, context.CancellationToken))

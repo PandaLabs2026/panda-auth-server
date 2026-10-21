@@ -32,6 +32,7 @@ public class AuthorizationTimeClaimsTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => controller.CreatePrincipalAsync(user, [Scopes.OpenId], source));
         var policy = provider.GetRequiredService<ClaimsPolicyService>();
         Assert.False((await policy.AddUserClaimAsync(user.Id, PandaAuthClaims.SsoSessionId, sid, Scopes.OpenId)).Succeeded);
+        Assert.False((await policy.AddUserClaimAsync(user.Id, PandaAuthClaims.SubjectType, "machine", Scopes.OpenId)).Succeeded);
     }
 
     [Fact]
