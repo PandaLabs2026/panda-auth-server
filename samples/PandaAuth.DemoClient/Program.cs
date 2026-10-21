@@ -23,10 +23,23 @@ builder.Services
 builder.Services.AddOpenIddict()
     .AddClient(options =>
     {
-        options.UseAspNetCore()
+        options.AllowAuthorizationCodeFlow();
+        options.AllowRefreshTokenFlow();
+        // The demo keeps tokens in its protected authentication ticket, not an
+        // OpenIddict database. Ephemeral state keys are suitable for this local,
+        // single-process sample; restarting invalidates pending login state.
+        options.DisableTokenStorage();
+        options.AddEphemeralEncryptionKey();
+        options.AddEphemeralSigningKey();
+        options.UseSystemNetHttp();
+        var aspNetCore = options.UseAspNetCore()
             .EnableRedirectionEndpointPassthrough()
             .EnablePostLogoutRedirectionEndpointPassthrough()
             .EnableErrorPassthrough();
+        // The documented sample callback is HTTP loopback. Never relax the
+        // HTTPS requirement outside the local Development environment.
+        if (builder.Environment.IsDevelopment())
+            aspNetCore.DisableTransportSecurityRequirement();
 
         options.AddRegistration(new OpenIddictClientRegistration
         {
