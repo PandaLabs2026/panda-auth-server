@@ -45,11 +45,7 @@ internal static class WebsiteAdminClientCommand
             var allowed = new HashSet<string> { "clientSecret", "administratorEmail", "validUntilUtc", "operationId", "expectedRedirectUris", "expectedPostLogoutRedirectUris", "expectedAdditionalPermissions" };
             if (root.EnumerateObject().Any(p => !allowed.Remove(p.Name)) || allowed.Count != 0) throw new InvalidOperationException();
             using var endpoints = JsonDocument.Parse(PortalClientCommand.ReadProtectedFile(Root + "/endpoints.json", uid, false));
-            var baseUrl = endpoints.RootElement.GetProperty("adminPublicUrl").GetString()!;
-            if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var adminUri) || adminUri.Scheme != "https" ||
-                !string.IsNullOrEmpty(adminUri.UserInfo) || !string.IsNullOrEmpty(adminUri.Query) ||
-                !string.IsNullOrEmpty(adminUri.Fragment) || adminUri.AbsolutePath == "/" || !baseUrl.EndsWith('/')) throw new InvalidOperationException();
-            var callback = new Uri(adminUri, "signin-oidc"); var logout = new Uri(adminUri, "signout-callback-oidc");
+            var callbackSet = WebsiteAdminCallbackSet.FromEndpoints(endpoints.RootElement);
             var expectedRedirect = root.GetProperty("expectedRedirectUris").EnumerateArray().Select(x => new Uri(x.GetString()!, UriKind.Absolute)).ToHashSet();
             var expectedLogout = root.GetProperty("expectedPostLogoutRedirectUris").EnumerateArray().Select(x => new Uri(x.GetString()!, UriKind.Absolute)).ToHashSet();
             var secret = root.GetProperty("clientSecret").GetString()!;
@@ -74,7 +70,6 @@ internal static class WebsiteAdminClientCommand
             {
                 ClientId = ClientId, ClientType = ClientTypes.Confidential, ClientSecret = secret,
                 ConsentType = ConsentTypes.Implicit, DisplayName = "PandaLabs 运维观测面",
-                RedirectUris = { callback }, PostLogoutRedirectUris = { logout },
                 Permissions = { Permissions.Endpoints.Authorization, Permissions.Endpoints.Token,
                     Permissions.Endpoints.EndSession, Permissions.Endpoints.Introspection, Permissions.Endpoints.Revocation,
                     Permissions.GrantTypes.AuthorizationCode, Permissions.GrantTypes.RefreshToken,
@@ -82,6 +77,8 @@ internal static class WebsiteAdminClientCommand
                     Permissions.Prefixes.Scope + Scopes.OfflineAccess },
                 Requirements = { Requirements.Features.ProofKeyForCodeExchange },
             };
+            descriptor.RedirectUris.UnionWith(callbackSet.RedirectUris);
+            descriptor.PostLogoutRedirectUris.UnionWith(callbackSet.PostLogoutRedirectUris);
             var existing = await manager.FindByClientIdAsync(ClientId);
             if (existing is null)
             {
@@ -103,6 +100,7 @@ internal static class WebsiteAdminClientCommand
                     !await manager.ValidateClientSecretAsync(existing, secret)) throw new InvalidOperationException();
                 var permissionsChanged = !current.Permissions.SetEquals(descriptor.Permissions);
                 var redirectsChanged = !current.RedirectUris.SetEquals(descriptor.RedirectUris) || !current.PostLogoutRedirectUris.SetEquals(descriptor.PostLogoutRedirectUris);
+                if (permissionsChanged && redirectsChanged) throw new InvalidOperationException();
                 List<string> addedPermissions = [];
                 if (permissionsChanged)
                 {
@@ -118,10 +116,7 @@ internal static class WebsiteAdminClientCommand
                 }
                 if (redirectsChanged)
                 {
-                    if (expectedRedirect.Count != 1 || expectedLogout.Count != 1 ||
-                        !current.RedirectUris.SetEquals(expectedRedirect) || !current.PostLogoutRedirectUris.SetEquals(expectedLogout)) throw new InvalidOperationException();
-                    current.RedirectUris.Clear(); current.RedirectUris.UnionWith(descriptor.RedirectUris);
-                    current.PostLogoutRedirectUris.Clear(); current.PostLogoutRedirectUris.UnionWith(descriptor.PostLogoutRedirectUris);
+                    WebsiteAdminClientCallbackMigration.Apply(current, expectedRedirect, expectedLogout, callbackSet);
                 }
                 if (permissionsChanged || redirectsChanged)
                 {
@@ -134,12 +129,25 @@ internal static class WebsiteAdminClientCommand
                     if (redirectsChanged) db.AdminAuditLogs.Add(new PandaAuth.Server.Domain.AdminAuditLog {
                         Action = "website-admin-callback-migrate", TargetType = "client", TargetId = ClientId,
                         ActorUserId = "host-operator", ActorUserName = actorUserName,
-                        Detail = JsonSerializer.Serialize(new { operationId = operation, redirectUri = callback.AbsoluteUri, logoutUri = logout.AbsoluteUri }), CreatedAt = DateTimeOffset.UtcNow });
+                        Detail = JsonSerializer.Serialize(new
+                        {
+                            operationId = operation,
+                            redirectUris = callbackSet.RedirectUris.Select(uri => uri.AbsoluteUri).Order(StringComparer.Ordinal),
+                            postLogoutRedirectUris = callbackSet.PostLogoutRedirectUris.Select(uri => uri.AbsoluteUri).Order(StringComparer.Ordinal)
+                        }), CreatedAt = DateTimeOffset.UtcNow });
                     await db.SaveChangesAsync();
                 }
             }
             await transaction.CommitAsync();
-            Console.WriteLine(JsonSerializer.Serialize(new { clientId = ClientId, issuer = Issuer, subject = user.Id, operationId = operation }));
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                clientId = ClientId,
+                issuer = Issuer,
+                subject = user.Id,
+                operationId = operation,
+                redirectUris = callbackSet.RedirectUris.Select(uri => uri.AbsoluteUri).Order(StringComparer.Ordinal),
+                postLogoutRedirectUris = callbackSet.PostLogoutRedirectUris.Select(uri => uri.AbsoluteUri).Order(StringComparer.Ordinal)
+            }));
             return 0;
         }
         catch (Exception exception)
