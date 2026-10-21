@@ -7,6 +7,17 @@ namespace PandaAuth.Tests;
 
 public class PortalClientRegistrationTests
 {
+    [Fact]
+    public void ExistingRolesReceipt_ReportsActualPermissionsAndMatchingDigest()
+    {
+        var descriptor = PortalClientRequest.Descriptor("owned-existing-roles");
+        descriptor.Permissions.Add(OpenIddict.Abstractions.OpenIddictConstants.Permissions.Scopes.Roles);
+        var request = PortalClientRequest.Parse(PortalClientRegistrationPostgresTests.Request("owned-existing-roles"), false, DateTimeOffset.UtcNow);
+        using var receipt = JsonDocument.Parse(PortalClientRequest.Receipt(request, descriptor, "existing", DateTimeOffset.UtcNow));
+        Assert.Equal(descriptor.Permissions.Order(StringComparer.Ordinal), receipt.RootElement.GetProperty("permissions").EnumerateArray().Select(x => x.GetString()!).Order(StringComparer.Ordinal));
+        Assert.Equal(PortalClientRequest.RegistrationDigest(descriptor), receipt.RootElement.GetProperty("registrationDigest").GetString());
+    }
+
     [Theory]
     [InlineData("clientId", ".portal")]
     [InlineData("operationId", "00000000-0000-0000-0000-000000000000")]
