@@ -36,7 +36,7 @@ public sealed class AdminClaimsController(
     [HttpPost("users/{userId}")]
     public async Task<IActionResult> AddUser(string userId, [FromBody] AdminClaimRequest? request, CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return Forbid();
+        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
         if (request is null) return Problem(statusCode: StatusCodes.Status400BadRequest, title: "请求体缺失");
 
         var result = await claims.AddUserClaimAsync(userId, request.ClaimType, request.ClaimValue, request.Scope);
@@ -54,7 +54,7 @@ public sealed class AdminClaimsController(
     [HttpDelete("users/{userId}/{claimId:long}")]
     public async Task<IActionResult> RemoveUser(string userId, long claimId, CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return Forbid();
+        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
         var claim = await db.UserClaims.SingleOrDefaultAsync(item => item.Id == claimId && item.UserId == userId, cancellationToken);
         if (claim is null) return NotFound();
         var detail = new { claim.ClaimType, claim.ClaimValue, claim.Scope };
@@ -79,7 +79,7 @@ public sealed class AdminClaimsController(
     [HttpPost("roles/{roleId}")]
     public async Task<IActionResult> AddRole(string roleId, [FromBody] AdminClaimRequest? request, CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return Forbid();
+        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
         if (request is null) return Problem(statusCode: StatusCodes.Status400BadRequest, title: "请求体缺失");
 
         var result = await claims.AddRoleClaimAsync(roleId, request.ClaimType, request.ClaimValue, request.Scope);
@@ -97,7 +97,7 @@ public sealed class AdminClaimsController(
     [HttpDelete("roles/{roleId}/{claimId:long}")]
     public async Task<IActionResult> RemoveRole(string roleId, long claimId, CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return Forbid();
+        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
         var claim = await db.RoleClaims.SingleOrDefaultAsync(item => item.Id == claimId && item.RoleId == roleId, cancellationToken);
         if (claim is null) return NotFound();
         var detail = new { claim.ClaimType, claim.ClaimValue, claim.Scope };

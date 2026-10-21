@@ -96,7 +96,7 @@ public sealed class AdminUsersController(
         [FromBody] AdminCreateUserRequest? request,
         CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasValidMfa(User)) return Forbid();
+        if (!AdminApiAuthorization.HasValidMfa(User)) return AdminApiAuthorization.MfaRequired();
 
         if (request is null || string.IsNullOrWhiteSpace(request.UserName))
         {
@@ -186,7 +186,7 @@ public sealed class AdminUsersController(
         [FromBody] AdminUserStatusRequest? request,
         CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return Forbid();
+        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
         // Deleted 是注销语义（软删除），不经本端点设置——注销走专门的 deactivate 端点（逐字确认）。
         if (request is null || request.Status is not (UserStatus.Active or UserStatus.Frozen))
         {
@@ -256,7 +256,7 @@ public sealed class AdminUsersController(
         [FromBody] AdminResetPasswordRequest? request,
         CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasValidMfa(User)) return Forbid();
+        if (!AdminApiAuthorization.HasValidMfa(User)) return AdminApiAuthorization.MfaRequired();
 
         var user = await userManager.FindByIdAsync(id);
         if (user is null)
@@ -333,7 +333,7 @@ public sealed class AdminUsersController(
         [FromBody] AdminUserRolesRequest? request,
         CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return Forbid();
+        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
         if (request?.Roles is null || request.Roles.Any(string.IsNullOrWhiteSpace))
         {
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "无效的角色集合",
@@ -448,7 +448,7 @@ public sealed class AdminUsersController(
     [HttpPost("{id}/unlock")]
     public async Task<IActionResult> Unlock(string id, CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasValidMfa(User)) return Forbid();
+        if (!AdminApiAuthorization.HasValidMfa(User)) return AdminApiAuthorization.MfaRequired();
 
         var user = await userManager.FindByIdAsync(id);
         if (user is null)
@@ -506,7 +506,7 @@ public sealed class AdminUsersController(
     [HttpPost("{id}/revoke-tokens")]
     public async Task<IActionResult> RevokeTokens(string id, CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasValidMfa(User)) return Forbid();
+        if (!AdminApiAuthorization.HasValidMfa(User)) return AdminApiAuthorization.MfaRequired();
 
         var user = await userManager.FindByIdAsync(id);
         if (user is null)
@@ -584,7 +584,7 @@ public sealed class AdminUsersController(
         [FromBody] AdminUserProfileRequest? request,
         CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasValidMfa(User)) return Forbid();
+        if (!AdminApiAuthorization.HasValidMfa(User)) return AdminApiAuthorization.MfaRequired();
 
         if (request is null)
         {
@@ -659,7 +659,7 @@ public sealed class AdminUsersController(
     {
         if (!AdminApiAuthorization.HasRecentWebAuthn(User))
         {
-            return Forbid();
+            return AdminApiAuthorization.MfaRequired();
         }
 
         var user = await userManager.FindByIdAsync(id);
@@ -731,7 +731,7 @@ public sealed class AdminUsersController(
         [FromBody] AdminDeactivateRequest? request,
         CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return Forbid();
+        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
         var user = await userManager.FindByIdAsync(id);
         if (user is null)
         {

@@ -260,7 +260,7 @@ public sealed class AdminClaimsControllerTests
         var user = new PandaUser { UserName = "claims-no-mfa" };
         Assert.True((await provider.GetRequiredService<UserService>().CreateAsync(user)).Succeeded);
 
-        var result = Assert.IsType<ForbidResult>(await controller.AddUser(
+        AdminMfaResponseTests.AssertStepUpResponse(await controller.AddUser(
             user.Id, new AdminClaimRequest("panda:tenant", "tenant-a", "api"), CancellationToken.None));
         Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().UserClaims.AsEnumerable());
         Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents.AsEnumerable());

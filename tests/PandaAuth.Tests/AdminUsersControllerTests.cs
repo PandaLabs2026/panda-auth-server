@@ -268,7 +268,7 @@ public class AdminUsersControllerTests
 
         var result = await controller.ResetPassword(user.Id, null, CancellationToken.None);
 
-        Assert.IsType<ForbidResult>(result);
+        AdminMfaResponseTests.AssertStepUpResponse(result);
         Assert.Empty(revoker.RevokedUsers);
     }
 
@@ -282,7 +282,7 @@ public class AdminUsersControllerTests
             new AdminCreateUserRequest("create-without-mfa", null, null, null, null, GrantAdminRole: false),
             CancellationToken.None);
 
-        Assert.IsType<ForbidResult>(result);
+        AdminMfaResponseTests.AssertStepUpResponse(result);
         Assert.Null(await provider.GetRequiredService<UserService>().FindByNameAsync("create-without-mfa"));
     }
 

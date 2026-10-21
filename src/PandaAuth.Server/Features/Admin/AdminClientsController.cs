@@ -91,7 +91,7 @@ public sealed class AdminClientsController(
         [FromBody] AdminRedirectUrisRequest? request,
         CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return Forbid();
+        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
         var application = await applications.FindByClientIdAsync(clientId);
         if (application is null)
         {
@@ -166,7 +166,7 @@ public sealed class AdminClientsController(
         [FromBody] AdminPermissionsRequest? request,
         CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return Forbid();
+        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
         var application = await applications.FindByClientIdAsync(clientId);
         if (application is null)
         {
@@ -238,7 +238,7 @@ public sealed class AdminClientsController(
     [HttpPost("{clientId}/rotate-secret")]
     public async Task<IActionResult> RotateSecret(string clientId, CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return Forbid();
+        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
         var application = await applications.FindByClientIdAsync(clientId);
         if (application is null)
         {
