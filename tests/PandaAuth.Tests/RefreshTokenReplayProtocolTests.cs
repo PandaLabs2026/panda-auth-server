@@ -20,6 +20,104 @@ namespace PandaAuth.Tests;
 public sealed class RefreshTokenReplayProtocolTests
 {
     [PostgresFact]
+    public async Task SharedLogout_ProtocolRejectsAccessAndRefresh_ButPreservesAnotherDevice()
+    {
+        await using var database = await TestDatabase.CreateAsync();
+        await database.MigrateAsync();
+        await database.SeedAsync(sessionClients: true);
+        await using var factory = new ProtocolFactory(database.ConnectionString);
+        async Task<(TokenResponse Token, string Sid)> LoginAsync()
+        {
+            using var browser = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+            const string verifier = "sso-protocol-verifier-012345678901234567890123456789";
+            var authorize = "/connect/authorize?client_id=replay-client&redirect_uri=http%3A%2F%2Flocalhost%2Fcallback"
+                + "&response_type=code&scope=openid%20offline_access%20fleet.read&state=fixture"
+                + "&code_challenge_method=S256&code_challenge=" + CodeChallenge(verifier);
+            using var page = await browser.GetAsync("/account/login");
+            using var login = await browser.PostAsync("/account/login", new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["__RequestVerificationToken"] = ExtractHiddenValue(await page.Content.ReadAsStringAsync(), "__RequestVerificationToken"),
+                ["UserName"] = "replay-user", ["Password"] = "Strong!Pass123", ["ReturnUrl"] = authorize,
+            }));
+            Assert.Equal(HttpStatusCode.Redirect, login.StatusCode);
+            var cookie = login.Headers.GetValues("Set-Cookie").Single(c => c.StartsWith(LoginSessionService.Scheme + "=", StringComparison.Ordinal))
+                .Split(';')[0][(LoginSessionService.Scheme.Length + 1)..];
+            var format = factory.Services.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationOptions>>()
+                .Get(LoginSessionService.Scheme).TicketDataFormat;
+            var sid = format.Unprotect(cookie)!.Principal.FindFirst(PandaAuth.Shared.PandaAuthClaims.SsoSessionId)!.Value;
+            using var authorization = await browser.GetAsync(authorize);
+            Assert.Equal(HttpStatusCode.Redirect, authorization.StatusCode);
+            var code = ExtractQueryValue(AbsoluteUri(authorization.Headers.Location!), "code");
+            using var exchanged = await browser.PostAsync("/connect/token", new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["client_id"] = "replay-client", ["grant_type"] = "authorization_code", ["code"] = code,
+                ["redirect_uri"] = "http://localhost/callback", ["code_verifier"] = verifier,
+            }));
+            Assert.Equal(HttpStatusCode.OK, exchanged.StatusCode);
+            return ((await exchanged.Content.ReadFromJsonAsync<TokenResponse>())!, sid);
+        }
+        using var api = factory.CreateClient();
+        async Task<bool> ActiveAsync(string token)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/connect/introspect")
+            { Content = new FormUrlEncodedContent(new Dictionary<string, string> { ["token"] = token }) };
+            request.Headers.Authorization = new("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes("fleet-api:fleet-api-test-secret")));
+            using var response = await api.SendAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+            return body.GetProperty("active").GetBoolean();
+        }
+        var a = await LoginAsync();
+        var b = await LoginAsync();
+        Assert.NotEqual(a.Sid, b.Sid);
+        Assert.True(await ActiveAsync(a.Token.AccessToken!));
+        Assert.True(await ActiveAsync(b.Token.AccessToken!));
+        async Task<string> SessionTokenAsync(string clientId, string scope)
+        {
+            using var response = await api.PostAsync("/connect/token", new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["client_id"] = clientId, ["client_secret"] = "fixture-session-secret", ["grant_type"] = "client_credentials", ["scope"] = scope,
+            }));
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            return (await response.Content.ReadFromJsonAsync<TokenResponse>())!.AccessToken!;
+        }
+        var adminToken = await SessionTokenAsync(PandaAuth.Shared.PandaAuthSessionApi.AdminClientId, PandaAuth.Shared.PandaAuthSessionApi.Scope);
+        var meToken = await SessionTokenAsync(PandaAuth.Shared.PandaAuthSessionApi.MeClientId, PandaAuth.Shared.PandaAuthSessionApi.Scope);
+        await Task.WhenAll(Enumerable.Range(0, 4).Select(async _ =>
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, PandaAuth.Shared.PandaAuthSessionApi.SsoRevoke)
+            { Content = JsonContent.Create(new PandaAuth.Shared.SessionStateRevokeRequest(a.Sid)) };
+            request.Headers.Authorization = new("Bearer", adminToken);
+            using var response = await api.SendAsync(request);
+            Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        }));
+        using (var request = new HttpRequestMessage(HttpMethod.Post, PandaAuth.Shared.PandaAuthSessionApi.SsoCheck)
+        { Content = JsonContent.Create(new PandaAuth.Shared.SessionStateCheckRequest(a.Sid)) })
+        {
+            request.Headers.Authorization = new("Bearer", meToken);
+            using var response = await api.SendAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.True((await response.Content.ReadFromJsonAsync<PandaAuth.Shared.SessionStateCheckResponse>())!.Revoked);
+        }
+        using (var request = new HttpRequestMessage(HttpMethod.Post, PandaAuth.Shared.PandaAuthSessionApi.SsoRevoke)
+        { Content = JsonContent.Create(new PandaAuth.Shared.SessionStateRevokeRequest(b.Sid)) })
+        {
+            // A valid human Fleet token is not an internal session-revocation credential.
+            request.Headers.Authorization = new("Bearer", b.Token.AccessToken);
+            using var response = await api.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        }
+        Assert.False(await ActiveAsync(a.Token.AccessToken!));
+        Assert.True(await ActiveAsync(b.Token.AccessToken!));
+        using var refreshed = await api.PostAsync("/connect/token", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["client_id"] = "replay-client", ["grant_type"] = "refresh_token", ["refresh_token"] = a.Token.RefreshToken!,
+        }));
+        Assert.Equal(HttpStatusCode.BadRequest, refreshed.StatusCode);
+        Assert.Contains("invalid_grant", await refreshed.Content.ReadAsStringAsync());
+    }
+
+    [PostgresFact]
     public async Task FleetClientCredentials_issues_only_configured_platform_scopes()
     {
         await using var database = await TestDatabase.CreateAsync();
@@ -274,7 +372,7 @@ public sealed class RefreshTokenReplayProtocolTests
             await db.Database.MigrateAsync();
         }
 
-        public async Task SeedAsync()
+        public async Task SeedAsync(bool sessionClients = false)
         {
             var services = new ServiceCollection();
             services.AddLogging();
@@ -296,6 +394,20 @@ public sealed class RefreshTokenReplayProtocolTests
 
             var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
             var scopes = scope.ServiceProvider.GetRequiredService<IOpenIddictScopeManager>();
+            if (sessionClients)
+            {
+                await scopes.CreateAsync(new OpenIddictScopeDescriptor
+                { Name = PandaAuth.Shared.PandaAuthSessionApi.Scope, Resources = { PandaAuth.Shared.PandaAuthSessionApi.Audience } });
+                foreach (var clientId in new[] { PandaAuth.Shared.PandaAuthSessionApi.AdminClientId, PandaAuth.Shared.PandaAuthSessionApi.MeClientId })
+                    await applications.CreateAsync(new OpenIddictApplicationDescriptor
+                    {
+                        ClientId = clientId, ClientType = OpenIddictConstants.ClientTypes.Confidential,
+                        ClientSecret = "fixture-session-secret", ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                        Permissions = { OpenIddictConstants.Permissions.Endpoints.Token,
+                            OpenIddictConstants.Permissions.GrantTypes.ClientCredentials,
+                            OpenIddictConstants.Permissions.Prefixes.Scope + PandaAuth.Shared.PandaAuthSessionApi.Scope },
+                    });
+            }
             foreach (var name in new[] { "fleet.read", "fleet.allocate", "fleet.apply", "fleet.server.manage" })
             {
                 await scopes.CreateAsync(new OpenIddictScopeDescriptor
@@ -316,6 +428,7 @@ public sealed class RefreshTokenReplayProtocolTests
                     OpenIddictConstants.Permissions.Endpoints.Authorization,
                     OpenIddictConstants.Permissions.Endpoints.Token,
                     OpenIddictConstants.Permissions.Endpoints.Revocation,
+                    OpenIddictConstants.Permissions.Prefixes.Scope + "fleet.read",
                     OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
                     OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
                     OpenIddictConstants.Permissions.ResponseTypes.Code,

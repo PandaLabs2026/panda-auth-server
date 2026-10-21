@@ -45,6 +45,34 @@ public sealed class SessionStateController(SessionRevocationService revocations)
         return clientId is PandaAuthSessionApi.AdminClientId or PandaAuthSessionApi.MeClientId;
     }
 
+    [HttpPost("sso/check")]
+    public async Task<ActionResult<SessionStateCheckResponse>> CheckSso(
+        [FromBody] SessionStateCheckRequest? request, CancellationToken cancellationToken)
+    {
+        Response.Headers.CacheControl = "no-store";
+        if (!TryGetClientId(out _)) return Forbid();
+        if (!TryGetSsoId(request?.SessionId, out var sid)) return BadRequest();
+        return Ok(new SessionStateCheckResponse(await revocations.IsRevokedAsync(
+            PandaAuthSessionApi.SsoPartition, sid, cancellationToken)));
+    }
+
+    [HttpPost("sso/revoke")]
+    public async Task<IActionResult> RevokeSso(
+        [FromBody] SessionStateRevokeRequest? request, CancellationToken cancellationToken)
+    {
+        Response.Headers.CacheControl = "no-store";
+        if (!TryGetClientId(out _)) return Forbid();
+        if (!TryGetSsoId(request?.SessionId, out var sid)) return BadRequest();
+        await revocations.RevokeAsync(PandaAuthSessionApi.SsoPartition, sid, cancellationToken);
+        return NoContent();
+    }
+
+    private static bool TryGetSsoId(string? value, out string sid)
+    {
+        sid = value ?? string.Empty;
+        return Guid.TryParseExact(sid, "N", out _);
+    }
+
     private static bool TryGetSessionId(string? value, out string sessionId)
     {
         sessionId = value ?? string.Empty;

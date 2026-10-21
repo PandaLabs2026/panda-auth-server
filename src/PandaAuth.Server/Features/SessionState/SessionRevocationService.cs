@@ -24,6 +24,16 @@ public sealed class SessionRevocationService(PandaAuthDbContext db, TimeProvider
         var retention = GetRetention(clientId);
         var hash = HashSessionId(clientId, sessionId);
         var expiresAt = clock.GetUtcNow().Add(retention);
+        if (db.Database.IsNpgsql())
+        {
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO panda_session_revocations ("ClientId", "SessionIdHash", "ExpiresAt")
+                VALUES ({clientId}, {hash}, {expiresAt})
+                ON CONFLICT ("ClientId", "SessionIdHash") DO UPDATE
+                SET "ExpiresAt" = GREATEST(panda_session_revocations."ExpiresAt", EXCLUDED."ExpiresAt")
+                """, cancellationToken);
+            return;
+        }
         var record = await db.SessionRevocations.FindAsync([clientId, hash], cancellationToken);
         if (record is null)
         {
@@ -70,6 +80,7 @@ public sealed class SessionRevocationService(PandaAuthDbContext db, TimeProvider
 
     private static TimeSpan GetRetention(string clientId) => clientId switch
     {
+        PandaAuthSessionApi.SsoPartition => PandaAuthSessionApi.SsoRevocationLifetime,
         PandaAuthSessionApi.AdminClientId => PandaAuthSessionApi.AdminAbsoluteLifetime,
         PandaAuthSessionApi.MeClientId => PandaAuthSessionApi.MeAbsoluteLifetime,
         _ => throw new ArgumentException("The client is not authorized for session revocation.", nameof(clientId)),

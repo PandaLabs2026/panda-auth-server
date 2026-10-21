@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Shared;
+using PandaAuth.Server.Features.SessionState;
 
 namespace PandaAuth.Server.Infrastructure.Security;
 
@@ -63,6 +64,7 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock)
             new(ClaimTypes.Name, current.UserName ?? current.Id),
             new(StampClaim, current.SecurityStamp ?? ""),
             new(AuthenticatedAtClaim, clock.GetUtcNow().ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            new(PandaAuthClaims.SsoSessionId, Guid.NewGuid().ToString("N")),
         };
         if (method is not null)
         {
@@ -73,7 +75,14 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock)
         return new ClaimsPrincipal(new ClaimsIdentity(claims, Scheme));
     }
 
-    public Task SignOutAsync(HttpContext context) => context.SignOutAsync(Scheme);
+    public async Task SignOutAsync(HttpContext context)
+    {
+        var ticket = await context.AuthenticateAsync(Scheme);
+        if (ticket.Principal?.FindFirstValue(PandaAuthClaims.SsoSessionId) is { } sid)
+            await context.RequestServices.GetRequiredService<SessionRevocationService>()
+                .RevokeAsync(PandaAuthSessionApi.SsoPartition, sid, context.RequestAborted);
+        await context.SignOutAsync(Scheme);
+    }
 
     public async Task SignInForMfaReconfigurationAsync(HttpContext context, PandaUser user)
     {
@@ -138,9 +147,29 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock)
     /// 经 AddUserStore 的事件委托逐请求解析 UserService/IMemoryCache；internal static 供缓存行为直测。
     /// </summary>
     internal static async Task ValidateCookieAsync(
-        CookieValidatePrincipalContext context, UserService users, IMemoryCache stampCache)
+        CookieValidatePrincipalContext context, UserService users, IMemoryCache stampCache,
+        SessionRevocationService? revocations = null)
     {
         var principal = context.Principal!;
+        var ids = principal.FindAll(PandaAuthClaims.SsoSessionId).ToArray();
+        if (ids.Length == 0 && principal.Identity is ClaimsIdentity identity)
+        {
+            identity.AddClaim(new Claim(PandaAuthClaims.SsoSessionId, Guid.NewGuid().ToString("N")));
+            context.ShouldRenew = true;
+        }
+        else if (ids.Length != 1 || !Guid.TryParseExact(ids[0].Value, "N", out _))
+        {
+            context.RejectPrincipal();
+            await context.HttpContext.SignOutAsync(Scheme);
+            return;
+        }
+        if (revocations is not null && await revocations.IsRevokedAsync(PandaAuthSessionApi.SsoPartition,
+            principal.FindFirstValue(PandaAuthClaims.SsoSessionId)!, context.HttpContext.RequestAborted))
+        {
+            context.RejectPrincipal();
+            await context.HttpContext.SignOutAsync(Scheme);
+            return;
+        }
         var userId = principal.FindFirstValue(ClaimTypes.NameIdentifier) ?? principal.FindFirstValue("sub");
         var stamp = principal.FindFirstValue(StampClaim);
         if (!string.IsNullOrEmpty(userId) && !string.IsNullOrEmpty(stamp) &&
@@ -177,6 +206,7 @@ public static class UserStoreRegistration
             : CookieSecurePolicy.SameAsRequest;
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddScoped<IPasswordHasher, Argon2idPasswordHasher>();
+        services.TryAddScoped<SessionRevocationService>();
         services.AddScoped<UserService>();
         services.AddScoped<RoleService>();
         services.AddScoped<LoginSessionService>();
@@ -195,7 +225,8 @@ public static class UserStoreRegistration
                     await LoginSessionService.ValidateCookieAsync(
                         context,
                         context.HttpContext.RequestServices.GetRequiredService<UserService>(),
-                        context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>());
+                        context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>(),
+                        context.HttpContext.RequestServices.GetRequiredService<SessionRevocationService>());
                 };
             })
             .AddCookie(LoginSessionService.ReconfigurationScheme, options =>
@@ -209,7 +240,8 @@ public static class UserStoreRegistration
                     await LoginSessionService.ValidateCookieAsync(
                         context,
                         context.HttpContext.RequestServices.GetRequiredService<UserService>(),
-                        context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>());
+                        context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>(),
+                        context.HttpContext.RequestServices.GetRequiredService<SessionRevocationService>());
                 };
             });
         return services;

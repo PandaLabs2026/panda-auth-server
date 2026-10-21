@@ -16,7 +16,7 @@ public sealed class ClaimsPolicyService(PandaAuthDbContext db)
         OpenIddictConstants.Claims.AuthenticationTime, OpenIddictConstants.Claims.Name,
         LoginSessionService.AuthenticatedAtClaim,
         // 租户声明由服务端从已校验主机写入；自定义 claim 不得覆盖/伪造。
-        PandaAuthClaims.TenantId, PandaAuthClaims.TenantHost,
+        PandaAuthClaims.TenantId, PandaAuthClaims.TenantHost, PandaAuthClaims.SsoSessionId,
     ];
 
     public async Task<AccountResult> AddUserClaimAsync(

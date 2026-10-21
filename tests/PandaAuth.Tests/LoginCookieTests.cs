@@ -15,6 +15,31 @@ namespace PandaAuth.Tests;
 public class LoginCookieTests
 {
     [Fact]
+    public async Task SharedLogout_RejectsOnlyTheSelectedDeviceCookie()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "device-fixture" };
+        await users.CreateAsync(user, "Fixture!Password123");
+        var first = await IssueAsync(provider, user);
+        var second = await IssueAsync(provider, user);
+        using var scopeA = provider.CreateScope();
+        using var scopeB = provider.CreateScope();
+        var loginA = await Context(scopeA.ServiceProvider, first).AuthenticateAsync(LoginSessionService.Scheme);
+        var loginB = await Context(scopeB.ServiceProvider, second).AuthenticateAsync(LoginSessionService.Scheme);
+        var sidA = loginA.Principal!.FindFirst(PandaAuthClaims.SsoSessionId)!.Value;
+        var sidB = loginB.Principal!.FindFirst(PandaAuthClaims.SsoSessionId)!.Value;
+        Assert.NotEqual(sidA, sidB);
+        Assert.True(Guid.TryParseExact(sidA, "N", out _));
+        await provider.GetRequiredService<PandaAuth.Server.Features.SessionState.SessionRevocationService>()
+            .RevokeAsync(PandaAuthSessionApi.SsoPartition, sidA, default);
+        using var verification = provider.CreateScope();
+        Assert.False((await Context(verification.ServiceProvider, first).AuthenticateAsync(LoginSessionService.Scheme)).Succeeded);
+        using var otherDevice = provider.CreateScope();
+        Assert.True((await Context(otherDevice.ServiceProvider, second).AuthenticateAsync(LoginSessionService.Scheme)).Succeeded);
+    }
+
+    [Fact]
     public async Task RealCookieRoundTrip_RejectsLegacyCookieName_AndPasswordResetInvalidatesTicket()
     {
         using var provider = TestUserStoreHost.Create();
@@ -75,7 +100,9 @@ public class LoginCookieTests
 
         using var scope = provider.CreateScope();
         var context = Context(scope.ServiceProvider, cookie);
-        Assert.True((await context.AuthenticateAsync(LoginSessionService.Scheme)).Succeeded);
+        var initial = await context.AuthenticateAsync(LoginSessionService.Scheme);
+        Assert.True(initial.Succeeded);
+        var originalSid = initial.Principal!.FindFirst(PandaAuthClaims.SsoSessionId)!.Value;
         await scope.ServiceProvider.GetRequiredService<LoginSessionService>()
             .MarkMfaAsync(context, MfaClaimTypes.WebAuthn);
         var renewedCookie = context.Response.Headers.SetCookie.Single()!.Split(';')[0];
@@ -84,6 +111,7 @@ public class LoginCookieTests
         var verification = await Context(verificationScope.ServiceProvider, renewedCookie)
             .AuthenticateAsync(LoginSessionService.Scheme);
         Assert.Equal(MfaClaimTypes.WebAuthn, verification.Principal!.FindFirst(MfaClaimTypes.Method)!.Value);
+        Assert.Equal(originalSid, verification.Principal.FindFirst(PandaAuthClaims.SsoSessionId)!.Value);
         Assert.True(long.TryParse(verification.Principal.FindFirst(MfaClaimTypes.VerifiedAt)!.Value, out _));
         Assert.Equal(authenticatedAt.ToString(System.Globalization.CultureInfo.InvariantCulture),
             verification.Principal.FindFirst(LoginSessionService.AuthenticatedAtClaim)!.Value);

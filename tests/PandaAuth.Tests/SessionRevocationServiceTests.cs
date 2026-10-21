@@ -10,6 +10,18 @@ namespace PandaAuth.Tests;
 public sealed class SessionRevocationServiceTests
 {
     [Fact]
+    public async Task Shared_login_revocation_is_distinct_from_local_sessions_and_other_devices()
+    {
+        await using var db = CreateDatabase();
+        var service = new SessionRevocationService(db, new TestClock(DateTimeOffset.UtcNow));
+        await service.RevokeAsync("sso-session", "login-device-a", CancellationToken.None);
+        Assert.True(await service.IsRevokedAsync("sso-session", "login-device-a", CancellationToken.None));
+        Assert.False(await service.IsRevokedAsync("sso-session", "login-device-b", CancellationToken.None));
+        Assert.False(await service.IsRevokedAsync("admin-session-api", "login-device-a", CancellationToken.None));
+        Assert.False(await service.IsRevokedAsync("me-session-api", "login-device-a", CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Revocation_is_idempotent_scoped_to_client_and_stores_only_a_hash()
     {
         var clock = new TestClock(DateTimeOffset.Parse("2026-10-19T12:00:00Z"));
