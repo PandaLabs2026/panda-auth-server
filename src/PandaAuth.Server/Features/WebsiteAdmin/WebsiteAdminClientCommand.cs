@@ -15,7 +15,7 @@ namespace PandaAuth.Server.Features.WebsiteAdmin;
 internal static class WebsiteAdminClientCommand
 {
     private const string ClientId = FirstPartyClients.CloudOperationWeb;
-    private const string Issuer = "https://auth.appliket.com/";
+    private const string Issuer = PandaMadeScopes.CloudIssuer;
     private const string Root = "/etc/panda-auth/website-admin";
     [DllImport("libc")] private static extern uint geteuid();
 

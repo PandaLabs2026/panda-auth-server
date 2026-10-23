@@ -795,15 +795,16 @@ public class DbSeederTests
             .GetSection(AuthOptions.SectionName).Get<AuthOptions>()
             ?? throw new InvalidOperationException("未能从 appsettings 绑定 AuthOptions。");
 
-        // 登录回调维持不动（本修复只动 post-logout）。
+        // 登录回调维持不动（本修复只动 post-logout）。默认域为占位 example.com（ADR-090 退役域清理，
+        // 2026-10-24 起生产部署一律显式注入 Auth__Seed__* 环境变量）。
         Assert.Equal(
         [
-            "https://auth.pandalabs.cn/me/callback/login/pandaauth",
+            "https://auth.example.com/me/callback/login/pandaauth",
             "http://localhost:9007/me/callback/login/pandaauth",
         ], options.Seed.Me.RedirectUris);
         Assert.Equal(
         [
-            "https://auth.pandalabs.cn/me/callback/logout/pandaauth",
+            "https://auth.example.com/me/callback/logout/pandaauth",
             "http://localhost:9007/me/callback/logout/pandaauth",
         ], options.Seed.Me.PostLogoutRedirectUris);
     }

@@ -4,7 +4,7 @@ public sealed class AuthOptions
 {
     public const string SectionName = "Auth";
 
-    /// <summary>OIDC Issuer（生产由环境变量 Auth__Issuer 注入，如 https://auth.pandalabs.cn；国内/海外双实例零代码切换）。</summary>
+    /// <summary>OIDC Issuer（生产由环境变量 Auth__Issuer 注入，平台级如 https://auth.appliket.com/、租户级如 https://t####-auth.sNNN.pandalabs.cn/；零代码切换）。</summary>
     public string Issuer { get; set; } = string.Empty;
 
     /// <summary>是否强制 HTTPS（生产强制开启；本地开发可关闭）。</summary>
@@ -186,7 +186,7 @@ public sealed class AdminWebSeedOptions : FirstPartyWebSeedOptions
 }
 
 /// <summary>
-/// Oasis 工作台（oasis.pandalabs.cn）的 Web 客户端：机密、授权码 + PKCE + 刷新令牌，
+/// Oasis 工作台（租户主机 t####-oasis.sNNN.pandalabs.cn）的 Web 客户端：机密、授权码 + PKCE + 刷新令牌，
 /// 走与 me-web 相同的 upsert 播种路径，但权限集裁掉 roles scope 与 Introspection 端点
 /// （Oasis 不请求 roles，授权完全在本地；token 只存服务端 cookie，无内省消费方）。
 /// 默认关闭——Oasis 不是 PandaAuth 自带面板，仅以 PandaAuth 为 IDP 的部署显式开启；
