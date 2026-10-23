@@ -109,6 +109,25 @@ public static class DbSeeder
                 permissions: CloudConsoleWebPermissions());
         }
 
+        // PandaMade 管理台/资源客户端族（ADR-089 收编批）：只部署在 cloud auth 实例；
+        // 回调不参与租户路由展开（独立产品域）；授权在 pandamade-server 的 StaffGrants 门禁。
+        if (options.Seed.PandamadeAdmin.Enabled || options.Seed.PandamadeApi.Enabled)
+        {
+            await SeedPandamadeScopeAsync(scopes);
+        }
+
+        if (options.Seed.PandamadeAdmin.Enabled)
+        {
+            await SeedFirstPartyWebApplicationAsync(
+                applications, reconciliation, logger, db, FirstPartyClients.PandamadeAdmin, "PandaMade Admin", "Auth:Seed:PandamadeAdmin", options.Seed.PandamadeAdmin,
+                permissions: PandamadeAdminPermissions());
+        }
+
+        if (options.Seed.PandamadeApi.Enabled)
+        {
+            await SeedPandamadeApiApplicationAsync(applications, reconciliation, logger, db, options.Seed.PandamadeApi);
+        }
+
         // Panda Assistant 客户端族（PANDA-INFRA-R1，panda-asst ADR 0095）：默认关闭，
         // 仅 panda-asst 租户实例（t####-auth）显式开启；asst 回调展开按 PandaAssistant 绑定。
         if (options.Seed.AsstWeb.Enabled)
@@ -257,6 +276,60 @@ public static class DbSeeder
             DisplayName = "PandaAuth first-party session revocation",
             Resources = { PandaAuthSessionApi.Audience },
         });
+    }
+
+    /// <summary>
+    /// pandamade.manage scope 绑定 pandamade-api 资源：与独立实例注册契约
+    /// （PandaMadeRegistration.Describe）逐项一致——scope 的 Resources 即令牌受众锚点，
+    /// pandamade-server 内省后按 scope + StaffGrants 双门禁放行。
+    /// </summary>
+    private static async Task SeedPandamadeScopeAsync(IOpenIddictScopeManager scopes)
+    {
+        if (await scopes.FindByNameAsync(PandaMadeScopes.Manage) is not null) return;
+
+        await scopes.CreateAsync(new OpenIddictScopeDescriptor
+        {
+            Name = PandaMadeScopes.Manage,
+            DisplayName = "Manage PandaMade catalog",
+            Resources = { PandaMadeScopes.Api },
+        });
+    }
+
+    /// <summary>
+    /// pandamade-api（资源方机密客户端）：仅内省端点权限，与独立实例注册契约
+    /// （PandaMadeRegistration.Describe）一致；pandamade-server 以本凭据做 introspection。
+    /// </summary>
+    private static async Task SeedPandamadeApiApplicationAsync(IOpenIddictApplicationManager applications, SeedPermissionReconciler reconciliation, ILogger? logger, PandaAuthDbContext? db, PandamadeApiSeedOptions seed)
+    {
+        if (string.IsNullOrWhiteSpace(seed.ClientSecret))
+        {
+            throw new InvalidOperationException("缺少 Auth:Seed:PandamadeApi:ClientSecret 配置（pandamade-api 内省客户端密钥）。");
+        }
+
+        var existing = await applications.FindByClientIdAsync(FirstPartyClients.PandamadeApi);
+        if (existing is null)
+        {
+            await applications.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = FirstPartyClients.PandamadeApi,
+                ClientType = ClientTypes.Confidential,
+                ClientSecret = seed.ClientSecret,
+                ConsentType = ConsentTypes.Implicit,
+                DisplayName = "PandaMade API introspection",
+                Permissions =
+                {
+                    Permissions.Endpoints.Introspection,
+                },
+            });
+            return;
+        }
+
+        await reconciliation.ApplyAsync(existing, [Permissions.Endpoints.Introspection]);
+        if (!await applications.ValidateClientSecretAsync(existing, seed.ClientSecret))
+        {
+            await WarnSecretRewriteAsync(logger, db, "pandamade-api", "Auth:Seed:PandamadeApi");
+            await applications.UpdateAsync(existing, seed.ClientSecret);
+        }
     }
 
     private static async Task SeedSessionStateApplicationsAsync(
@@ -718,6 +791,27 @@ public static class DbSeeder
         Permissions.Scopes.Profile,
         Permissions.Scopes.Roles,
         Permissions.Prefixes.Scope + Scopes.OfflineAccess,
+        Requirements.Features.ProofKeyForCodeExchange,
+    ];
+
+    /// <summary>
+    /// pandamade-admin 权限集 = 第一方 Web 基础面（授权码 + PKCE + 刷新 + 登出/吊销端点）
+    /// 裁掉 Email/Roles scope + pandamade.manage 委托作用域：管理台不消费角色声明，
+    /// 授权完全在 pandamade-server 的 StaffGrants 门禁（scope → 资源 → 业务授权三重门）。
+    /// 与独立实例注册契约（PandaMadeRegistration.Describe）逐项对齐，防收编后权限面漂移。
+    /// </summary>
+    private static string[] PandamadeAdminPermissions() =>
+    [
+        Permissions.Endpoints.Authorization,
+        Permissions.Endpoints.Token,
+        Permissions.Endpoints.EndSession,
+        Permissions.Endpoints.Revocation,
+        Permissions.GrantTypes.AuthorizationCode,
+        Permissions.GrantTypes.RefreshToken,
+        Permissions.ResponseTypes.Code,
+        Permissions.Scopes.Profile,
+        Permissions.Prefixes.Scope + Scopes.OfflineAccess,
+        Permissions.Prefixes.Scope + PandaMadeScopes.Manage,
         Requirements.Features.ProofKeyForCodeExchange,
     ];
 
