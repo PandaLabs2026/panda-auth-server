@@ -42,12 +42,24 @@ internal static class WebsiteAdminClientCommand
                 configuration["Auth:Issuer"]?.TrimEnd('/') + "/" != Issuer) throw new InvalidOperationException();
             using var input = JsonDocument.Parse(PortalClientCommand.ReadProtectedFile(Root + "/request.json", uid, true));
             var root = input.RootElement;
-            var allowed = new HashSet<string> { "clientSecret", "administratorEmail", "validUntilUtc", "operationId", "expectedRedirectUris", "expectedPostLogoutRedirectUris", "expectedAdditionalPermissions" };
-            if (root.EnumerateObject().Any(p => !allowed.Remove(p.Name)) || allowed.Count != 0) throw new InvalidOperationException();
             using var endpoints = JsonDocument.Parse(PortalClientCommand.ReadProtectedFile(Root + "/endpoints.json", uid, false));
             var callbackSet = WebsiteAdminCallbackSet.FromEndpoints(endpoints.RootElement);
+            var allowed = new HashSet<string> { "clientSecret", "administratorEmail", "validUntilUtc", "operationId", "expectedRedirectUris", "expectedPostLogoutRedirectUris", "expectedAdditionalPermissions" };
+            if (callbackSet.RootProtocol) allowed.Add("callbackMode");
+            if (root.EnumerateObject().Any(p => !allowed.Remove(p.Name)) || allowed.Count != 0) throw new InvalidOperationException();
+            if (callbackSet.RootProtocol)
+            {
+                callbackSet = root.GetProperty("callbackMode").GetString() switch
+                {
+                    "root-only" => callbackSet,
+                    "restore-v2" => callbackSet.ForRootRecovery(),
+                    _ => throw new InvalidOperationException()
+                };
+                if (root.GetProperty("expectedAdditionalPermissions").GetArrayLength() != 0) throw new InvalidOperationException();
+            }
             var expectedRedirect = root.GetProperty("expectedRedirectUris").EnumerateArray().Select(x => new Uri(x.GetString()!, UriKind.Absolute)).ToHashSet();
             var expectedLogout = root.GetProperty("expectedPostLogoutRedirectUris").EnumerateArray().Select(x => new Uri(x.GetString()!, UriKind.Absolute)).ToHashSet();
+            if (callbackSet.RootProtocol && (root.GetProperty("expectedRedirectUris").GetArrayLength() != expectedRedirect.Count || root.GetProperty("expectedPostLogoutRedirectUris").GetArrayLength() != expectedLogout.Count)) throw new InvalidOperationException();
             var secret = root.GetProperty("clientSecret").GetString()!;
             var until = root.GetProperty("validUntilUtc").GetDateTimeOffset();
             var operation = root.GetProperty("operationId").GetGuid().ToString();
@@ -82,6 +94,7 @@ internal static class WebsiteAdminClientCommand
             var existing = await manager.FindByClientIdAsync(ClientId);
             if (existing is null)
             {
+                if (callbackSet.RootProtocol) throw new InvalidOperationException();
                 await manager.CreateAsync(descriptor);
                 db.AdminAuditLogs.Add(new PandaAuth.Server.Domain.AdminAuditLog
                 {
@@ -99,6 +112,7 @@ internal static class WebsiteAdminClientCommand
                     !current.Requirements.SetEquals(descriptor.Requirements) ||
                     !await manager.ValidateClientSecretAsync(existing, secret)) throw new InvalidOperationException();
                 var permissionsChanged = !current.Permissions.SetEquals(descriptor.Permissions);
+                if (callbackSet.RootProtocol && permissionsChanged) throw new InvalidOperationException();
                 var redirectsChanged = !current.RedirectUris.SetEquals(descriptor.RedirectUris) || !current.PostLogoutRedirectUris.SetEquals(descriptor.PostLogoutRedirectUris);
                 if (permissionsChanged && redirectsChanged) throw new InvalidOperationException();
                 List<string> addedPermissions = [];
@@ -114,7 +128,7 @@ internal static class WebsiteAdminClientCommand
                     current.Permissions.Clear(); current.Permissions.UnionWith(descriptor.Permissions);
                     addedPermissions = [.. missing.OrderBy(x => x, StringComparer.Ordinal)];
                 }
-                if (redirectsChanged)
+                if (redirectsChanged || callbackSet.RootProtocol)
                 {
                     WebsiteAdminClientCallbackMigration.Apply(current, expectedRedirect, expectedLogout, callbackSet);
                 }
@@ -127,7 +141,7 @@ internal static class WebsiteAdminClientCommand
                         ActorUserId = "host-operator", ActorUserName = actorUserName,
                         Detail = JsonSerializer.Serialize(new { operationId = operation, addedPermissions }), CreatedAt = DateTimeOffset.UtcNow });
                     if (redirectsChanged) db.AdminAuditLogs.Add(new PandaAuth.Server.Domain.AdminAuditLog {
-                        Action = "website-admin-callback-migrate", TargetType = "client", TargetId = ClientId,
+                        Action = callbackSet.IsRootRecovery ? "website-admin-callback-recover" : "website-admin-callback-migrate", TargetType = "client", TargetId = ClientId,
                         ActorUserId = "host-operator", ActorUserName = actorUserName,
                         Detail = JsonSerializer.Serialize(new
                         {

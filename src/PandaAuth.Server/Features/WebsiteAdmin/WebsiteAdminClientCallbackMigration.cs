@@ -19,6 +19,11 @@ internal static class WebsiteAdminClientCallbackMigration
         new("https://appliket.com/operation/signout-callback-oidc")
     ];
 
+    private static readonly HashSet<Uri> DualRedirectUris = [new("https://operation.appliket.com/operation/signin-oidc"), new("https://appliket.com/operation/signin-oidc")];
+    private static readonly HashSet<Uri> DualLogoutUris = [new("https://operation.appliket.com/operation/signout-callback-oidc"), new("https://appliket.com/operation/signout-callback-oidc")];
+    private static readonly HashSet<Uri> RootRedirectUris = [new("https://operation.appliket.com/signin-oidc")];
+    private static readonly HashSet<Uri> RootLogoutUris = [new("https://operation.appliket.com/signout-callback-oidc")];
+
     internal static void Apply(
         OpenIddictApplicationDescriptor descriptor,
         IReadOnlySet<Uri> expectedRedirectUris,
@@ -30,7 +35,12 @@ internal static class WebsiteAdminClientCallbackMigration
         ArgumentNullException.ThrowIfNull(expectedPostLogoutRedirectUris);
         ArgumentNullException.ThrowIfNull(target);
 
-        if (target.RedirectUris.Count != 2 || target.PostLogoutRedirectUris.Count != 2)
+        if (target.RootProtocol && (descriptor.ClientId != PandaAuth.Server.Infrastructure.Persistence.FirstPartyClients.CloudOperationWeb ||
+            !expectedRedirectUris.SetEquals(target.IsRootRecovery ? RootRedirectUris : DualRedirectUris) ||
+            !expectedPostLogoutRedirectUris.SetEquals(target.IsRootRecovery ? RootLogoutUris : DualLogoutUris)))
+            throw new InvalidOperationException("The Cloud Operation root callback precondition was rejected.");
+        var targetCount = target.RootProtocol && !target.IsRootRecovery ? 1 : 2;
+        if (target.RedirectUris.Count != targetCount || target.PostLogoutRedirectUris.Count != targetCount)
             throw new InvalidOperationException("The Cloud Operation callback target was rejected.");
 
         // Match the command's idempotent retry: only the complete exact target
@@ -39,7 +49,7 @@ internal static class WebsiteAdminClientCallbackMigration
             descriptor.PostLogoutRedirectUris.ToHashSet().SetEquals(target.PostLogoutRedirectUris))
             return;
 
-        var knownPreviousState =
+        var knownPreviousState = target.RootProtocol ||
             expectedRedirectUris.SetEquals(PreviousOperationRedirectUris) &&
             expectedPostLogoutRedirectUris.SetEquals(PreviousOperationLogoutUris) ||
             expectedRedirectUris.SetEquals(PreviousAdminAndOperationRedirectUris) &&
