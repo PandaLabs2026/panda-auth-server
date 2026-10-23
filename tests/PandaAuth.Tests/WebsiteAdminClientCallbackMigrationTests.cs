@@ -181,6 +181,75 @@ public sealed class WebsiteAdminClientCallbackMigrationTests
         Assert.Equal(original, Snapshot(descriptor));
     }
 
+    private static WebsiteAdminCallbackSet RootTarget()
+    {
+        using var endpoints = System.Text.Json.JsonDocument.Parse("""
+            {"version":3,"adminPublicUrl":"https://operation.appliket.com/","collectorPublicUrl":"https://operation.appliket.com/_telemetry/","compatibilityAdminPublicUrls":[],"compatibilityCollectorPublicUrls":["https://appliket.com/_telemetry/"],"siteOrigins":{"cn":"https://pandalabs.cn","global":"https://pandalabs.cc"}}
+            """);
+        return WebsiteAdminCallbackSet.FromEndpoints(endpoints.RootElement);
+    }
+
+    [Fact]
+    public void Root_only_replaces_exact_live_two_pairs_preserves_every_other_property_and_retries_noop()
+    {
+        var prior = Target();
+        var descriptor = new OpenIddictApplicationDescriptor { ClientId = "cloud-operation-web", ClientSecret = "fixture-secret", ClientType = "confidential", ConsentType = "explicit", DisplayName = "fixture", Permissions = { "fixture-permission" }, Requirements = { "fixture-requirement" } };
+        descriptor.RedirectUris.UnionWith(prior.RedirectUris);
+        descriptor.PostLogoutRedirectUris.UnionWith(prior.PostLogoutRedirectUris);
+        descriptor.Properties["fixture-property"] = System.Text.Json.JsonSerializer.SerializeToElement(new { untouched = true });
+        var properties = System.Text.Json.JsonSerializer.Serialize(descriptor.Properties);
+        var original = Snapshot(descriptor);
+        WebsiteAdminClientCallbackMigration.Apply(descriptor, prior.RedirectUris, prior.PostLogoutRedirectUris, RootTarget());
+        Assert.Equal(new Uri("https://operation.appliket.com/signin-oidc"), Assert.Single(descriptor.RedirectUris));
+        Assert.Equal(new Uri("https://operation.appliket.com/signout-callback-oidc"), Assert.Single(descriptor.PostLogoutRedirectUris));
+        Assert.Equal(original with { RedirectUris = JoinUris(descriptor.RedirectUris), PostLogoutRedirectUris = JoinUris(descriptor.PostLogoutRedirectUris) }, Snapshot(descriptor));
+        Assert.Equal(properties, System.Text.Json.JsonSerializer.Serialize(descriptor.Properties));
+        var updated = Snapshot(descriptor);
+        WebsiteAdminClientCallbackMigration.Apply(descriptor, prior.RedirectUris, prior.PostLogoutRedirectUris, RootTarget());
+        Assert.Equal(updated, Snapshot(descriptor));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void Root_migration_rejects_partial_or_unexpected_sets_without_mutation(int drift)
+    {
+        var prior = Target();
+        var descriptor = new OpenIddictApplicationDescriptor { ClientId = "cloud-operation-web" };
+        descriptor.RedirectUris.UnionWith(prior.RedirectUris);
+        descriptor.PostLogoutRedirectUris.UnionWith(prior.PostLogoutRedirectUris);
+        if (drift == 0) descriptor.RedirectUris.Remove(descriptor.RedirectUris.First());
+        if (drift == 1) descriptor.PostLogoutRedirectUris.Add(new("https://operation.appliket.com/signout-callback-oidc"));
+        if (drift == 2) descriptor.RedirectUris.Add(new("https://appliket.com/admin/signin-oidc"));
+        var original = Snapshot(descriptor);
+        var root = RootTarget();
+        Assert.Throws<InvalidOperationException>(() => WebsiteAdminClientCallbackMigration.Apply(descriptor, prior.RedirectUris, prior.PostLogoutRedirectUris, root));
+        Assert.Equal(original, Snapshot(descriptor));
+    }
+
+    [Fact]
+    public void Explicit_root_recovery_restores_only_the_exact_historical_pairs_and_retries_noop()
+    {
+        var root = RootTarget();
+        var descriptor = new OpenIddictApplicationDescriptor { ClientId = "cloud-operation-web", ClientSecret = "fixture-secret", ClientType = "confidential", Permissions = { "fixture" }, Requirements = { "fixture" } };
+        descriptor.RedirectUris.UnionWith(root.RedirectUris);
+        descriptor.PostLogoutRedirectUris.UnionWith(root.PostLogoutRedirectUris);
+        var original = Snapshot(descriptor);
+        var recovery = root.ForRootRecovery();
+        WebsiteAdminClientCallbackMigration.Apply(descriptor, root.RedirectUris, root.PostLogoutRedirectUris, recovery);
+        Assert.True(descriptor.RedirectUris.SetEquals(Target().RedirectUris));
+        Assert.True(descriptor.PostLogoutRedirectUris.SetEquals(Target().PostLogoutRedirectUris));
+        Assert.Equal(original with { RedirectUris = JoinUris(descriptor.RedirectUris), PostLogoutRedirectUris = JoinUris(descriptor.PostLogoutRedirectUris) }, Snapshot(descriptor));
+        var recovered = Snapshot(descriptor);
+        WebsiteAdminClientCallbackMigration.Apply(descriptor, root.RedirectUris, root.PostLogoutRedirectUris, recovery);
+        Assert.Equal(recovered, Snapshot(descriptor));
+        descriptor.RedirectUris.Add(new("https://appliket.com/admin/signin-oidc"));
+        var drifted = Snapshot(descriptor);
+        Assert.Throws<InvalidOperationException>(() => WebsiteAdminClientCallbackMigration.Apply(descriptor, root.RedirectUris, root.PostLogoutRedirectUris, recovery));
+        Assert.Equal(drifted, Snapshot(descriptor));
+    }
+
     private static DescriptorSnapshot Snapshot(OpenIddictApplicationDescriptor descriptor) => new(
         descriptor.ClientId,
         descriptor.ClientSecret,
