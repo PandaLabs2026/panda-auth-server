@@ -204,7 +204,7 @@ openIddict.AddServer(options =>
         // 控制面七 scope 单一事实源在 Share（PandaAuthScopes.FleetAll），注册与 seed 共用。
         options.RegisterScopes([.. PandaAuthScopes.FleetAll]);
 
-        // Issuer 全部来自配置（生产 https://auth.pandalabs.cn，海外实例改环境变量即可，零代码切换）。
+        // Issuer 全部来自配置（平台级生产 https://auth.appliket.com/，租户级 https://t####-auth.sNNN.pandalabs.cn/，改环境变量即可，零代码切换）。
         options.SetIssuer(IssuerUri());
 
         foreach (var (record, key) in keys)
@@ -411,7 +411,7 @@ Uri IssuerUri()
     if (string.IsNullOrWhiteSpace(authOptions.Issuer))
     {
         throw new InvalidOperationException(
-            "缺少 Auth:Issuer 配置。生产示例：Auth__Issuer=https://auth.pandalabs.cn");
+            "缺少 Auth:Issuer 配置。生产示例（平台级）：Auth__Issuer=https://auth.appliket.com/");
     }
 
     return new Uri(authOptions.Issuer.EndsWith('/') ? authOptions.Issuer : authOptions.Issuer + "/", UriKind.Absolute);
