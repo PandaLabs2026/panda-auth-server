@@ -30,23 +30,10 @@ public class PandaMadeRegistrationTests
     }
 
     [Fact]
-    public async Task ProductionRegistrationClosesBeforeAnyDatabaseAccess()
+    public async Task RetiredRegistrationCliStaysFailClosed()
     {
-        var type = typeof(PandaAuthDbContext).Assembly.GetType("PandaAuth.Server.Features.PandaMade.PandaMadeRegistration");
-        Assert.NotNull(type);
-        var method = type.GetMethod("RunAsync");
-        Assert.NotNull(method);
-        var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build();
-        using var output = new StringWriter(); using var error = new StringWriter();
-        var result = (Task<int>)method.Invoke(null, [config, "Production", output, error])!;
-        Assert.Equal(1, await result);
-        Assert.Equal("pandamade-registration-closed\n", error.ToString().Replace("\r\n", "\n"));
-        Assert.Empty(output.ToString());
-    }
-
-    [Fact]
-    public async Task ActualProductionCommandDoesNotStartHttpOrReadDatabase()
-    {
+        // ADR-089 批次 3：--register-pandamade-clients 已退役为显式拒绝，
+        // 不得落入正常启动（不监听 HTTP、不读库、退出码 1）。
         var executable = Path.GetFullPath("../../../../../src/PandaAuth.Server/bin/Debug/net10.0/PandaAuth.Server.dll", AppContext.BaseDirectory);
         var start = new System.Diagnostics.ProcessStartInfo("dotnet", executable + " --register-pandamade-clients") { RedirectStandardOutput = true, RedirectStandardError = true };
         start.Environment["ASPNETCORE_ENVIRONMENT"] = "Production";
@@ -58,6 +45,7 @@ public class PandaMadeRegistrationTests
         await process.WaitForExitAsync(deadline.Token);
         Assert.Equal(1, process.ExitCode);
         Assert.Equal("pandamade-registration-closed\n", stderr.Replace("\r\n", "\n"));
+        Assert.DoesNotContain("Now listening on", stdout);
         Assert.Empty(stdout);
     }
 

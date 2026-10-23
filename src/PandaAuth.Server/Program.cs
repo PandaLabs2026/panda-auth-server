@@ -34,9 +34,10 @@ if (args.Length == 1 && args[0] == "--migrate-pandamade")
 
 if (args.Length == 1 && args[0] == "--register-pandamade-clients")
 {
-    var registrationBuilder = WebApplication.CreateBuilder([]);
-    Environment.ExitCode = await PandaAuth.Server.Features.PandaMade.PandaMadeRegistration.RunAsync(
-        registrationBuilder.Configuration, registrationBuilder.Environment.EnvironmentName, Console.Out, Console.Error);
+    // ADR-089 批次 3：独立实例注册通道已退役（cloud auth 实例经 DbSeeder 播种）。
+    // 旧入口保留 fail-closed 拒绝，防止误用参数落入正常 Web 启动路径。
+    Console.Error.WriteLine("pandamade-registration-closed");
+    Environment.ExitCode = 1;
     return;
 }
 
