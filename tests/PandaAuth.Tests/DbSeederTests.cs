@@ -47,6 +47,14 @@ public class DbSeederTests
 
     private const string CloudConsoleWebClientSecret = "cloud-console-web-test-secret";
 
+    private const string PandamadeAdminRedirectUri = "https://admin.pandamade.net/signin-oidc";
+
+    private const string PandamadeAdminPostLogoutUri = "https://admin.pandamade.net/signout-callback-oidc";
+
+    private const string PandamadeAdminClientSecret = "pandamade-admin-test-secret";
+
+    private const string PandamadeApiClientSecret = "pandamade-api-test-secret";
+
     // 密钥对账用例用的存量旧回调：刻意不用已退役域名，避免与域名退役检查的
     // 负断言夹具（`.cn` 命中数基线）重复计数。
     private const string LegacyRedirectUri = "http://localhost:9007/callback/login/pandaauth";
@@ -252,6 +260,92 @@ public class DbSeederTests
         Assert.True(await applications.HasPermissionAsync(console, Permissions.Scopes.Roles));
         Assert.False(await applications.HasPermissionAsync(console, Permissions.Endpoints.Introspection));
         Assert.False(await applications.HasPermissionAsync(console, Permissions.Prefixes.Scope + "fleet.read"));
+    }
+
+    [Fact]
+    public async Task PandamadeDisabledByDefault_DoesNotCreateClientsOrScope()
+    {
+        // ADR-089 收编批：PandaMade 族与 OasisWeb/FleetAdminWeb 同策略默认关闭，
+        // 未显式开启时任何实例（含 cloud auth）都不得出现客户端或 scope。
+        var options = ValidOptions();
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        Assert.Null(await applications.FindByClientIdAsync("pandamade-admin"));
+        Assert.Null(await applications.FindByClientIdAsync("pandamade-api"));
+        var scopes = provider.GetRequiredService<IOpenIddictScopeManager>();
+        Assert.Null(await scopes.FindByNameAsync("pandamade.manage"));
+    }
+
+    [Fact]
+    public async Task PandamadeAdminEnabled_CreatesClientWithParityPermissionsNoEmailRoles()
+    {
+        // 权限集与独立实例注册契约（PandaMadeRegistration.Describe）逐项对齐：
+        // 授权码 + PKCE + 刷新 + 登出/吊销端点 + pandamade.manage；无 Email/Roles
+        // （管理台不消费角色，授权在 pandamade-server 的 StaffGrants 门禁）。
+        var options = ValidOptions();
+        options.Seed.PandamadeAdmin = new PandamadeAdminSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = PandamadeAdminClientSecret,
+            RedirectUris = [PandamadeAdminRedirectUri],
+            PostLogoutRedirectUris = [PandamadeAdminPostLogoutUri],
+        };
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var admin = await applications.FindByClientIdAsync("pandamade-admin");
+        Assert.NotNull(admin);
+        Assert.True(await applications.ValidateClientSecretAsync(admin, PandamadeAdminClientSecret));
+        Assert.Equal(ClientTypes.Confidential, await applications.GetClientTypeAsync(admin));
+        Assert.Contains(PandamadeAdminRedirectUri, await applications.GetRedirectUrisAsync(admin));
+        Assert.Contains(PandamadeAdminPostLogoutUri, await applications.GetPostLogoutRedirectUrisAsync(admin));
+        Assert.True(await applications.HasPermissionAsync(admin, Permissions.GrantTypes.AuthorizationCode));
+        Assert.True(await applications.HasPermissionAsync(admin, Permissions.GrantTypes.RefreshToken));
+        Assert.True(await applications.HasPermissionAsync(admin, Permissions.Endpoints.EndSession));
+        Assert.True(await applications.HasPermissionAsync(admin, Permissions.Endpoints.Revocation));
+        Assert.True(await applications.HasPermissionAsync(admin, Requirements.Features.ProofKeyForCodeExchange));
+        Assert.True(await applications.HasPermissionAsync(admin, Permissions.Prefixes.Scope + "pandamade.manage"));
+        Assert.False(await applications.HasPermissionAsync(admin, Permissions.Scopes.Email));
+        Assert.False(await applications.HasPermissionAsync(admin, Permissions.Scopes.Roles));
+        Assert.False(await applications.HasPermissionAsync(admin, Permissions.Endpoints.Introspection));
+
+        // scope 随任一 Pandamade 开关播种，资源绑定为 pandamade-api（令牌受众锚点）。
+        var scopes = provider.GetRequiredService<IOpenIddictScopeManager>();
+        var manage = await scopes.FindByNameAsync("pandamade.manage");
+        Assert.NotNull(manage);
+        Assert.Contains("pandamade-api", await scopes.GetResourcesAsync(manage));
+    }
+
+    [Fact]
+    public async Task PandamadeApiEnabled_CreatesIntrospectionOnlyClient()
+    {
+        // pandamade-api 与 asst-server 同形态：仅内省端点权限，无回调、无授权码面。
+        var options = ValidOptions();
+        options.Seed.PandamadeApi = new PandamadeApiSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = PandamadeApiClientSecret,
+        };
+
+        using var provider = BuildProvider(options);
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var api = await applications.FindByClientIdAsync("pandamade-api");
+        Assert.NotNull(api);
+        Assert.True(await applications.ValidateClientSecretAsync(api, PandamadeApiClientSecret));
+        Assert.True(await applications.HasPermissionAsync(api, Permissions.Endpoints.Introspection));
+        Assert.False(await applications.HasPermissionAsync(api, Permissions.Endpoints.Authorization));
+        Assert.False(await applications.HasPermissionAsync(api, Permissions.GrantTypes.AuthorizationCode));
+        Assert.Empty(await applications.GetRedirectUrisAsync(api));
+
+        var scopes = provider.GetRequiredService<IOpenIddictScopeManager>();
+        Assert.NotNull(await scopes.FindByNameAsync("pandamade.manage"));
     }
 
     [Fact]
@@ -884,6 +978,18 @@ public class DbSeederTests
             ClientSecret = CloudConsoleWebClientSecret,
             RedirectUris = [CloudConsoleWebRedirectUri],
             PostLogoutRedirectUris = [CloudConsoleWebPostLogoutUri],
+        };
+        options.Seed.PandamadeAdmin = new PandamadeAdminSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = PandamadeAdminClientSecret,
+            RedirectUris = [PandamadeAdminRedirectUri],
+            PostLogoutRedirectUris = [PandamadeAdminPostLogoutUri],
+        };
+        options.Seed.PandamadeApi = new PandamadeApiSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = PandamadeApiClientSecret,
         };
         options.Seed.AsstWeb = new AsstWebSeedOptions
         {

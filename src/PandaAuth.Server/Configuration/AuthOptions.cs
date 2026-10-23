@@ -126,6 +126,10 @@ public sealed class SeedOptions
 
     public CloudConsoleWebSeedOptions CloudConsoleWeb { get; set; } = new();
 
+    public PandamadeAdminSeedOptions PandamadeAdmin { get; set; } = new();
+
+    public PandamadeApiSeedOptions PandamadeApi { get; set; } = new();
+
     public AsstWebSeedOptions AsstWeb { get; set; } = new();
 
     public AsstAdminSeedOptions AsstAdmin { get; set; } = new();
@@ -217,6 +221,35 @@ public sealed class CloudConsoleWebSeedOptions : FirstPartyWebSeedOptions
 {
     /// <summary>默认关闭；生产经 Auth__Seed__CloudConsoleWeb__Enabled 显式开启。</summary>
     public override bool Enabled { get; set; }
+}
+
+// ---- PandaMade 客户端族（ADR-089 收编批：系统级认证迁平台级 cloud auth）----
+// 默认全部关闭：仅 cloud auth 实例（auth.appliket.com）显式开启。
+// 权限集与既有独立实例的注册契约逐项对齐（Features/PandaMade/PandaMadeRegistration.Describe，
+// 该路径保留为回滚锚），授权仍在业务库 StaffGrants（issuer+sub）。
+
+/// <summary>
+/// pandamade-admin（PandaMade 管理台 BFF）：机密客户端，授权码 + PKCE + 刷新令牌；
+/// 权限集 = 第一方 Web 基础面裁掉 Email/Roles scope（管理台不消费角色，授权完全在
+/// pandamade-server 的 StaffGrants 门禁）+ pandamade.manage 委托作用域。
+/// 回调不参与租户路由展开（独立产品域 admin.pandamade.net）。
+/// </summary>
+public sealed class PandamadeAdminSeedOptions : FirstPartyWebSeedOptions
+{
+    /// <summary>默认关闭；cloud auth 实例经 Auth__Seed__PandamadeAdmin__Enabled 显式开启。</summary>
+    public override bool Enabled { get; set; }
+}
+
+/// <summary>
+/// pandamade-api（PandaMade 资源方）：机密客户端，仅内省端点权限——pandamade-server
+/// 以本客户端凭据对管理台令牌做 introspection（三重门禁第一重）。
+/// </summary>
+public sealed class PandamadeApiSeedOptions
+{
+    /// <summary>默认关闭；cloud auth 实例经 Auth__Seed__PandamadeApi__Enabled 显式开启。</summary>
+    public bool Enabled { get; set; }
+
+    public string ClientSecret { get; set; } = string.Empty;
 }
 
 // ---- Panda Assistant 客户端族（PANDA-INFRA-R1，panda-asst ADR 0095）----

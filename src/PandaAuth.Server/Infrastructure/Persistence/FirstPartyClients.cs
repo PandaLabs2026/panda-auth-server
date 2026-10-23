@@ -18,6 +18,9 @@ public static class FirstPartyClients
     public const string AsstWeb = "asst-web";
     public const string AsstAdmin = "asst-admin";
 
+    // ---- PandaMade 管理台（收编进 cloud auth 后由 DbSeeder 播种；ADR-089）----
+    public const string PandamadeAdmin = "pandamade-admin";
+
     // ---- 公共客户端（App Links，无密钥）----
     public const string AsstMobile = "asst-mobile";
 
@@ -25,6 +28,7 @@ public static class FirstPartyClients
     public const string AsstServer = "asst-server";
     public const string FleetApi = "fleet-api";
     public const string MgmtApi = "mgmt-api";
+    public const string PandamadeApi = "pandamade-api";
 
     // ---- 宿主机操作命令注册（不经 DbSeeder；auth.appliket.com 专用实例）----
     public const string CloudOperationWeb = "cloud-operation-web";
@@ -38,8 +42,9 @@ public static class FirstPartyClients
     public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
     {
         MeWeb, AdminWeb, OasisWeb, FleetAdminWeb, CloudConsoleWeb, AsstWeb, AsstAdmin,
+        PandamadeAdmin,
         AsstMobile,
-        AsstServer, FleetApi, MgmtApi,
+        AsstServer, FleetApi, MgmtApi, PandamadeApi,
         CloudOperationWeb,
         DemoPublic, DemoWeb, DemoService,
     };
