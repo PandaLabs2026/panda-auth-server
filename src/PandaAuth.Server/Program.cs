@@ -93,6 +93,7 @@ builder.Services.AddControllersWithViews(o =>
 
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
 var authOptions = builder.Configuration.GetSection(AuthOptions.SectionName).Get<AuthOptions>() ?? new AuthOptions();
+CloudConfigRegistration.Validate(authOptions);
 builder.Services.AddSingleton(authOptions.TenantRouting);
 builder.Services.AddSingleton<ITenantHostResolver, TenantHostResolver>();
 builder.Services.AddSingleton<TenantRedirectPolicy>();
@@ -203,6 +204,8 @@ openIddict.AddServer(options =>
             PandaAuthSessionApi.Scope);
         // 控制面七 scope 单一事实源在 Share（PandaAuthScopes.FleetAll），注册与 seed 共用。
         options.RegisterScopes([.. PandaAuthScopes.FleetAll]);
+        if (authOptions.Seed.CloudConfig.Enabled)
+            options.RegisterScopes([.. CloudConfigScopes.All]);
 
         // Issuer 全部来自配置（平台级生产 https://auth.appliket.com/，租户级 https://t####-auth.sNNN.pandalabs.cn/，改环境变量即可，零代码切换）。
         options.SetIssuer(IssuerUri());

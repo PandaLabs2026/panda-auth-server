@@ -18,6 +18,7 @@ internal static class SeedPermissionPolicy
             [FirstPartyClients.OasisWeb] = options.OasisWeb.Enabled,
             [FirstPartyClients.FleetAdminWeb] = options.FleetAdminWeb.Enabled,
             [FirstPartyClients.CloudConsoleWeb] = options.CloudConsoleWeb.Enabled,
+            [CloudConfigScopes.IntrospectionClient] = options.CloudConfig.Enabled,
             [FirstPartyClients.PandamadeAdmin] = options.PandamadeAdmin.Enabled,
             [FirstPartyClients.PandamadeApi] = options.PandamadeApi.Enabled,
             [FirstPartyClients.AsstWeb] = options.AsstWeb.Enabled,
