@@ -23,4 +23,5 @@
     <ProjectReference Include="..\..\src\PandaAuth.Server\PandaAuth.Server.csproj" />
   </ItemGroup>
 
+  <ItemGroup><ProjectReference Include="../CloudConfig.JointFixture/CloudConfig.JointFixture.csproj" /></ItemGroup>
 </Project>
