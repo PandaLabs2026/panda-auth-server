@@ -126,6 +126,8 @@ public sealed class SeedOptions
 
     public CloudConsoleWebSeedOptions CloudConsoleWeb { get; set; } = new();
 
+    public CloudConfigSeedOptions CloudConfig { get; set; } = new();
+
     public PandamadeAdminSeedOptions PandamadeAdmin { get; set; } = new();
 
     public PandamadeApiSeedOptions PandamadeApi { get; set; } = new();
@@ -391,4 +393,11 @@ public sealed class SessionStateSeedOptions
     public string AdminClientSecret { get; set; } = string.Empty;
 
     public string MeClientSecret { get; set; } = string.Empty;
+}
+
+/// <summary>Explicit Cloud configuration resource registration; disabled by default.</summary>
+public sealed class CloudConfigSeedOptions
+{
+    public bool Enabled { get; set; }
+    public string ClientSecret { get; set; } = string.Empty;
 }

@@ -22,6 +22,8 @@ public static class DbSeeder
             return;
         }
 
+        CloudConfigRegistration.Validate(options);
+
         var roleManager = services.GetRequiredService<RoleService>();
         var userManager = services.GetRequiredService<UserService>();
         var applications = services.GetRequiredService<IOpenIddictApplicationManager>();
@@ -30,6 +32,11 @@ public static class DbSeeder
         var logger = services.GetService<ILoggerFactory>()?.CreateLogger("PandaAuth.Server.Infrastructure.Persistence.DbSeeder");
         var db = services.GetService<PandaAuthDbContext>();
         var reconciliation = new SeedPermissionReconciler(applications, options.Seed, db, logger, services.GetService<TimeProvider>() ?? TimeProvider.System);
+
+        if (options.Seed.CloudConfig.Enabled)
+        {
+            await CloudConfigRegistration.SeedAsync(applications, scopes, options.Seed.CloudConfig);
+        }
 
         if (!await roleManager.RoleExistsAsync(PandaUser.AdminRole))
         {
@@ -106,7 +113,7 @@ public static class DbSeeder
         {
             await SeedFirstPartyWebApplicationAsync(
                 applications, reconciliation, logger, db, FirstPartyClients.CloudConsoleWeb, "Panda Cloud Console", "Auth:Seed:CloudConsoleWeb", options.Seed.CloudConsoleWeb,
-                permissions: CloudConsoleWebPermissions());
+                permissions: CloudConsoleWebPermissions(options.Seed.CloudConfig.Enabled));
         }
 
         // PandaMade 管理台/资源客户端族（ADR-089 收编批）：只部署在 cloud auth 实例；
@@ -778,7 +785,7 @@ public static class DbSeeder
     /// `cloud-admin` 角色门，授权仍由 PandaAuth 角色管理。
     /// Revocation 保留：登出走 RP-initiated signout + revoke。
     /// </summary>
-    private static string[] CloudConsoleWebPermissions() =>
+    private static string[] CloudConsoleWebPermissions(bool configurationEnabled) =>
     [
         Permissions.Endpoints.Authorization,
         Permissions.Endpoints.Token,
@@ -791,6 +798,7 @@ public static class DbSeeder
         Permissions.Scopes.Profile,
         Permissions.Scopes.Roles,
         Permissions.Prefixes.Scope + Scopes.OfflineAccess,
+        ..(configurationEnabled ? CloudConfigScopes.All.Select(scope => Permissions.Prefixes.Scope + scope) : []),
         Requirements.Features.ProofKeyForCodeExchange,
     ];
 
