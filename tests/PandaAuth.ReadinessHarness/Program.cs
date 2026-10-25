@@ -8,6 +8,9 @@ public static class HarnessProgram
     public static object DescribeFailure(Exception exception) => new
     {
         schema = 1, valid = false, error = "readiness_harness_failed", kind = exception.GetType().Name,
+        protocol = exception is SnapshotProtocolException protocol ? new { cookieStatus = protocol.CookieStatus,
+            bearerStatus = protocol.BearerStatus, refreshStatus = protocol.RefreshStatus,
+            loginRedirect = protocol.LoginRedirect, refreshError = protocol.RefreshError } : null,
         stack = (new StackTrace(exception, true).GetFrames() ?? []).Where(frame =>
             frame.GetMethod()?.DeclaringType?.Assembly == typeof(HarnessProgram).Assembly).Take(6)
             .Select(frame => new { type = frame.GetMethod()?.DeclaringType?.FullName,

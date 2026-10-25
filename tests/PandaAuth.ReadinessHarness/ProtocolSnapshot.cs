@@ -13,6 +13,17 @@ public sealed record SnapshotCookie(string Name, string Value, string Domain, st
 public sealed record SessionSnapshot(string RunId, string BaseUri, int UserIndex, DateTimeOffset CreatedAt,
     SnapshotCookie[] Cookies, string AccessToken, string RefreshToken);
 
+public sealed class SnapshotProtocolException(HttpStatusCode cookie, HttpStatusCode bearer, HttpStatusCode refresh,
+    bool loginRedirect, string error) : InvalidOperationException("readiness_snapshot_protocol_failed")
+{
+    public int CookieStatus { get; } = (int)cookie;
+    public int BearerStatus { get; } = (int)bearer;
+    public int RefreshStatus { get; } = (int)refresh;
+    public bool LoginRedirect { get; } = loginRedirect;
+    public string RefreshError { get; } = error is "invalid_grant" or "invalid_client" or "invalid_token" or "invalid_scope"
+        or "server_error" or "temporarily_unavailable" or "unauthorized_client" or "none" or "malformed" ? error : "other";
+}
+
 public static class ProtocolSnapshot
 {
     public static void ValidateFile(LoadRequest settings)
@@ -86,18 +97,28 @@ public static class ProtocolSnapshot
             ["client_id"] = settings.ClientId, ["client_secret"] = settings.ClientSecret
         });
         using var refresh = await browser.PostAsync(PandaAuthEndpoints.Token, form);
+        var loginRedirect = cookieResponse.StatusCode == HttpStatusCode.Redirect && cookieResponse.Headers.Location is { } location &&
+            (!location.IsAbsoluteUri || location.GetLeftPart(UriPartial.Authority) == browser.BaseAddress!.GetLeftPart(UriPartial.Authority)) &&
+            (location.IsAbsoluteUri ? location.AbsolutePath : location.OriginalString).StartsWith("/account/login", StringComparison.Ordinal);
+        var refreshError = "none";
+        if (refresh.StatusCode == HttpStatusCode.BadRequest)
+        {
+            try
+            {
+                using var error = JsonDocument.Parse(await refresh.Content.ReadAsStringAsync());
+                refreshError = error.RootElement.TryGetProperty("error", out var value) && value.ValueKind == JsonValueKind.String
+                    ? value.GetString()! : "malformed";
+            }
+            catch (JsonException) { refreshError = "malformed"; }
+        }
         var valid = cookieResponse.StatusCode == HttpStatusCode.OK && bearerResponse.StatusCode == HttpStatusCode.OK && refresh.StatusCode == HttpStatusCode.OK;
         if (rejected)
         {
-            using var error = JsonDocument.Parse(await refresh.Content.ReadAsStringAsync());
-            var loginRedirect = cookieResponse.StatusCode == HttpStatusCode.Redirect && cookieResponse.Headers.Location is { } location &&
-                (!location.IsAbsoluteUri || location.GetLeftPart(UriPartial.Authority) == browser.BaseAddress!.GetLeftPart(UriPartial.Authority)) &&
-                (location.IsAbsoluteUri ? location.AbsolutePath : location.OriginalString).StartsWith("/account/login", StringComparison.Ordinal);
             valid = (loginRedirect || cookieResponse.StatusCode == HttpStatusCode.Unauthorized) &&
                 bearerResponse.StatusCode == HttpStatusCode.Unauthorized && refresh.StatusCode == HttpStatusCode.BadRequest &&
-                error.RootElement.GetProperty("error").GetString() == "invalid_grant";
+                refreshError == "invalid_grant";
         }
-        if (!valid) throw new InvalidOperationException("readiness_snapshot_protocol_failed");
+        if (!valid) throw new SnapshotProtocolException(cookieResponse.StatusCode, bearerResponse.StatusCode, refresh.StatusCode, loginRedirect, refreshError);
         return new { schema = 1, valid = true, rejected, cookieStatus = (int)cookieResponse.StatusCode,
             bearerStatus = (int)bearerResponse.StatusCode, refreshStatus = (int)refresh.StatusCode };
     }
