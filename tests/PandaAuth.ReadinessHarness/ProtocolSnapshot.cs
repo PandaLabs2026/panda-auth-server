@@ -32,12 +32,13 @@ public sealed class SnapshotProtocolException(HttpStatusCode cookie, HttpStatusC
 
 public static class ProtocolSnapshot
 {
-    public static void ValidateFile(LoadRequest settings)
+    public static void ValidateFile(LoadRequest settings, bool bff = false)
     {
         settings.Validate();
+        if (bff && !settings.RecoveryScenario) throw new InvalidOperationException("readiness_bff_snapshot_admission_invalid");
         if (settings.SnapshotUserIndex is < 0 or > 1 || string.IsNullOrWhiteSpace(settings.SnapshotFile) ||
             !Path.IsPathFullyQualified(settings.SnapshotFile) || Path.GetFileName(settings.SnapshotFile) !=
-            $"panda-r1-session-{settings.RunId}-{settings.SnapshotUserIndex}.json")
+            $"panda-r1-{(bff ? "bff" : "session")}-{settings.RunId}-{settings.SnapshotUserIndex}.json")
             throw new InvalidOperationException("readiness_snapshot_path_invalid");
         var directory = Path.GetDirectoryName(Path.GetFullPath(settings.SnapshotFile))!;
         var temporary = Path.GetFullPath(Environment.GetEnvironmentVariable("TMPDIR") ?? Path.GetTempPath());
@@ -66,9 +67,8 @@ public static class ProtocolSnapshot
         return new { schema = 1, valid = true, revoked = revoke, snapshotSha256 = checksum };
     }
 
-    public static async Task<object> VerifyAsync(LoadRequest settings, bool rejected)
+    internal static async Task<byte[]> ReadPrivateAsync(LoadRequest settings)
     {
-        ValidateFile(settings);
         if (!Regex.IsMatch(settings.SnapshotSha256, "\\A[a-f0-9]{64}\\z") || new FileInfo(settings.SnapshotFile).Length > 131072)
             throw new InvalidOperationException("readiness_snapshot_file_invalid");
         var content = await File.ReadAllBytesAsync(settings.SnapshotFile);
@@ -76,6 +76,13 @@ public static class ProtocolSnapshot
             throw new InvalidOperationException("readiness_snapshot_hash_mismatch");
         if (!OperatingSystem.IsWindows() && File.GetUnixFileMode(settings.SnapshotFile) != (UnixFileMode.UserRead | UnixFileMode.UserWrite))
             throw new InvalidOperationException("readiness_snapshot_permissions_invalid");
+        return content;
+    }
+
+    public static async Task<object> VerifyAsync(LoadRequest settings, bool rejected)
+    {
+        ValidateFile(settings);
+        var content = await ReadPrivateAsync(settings);
         var snapshot = JsonSerializer.Deserialize<SessionSnapshot>(content) ?? throw new InvalidOperationException("readiness_snapshot_invalid");
         var now = DateTimeOffset.UtcNow;
         if (snapshot.RunId != settings.RunId || snapshot.BaseUri != settings.BaseUri || snapshot.UserIndex != settings.SnapshotUserIndex ||

@@ -8,9 +8,11 @@ using PandaAuth.Shared;
 
 namespace PandaAuth.ReadinessHarness;
 
+public sealed record BffLoginReport(int Schema, bool Valid, string Scope, bool Mfa, bool SharedSso, string SubjectSha256);
+
 public static class BffLogin
 {
-    public static async Task<object> VerifyAsync(LoadRequest settings, HttpClient browser)
+    public static async Task<BffLoginReport> VerifyAsync(LoadRequest settings, HttpClient browser)
     {
         settings.Validate();
         if (!settings.RecoveryScenario || browser.BaseAddress?.AbsoluteUri != settings.BaseUri)
@@ -53,11 +55,11 @@ public static class BffLogin
         await FollowAsync(browser, new Uri(owner, "/me/login?returnUrl=/me/"), "/me/");
         var me = await SessionAsync(browser, "/me/api/session", requireAdmin: false);
         Require(admin == me);
-        return new { schema = 1, valid = true, scope = "synthetic_bff_password_totp_sso",
-            mfa = true, sharedSso = true, subjectSha256 = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(admin))) };
+        return new(1, true, "synthetic_bff_password_totp_sso", true, true,
+            Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(admin))));
     }
 
-    private static async Task<string> SessionAsync(HttpClient browser, string path, bool requireAdmin)
+    internal static async Task<string> SessionAsync(HttpClient browser, string path, bool requireAdmin)
     {
         using var response = await browser.GetAsync(path);
         Require(response.StatusCode == HttpStatusCode.OK);

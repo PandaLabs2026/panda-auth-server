@@ -24,7 +24,7 @@ public static class HarnessProgram
     {
         try
         {
-            if (args is not ["--load-stdin" or "--seed-stdin" or "--proxy-stdin" or "--create-tls-stdin" or "--probe-stdin" or "--verify-ip-limit-stdin" or "--verify-account-limit-stdin" or "--create-recovery-crypto-stdin" or "--verify-recovery-crypto-stdin" or "--snapshot-session-stdin" or "--snapshot-revoked-session-stdin" or "--verify-valid-snapshot-stdin" or "--verify-rejected-snapshot-stdin" or "--verify-bff-login-stdin"]) throw new InvalidOperationException();
+            if (args is not ["--load-stdin" or "--seed-stdin" or "--proxy-stdin" or "--create-tls-stdin" or "--probe-stdin" or "--verify-ip-limit-stdin" or "--verify-account-limit-stdin" or "--create-recovery-crypto-stdin" or "--verify-recovery-crypto-stdin" or "--snapshot-session-stdin" or "--snapshot-revoked-session-stdin" or "--verify-valid-snapshot-stdin" or "--verify-rejected-snapshot-stdin" or "--verify-bff-login-stdin" or "--snapshot-bff-login-stdin" or "--verify-bff-snapshot-stdin"]) throw new InvalidOperationException();
             var line = await Console.In.ReadLineAsync();
             if (args[0] is "--create-recovery-crypto-stdin" or "--verify-recovery-crypto-stdin")
             {
@@ -48,6 +48,13 @@ public static class HarnessProgram
                 return 0;
             }
             var input = JsonSerializer.Deserialize<LoadRequest>(line ?? "", Json) ?? throw new InvalidOperationException();
+            if (args[0] is "--snapshot-bff-login-stdin" or "--verify-bff-snapshot-stdin")
+            {
+                var report = args[0] == "--snapshot-bff-login-stdin" ? await BffCookieSnapshot.CreateAsync(input)
+                    : await BffCookieSnapshot.VerifyAsync(input);
+                Console.WriteLine(JsonSerializer.Serialize(report, Json));
+                return 0;
+            }
             if (args[0] == "--verify-bff-login-stdin")
             {
                 input.Validate();
