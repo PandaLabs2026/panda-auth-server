@@ -40,6 +40,14 @@ public sealed class ReadinessLoadSafetyTests
     public void MixedSteadyState_UsesTheSameBoundedSyntheticAdmission() => (Valid with { Workload = "mixed" }).Validate();
 
     [Fact]
+    public void RecoveryOptions_CannotImplicitlyAdmitLegacySchemaOrArbitraryProbePaths()
+    {
+        Assert.Throws<InvalidOperationException>(() => (Valid with { LegacySchema = true }).Validate());
+        Assert.Throws<InvalidOperationException>(() => (Valid with { RecoveryScenario = true }).Validate());
+        Assert.Throws<InvalidOperationException>(() => (Valid with { ProbePath = "/connect/token" }).Validate());
+    }
+
+    [Fact]
     public void ProxyPath_CannotReplaceTheOwnedUpstreamAuthority()
     {
         var upstream = new Uri("http://panda-r1-server-" + new string('a', 32) + ":8080/");

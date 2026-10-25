@@ -32,7 +32,7 @@ public static class RecoveryCrypto
         }
         var factor = Guid.NewGuid();
         var protector = new TotpSecretProtector(totpKey, "r1-fixture-v1");
-        var canary = new Canary(runId, protectedValues, factor, protector.Protect("r1-" + runId, factor, Secret(runId)));
+        var canary = new Canary(runId, protectedValues, factor, protector.Protect("r1-" + runId, factor, SyntheticTotpSecret(runId)));
         var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
         if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
         using var output = new FileStream(Path.Combine(root, "crypto-canary.json"), options);
@@ -65,12 +65,12 @@ public static class RecoveryCrypto
                 throw new CryptographicException("recovery_dp_invalid");
         }
         var secret = new TotpSecretProtector(totpKey, "r1-fixture-v1").Unprotect("r1-" + runId, canary.FactorId, canary.Totp);
-        if (!CryptographicOperations.FixedTimeEquals(secret, Secret(runId))) throw new CryptographicException("recovery_totp_invalid");
+        if (!CryptographicOperations.FixedTimeEquals(secret, SyntheticTotpSecret(runId))) throw new CryptographicException("recovery_totp_invalid");
         return true;
     }
 
     private static string Value(string runId, string component) => "panda-auth-r1-crypto-" + runId + "-" + component;
-    private static byte[] Secret(string runId) => SHA256.HashData(Encoding.UTF8.GetBytes("synthetic-totp-" + runId))[..20];
+    internal static byte[] SyntheticTotpSecret(string runId) => SHA256.HashData(Encoding.UTF8.GetBytes("synthetic-totp-" + runId))[..20];
 
     private static void Admit(string root, string runId, byte[] totpKey)
     {

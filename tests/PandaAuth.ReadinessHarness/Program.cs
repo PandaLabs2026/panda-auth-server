@@ -44,7 +44,7 @@ public static class HarnessProgram
                 input.Validate();
                 using var certificate = System.Security.Cryptography.X509Certificates.X509CertificateLoader.LoadCertificateFromFile(input.RootCertificateFile);
                 using var browser = ProtocolUser.CreateBrowser(input, certificate);
-                using var response = await browser.GetAsync("/healthz");
+                using var response = await browser.GetAsync(input.ProbePath);
                 Console.WriteLine(JsonSerializer.Serialize(new { schema = 1, valid = response.IsSuccessStatusCode, status = (int)response.StatusCode }, Json));
                 return response.IsSuccessStatusCode ? 0 : 2;
             }

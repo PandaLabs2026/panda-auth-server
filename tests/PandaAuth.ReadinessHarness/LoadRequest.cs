@@ -15,6 +15,11 @@ public sealed record LoadRequest
     public int DurationSeconds { get; init; } = 120;
     public string StopFile { get; init; } = "";
     public string MigrationConnection { get; init; } = "";
+    public string ProbePath { get; init; } = "/healthz";
+    public bool RecoveryScenario { get; init; }
+    public bool LegacySchema { get; init; }
+    public string RecoveryTotpKey { get; init; } = "";
+    public string AdminUserName => "r1-admin-" + RunId[..16] + "@example.invalid";
 
     public string ClientId => "r1-load-" + RunId[..16];
     public string UserName(int index) => $"r1-{RunId[..16]}-{index:D3}";
@@ -32,5 +37,15 @@ public sealed record LoadRequest
             throw new InvalidOperationException("readiness_load_admission_failed");
         if (StopFile.Length > 0 && Path.GetFileName(StopFile) != "r1-" + RunId + ".stop")
             throw new InvalidOperationException("readiness_stop_path_invalid");
+        if (LegacySchema && !RecoveryScenario || ProbePath is not ("/healthz" or "/admin/healthz" or "/me/healthz" or "/admin/api/antiforgery" or "/me/api/antiforgery"))
+            throw new InvalidOperationException("readiness_recovery_admission_failed");
+        if (RecoveryScenario)
+        {
+            try
+            {
+                if (Convert.FromBase64String(RecoveryTotpKey).Length != 32) throw new InvalidOperationException("readiness_recovery_key_invalid");
+            }
+            catch (FormatException) { throw new InvalidOperationException("readiness_recovery_key_invalid"); }
+        }
     }
 }

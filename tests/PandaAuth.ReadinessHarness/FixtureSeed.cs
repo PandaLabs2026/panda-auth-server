@@ -6,6 +6,7 @@ using OpenIddict.Abstractions;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Server.Infrastructure.Security.Mfa;
 using static OpenIddict.Abstractions.OpenIddictConstants;
 
 namespace PandaAuth.ReadinessHarness;
@@ -28,7 +29,9 @@ public static class FixtureSeed
         await using var provider = services.BuildServiceProvider();
         await using var scope = provider.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
-        if (!(await db.Database.GetAppliedMigrationsAsync()).Contains(PandaAuth.Server.Configuration.OperationalCommand.SigningMigration))
+        var migrations = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
+        var upgraded = migrations.Contains(PandaAuth.Server.Configuration.OperationalCommand.SigningMigration);
+        if (settings.LegacySchema ? upgraded || !migrations.Contains("20261019121648_AddSessionRevocations") : !upgraded)
             throw new InvalidOperationException("readiness_requires_independent_migration");
         var users = scope.ServiceProvider.GetRequiredService<UserService>();
         for (var index = 0; index < settings.Concurrency; index++)
@@ -49,6 +52,18 @@ public static class FixtureSeed
                 Permissions.GrantTypes.AuthorizationCode, Permissions.GrantTypes.RefreshToken, Permissions.ResponseTypes.Code,
                 Permissions.Scopes.Profile, Permissions.Prefixes.Scope + Scopes.OfflineAccess }
         });
+        if (settings.RecoveryScenario)
+        {
+            var administrator = await users.FindByNameAsync(settings.AdminUserName) ?? throw new InvalidOperationException("readiness_recovery_admin_missing");
+            if (await db.TotpFactors.AnyAsync(item => item.UserId == administrator.Id)) throw new InvalidOperationException("readiness_recovery_factor_exists");
+            var factor = new MfaTotpFactor { Id = Guid.NewGuid(), UserId = administrator.Id, ConfirmedAt = DateTimeOffset.UtcNow };
+            var encrypted = new TotpSecretProtector(Convert.FromBase64String(settings.RecoveryTotpKey), "v1")
+                .Protect(administrator.Id, factor.Id, RecoveryCrypto.SyntheticTotpSecret(settings.RunId));
+            factor.KeyVersion = encrypted.KeyVersion; factor.Nonce = encrypted.Nonce; factor.Ciphertext = encrypted.Ciphertext; factor.Tag = encrypted.Tag;
+            db.TotpFactors.Add(factor);
+            administrator.TwoFactorEnabled = true;
+            await db.SaveChangesAsync();
+        }
         return new { schema = 1, valid = true, settings.RunId, users = settings.Concurrency };
     }
 }
