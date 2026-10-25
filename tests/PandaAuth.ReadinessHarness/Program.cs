@@ -10,8 +10,17 @@ public static class HarnessProgram
     {
         try
         {
-            if (args is not ["--load-stdin" or "--seed-stdin" or "--proxy-stdin" or "--create-tls-stdin" or "--probe-stdin" or "--verify-ip-limit-stdin" or "--verify-account-limit-stdin"]) throw new InvalidOperationException();
+            if (args is not ["--load-stdin" or "--seed-stdin" or "--proxy-stdin" or "--create-tls-stdin" or "--probe-stdin" or "--verify-ip-limit-stdin" or "--verify-account-limit-stdin" or "--create-recovery-crypto-stdin" or "--verify-recovery-crypto-stdin"]) throw new InvalidOperationException();
             var line = await Console.In.ReadLineAsync();
+            if (args[0] is "--create-recovery-crypto-stdin" or "--verify-recovery-crypto-stdin")
+            {
+                var cryptoInput = JsonSerializer.Deserialize<RecoveryCryptoInput>(line ?? "", Json) ?? throw new InvalidOperationException();
+                var key = Convert.FromBase64String(cryptoInput.TotpKey);
+                if (args[0] == "--create-recovery-crypto-stdin") RecoveryCrypto.Create(cryptoInput.Directory, cryptoInput.RunId, key);
+                else RecoveryCrypto.Verify(cryptoInput.Directory, cryptoInput.RunId, key);
+                Console.WriteLine(JsonSerializer.Serialize(new { schema = 1, valid = true, cryptoInput.RunId }, Json));
+                return 0;
+            }
             if (args[0] == "--create-tls-stdin")
             {
                 var certificate = JsonSerializer.Deserialize<CertificateRequestInput>(line ?? "", Json) ?? throw new InvalidOperationException();
