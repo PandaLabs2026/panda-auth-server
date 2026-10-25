@@ -258,7 +258,8 @@ public sealed class AccountVerificationService(
     }
 
     public async Task<AccountVerificationResult> ConsumePasswordResetAsync(
-        string email, string token, string newPassword, CancellationToken cancellationToken = default)
+        string email, string token, string newPassword, CancellationToken cancellationToken = default,
+        Func<string, CancellationToken, Task>? beforeCommit = null)
     {
         var normalizedTarget = users.NormalizeEmail(email.Trim()) ?? string.Empty;
         var candidate = await db.PasswordResetRequests
@@ -279,7 +280,7 @@ public sealed class AccountVerificationService(
         var consumedAt = clock.GetUtcNow();
         if (db.Database.IsRelational())
         {
-            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+            await using var transaction = await AccountSecurityTransaction.BeginAsync(db, cancellationToken);
             if (!await TryConsumePasswordResetAsync(candidate, consumedAt, cancellationToken))
                 return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
 
@@ -299,6 +300,7 @@ public sealed class AccountVerificationService(
             var update = await users.ReplacePasswordAsync(user, newPassword);
             if (!update.Succeeded)
                 return MapAccountFailure(update, candidate);
+            if (beforeCommit is not null) await beforeCommit(user.Id, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
         else
@@ -321,6 +323,7 @@ public sealed class AccountVerificationService(
             var update = await users.ReplacePasswordAsync(user, newPassword);
             if (!update.Succeeded)
                 return MapAccountFailure(update, candidate);
+            if (beforeCommit is not null) await beforeCommit(user.Id, cancellationToken);
         }
 
         return AccountVerificationResult.Success(new(
@@ -396,7 +399,7 @@ public sealed class AccountVerificationService(
             return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
         }
 
-        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        await using var transaction = await AccountSecurityTransaction.BeginAsync(db, cancellationToken);
         var updated = await db.Database.ExecuteSqlInterpolatedAsync($"""
             UPDATE panda_email_verifications
             SET "Attempts" = "Attempts" + 1
@@ -428,7 +431,7 @@ public sealed class AccountVerificationService(
             return AccountVerificationResult.Fail(AccountVerificationError.InvalidOrExpiredToken);
         }
 
-        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        await using var transaction = await AccountSecurityTransaction.BeginAsync(db, cancellationToken);
         var updated = await db.Database.ExecuteSqlInterpolatedAsync($"""
             UPDATE panda_password_reset_requests
             SET "Attempts" = "Attempts" + 1

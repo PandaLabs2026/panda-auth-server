@@ -1,6 +1,5 @@
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Memory;
 using Npgsql;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Persistence;
@@ -19,11 +18,12 @@ public sealed record AccountResult(bool Succeeded, params AccountError[] Errors)
 /// Account persistence and credentials. Every mutation uses an optimistic concurrency stamp.
 /// 只读查找（ById/ByName）走 AsNoTracking：cookie 校验等热路径每请求一查，无变更跟踪负担；
 /// 所有变更路径都经 <see cref="UpdateAsync"/>（对游离实体显式 Attach+Modified），不受影响。
-/// 非 sealed 且查找方法 virtual：stamp 缓存行为测试以可数桩子类观测查库次数。
+/// 非 sealed 且查找方法 virtual：会话时序回归可控制读取与观察查库次数。
 /// </summary>
 public class UserService(
-    PandaAuthDbContext db, IPasswordHasher hasher, TimeProvider clock, IMemoryCache? stampCache = null)
+    PandaAuthDbContext db, IPasswordHasher hasher, TimeProvider clock)
 {
+    internal PandaAuthDbContext Store => db;
     public IQueryable<PandaUser> Users => db.Users;
     internal static string? Normalize(string? value) => value?.Normalize().ToUpperInvariant();
     public string? NormalizeEmail(string? email) => Normalize(email);
@@ -115,13 +115,9 @@ public class UserService(
     {
         var result = ValidatePassword(password);
         if (!result.Succeeded) return result;
-        var previousStamp = user.SecurityStamp;
         user.PasswordHash = hasher.Hash(password);
         user.SecurityStamp = Guid.NewGuid().ToString();
         var update = await UpdateAsync(user);
-        // 改密的契约是「旧会话立即作废」（LoginCookieTests 钉住）：stamp 短缓存里的旧键必须同步失效，
-        // 否则被偷的 cookie 在 TTL 内多活 60 秒。
-        if (update.Succeeded) InvalidateStampCache(user.Id, previousStamp);
         return update;
     }
 
@@ -130,19 +126,9 @@ public class UserService(
 
     public async Task<AccountResult> UpdateSecurityStampAsync(PandaUser user)
     {
-        var previousStamp = user.SecurityStamp;
         user.SecurityStamp = Guid.NewGuid().ToString();
         var update = await UpdateAsync(user);
-        // stamp 轮换即踢会话：同步作废旧 stamp 的缓存键（见 ReplacePasswordAsync 注释）。
-        if (update.Succeeded) InvalidateStampCache(user.Id, previousStamp);
         return update;
-    }
-
-    /// <summary>stamp 轮换路径共用：旧 stamp 的 cookie 校验缓存键即时失效（无缓存宿主为 no-op）。</summary>
-    private void InvalidateStampCache(string userId, string? previousStamp)
-    {
-        if (stampCache is null || string.IsNullOrEmpty(previousStamp)) return;
-        stampCache.Remove(LoginSessionService.StampCacheKeyPrefix + userId + ":" + previousStamp);
     }
 
     public Task<AccountResult> SetLockoutEndDateAsync(PandaUser user, DateTimeOffset? end)
@@ -174,10 +160,8 @@ public class UserService(
         var current = await db.UserRoles.Where(x => x.UserId == user.Id).Select(x => x.RoleId).ToListAsync();
         db.UserRoles.AddRange(found.Where(x => !current.Contains(x.Id))
             .Select(x => new PandaUserRole { UserId = user.Id, RoleId = x.Id }));
-        var previousStamp = user.SecurityStamp;
         user.SecurityStamp = Guid.NewGuid().ToString();
         var update = await UpdateAsync(user);
-        if (update.Succeeded) InvalidateStampCache(user.Id, previousStamp);
         return update;
     }
 
@@ -186,10 +170,8 @@ public class UserService(
         var normalized = Normalize(role);
         var ids = db.Roles.Where(x => x.NormalizedName == normalized).Select(x => x.Id);
         db.UserRoles.RemoveRange(await db.UserRoles.Where(x => x.UserId == user.Id && ids.Contains(x.RoleId)).ToListAsync());
-        var previousStamp = user.SecurityStamp;
         user.SecurityStamp = Guid.NewGuid().ToString();
         var update = await UpdateAsync(user);
-        if (update.Succeeded) InvalidateStampCache(user.Id, previousStamp);
         return update;
     }
 

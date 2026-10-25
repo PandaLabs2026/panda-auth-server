@@ -65,7 +65,8 @@ public class DatabaseLeaseTests
         internal static async Task<TestDatabase> CreateAsync()
         {
             var admin = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("PANDA_AUTH_TEST_POSTGRES"));
-            if (admin.Host != "127.0.0.1" || admin.Port != 43823 || admin.Database != "postgres")
+            PostgresTestBoundary.ValidateEndpoint(admin, PostgresTestBoundary.SharedMode);
+            if (admin.Database != "postgres")
                 throw new InvalidOperationException("Auth protocol fixture requires the approved task loopback cluster/admin database.");
             var name = "panda_protocol_test_" + Guid.NewGuid().ToString("N");
             await using (var connection = new NpgsqlConnection(admin.ConnectionString))
@@ -78,19 +79,7 @@ public class DatabaseLeaseTests
             return new TestDatabase { ConnectionString = admin.ConnectionString };
         }
 
-        public async ValueTask DisposeAsync()
-        {
-            var builder = new NpgsqlConnectionStringBuilder(ConnectionString);
-            if (builder.Host != "127.0.0.1" || builder.Port != 43823 ||
-                builder.Database is null || !System.Text.RegularExpressions.Regex.IsMatch(
-                    builder.Database, "^panda_protocol_test_[0-9a-f]{32}$", System.Text.RegularExpressions.RegexOptions.CultureInvariant))
-                throw new InvalidOperationException("Refusing cleanup outside this task-owned Auth database.");
-            NpgsqlConnection.ClearAllPools();
-            await using var connection = new NpgsqlConnection(
-                new NpgsqlConnectionStringBuilder(ConnectionString) { Database = "postgres" }.ConnectionString);
-            await connection.OpenAsync();
-            await using var drop = new NpgsqlCommand($"DROP DATABASE \"{builder.Database}\" WITH (FORCE)", connection);
-            await drop.ExecuteNonQueryAsync();
-        }
+        public async ValueTask DisposeAsync() =>
+            await PostgresTestBoundary.DropOwnedDatabaseAsync(ConnectionString, "panda_protocol_test_");
     }
 }

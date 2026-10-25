@@ -2,5 +2,9 @@
   <PropertyGroup><OutputType>Exe</OutputType><AssemblyName>PandaAuth.CloudConfig.JointFixture</AssemblyName></PropertyGroup>
   <ItemGroup><ProjectReference Include="../../src/PandaAuth.Server/PandaAuth.Server.csproj" /></ItemGroup>
   <ItemGroup><PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" /></ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.Pkcs" />
+    <PackageReference Include="System.Security.Cryptography.Xml" />
+  </ItemGroup>
   <ItemGroup><None Include="../../src/PandaAuth.Server/appsettings.json" Link="fixture-defaults.json" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
 </Project>

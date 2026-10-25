@@ -97,6 +97,7 @@ public sealed class AuthorizationController(
         // prompt=login / max_age 超龄：客户端要求一次比当前会话更新的认证。先注销当前会话再挑战，
         // 强制回登录页——静默放行会让过期会话继续发码，auth_time 语义失真（Fleet auth_time 契约）。
         var requiresReauthentication = request.HasPromptValue(PromptValues.Login) ||
+            !AccountSecurityVersion.Matches(authResult.Principal, user) ||
             ExceedsMaxAge(request.MaxAge, authenticatedAt, clock.GetUtcNow().ToUnixTimeSeconds());
         if (requiresReauthentication)
         {
@@ -154,7 +155,7 @@ public sealed class AuthorizationController(
         }
 
         var user = await userManager.FindByIdAsync(userId);
-        if (user is null || user.Status != UserStatus.Active)
+        if (user is null || user.Status != UserStatus.Active || !AccountSecurityVersion.Matches(authResult.Principal, user))
         {
             return InvalidGrant("账号不存在或已被冻结。");
         }
@@ -277,10 +278,14 @@ public sealed class AuthorizationController(
         ClaimsPrincipal? mfaSource = null, string authenticationTimeClaim = LoginSessionService.AuthenticatedAtClaim)
     {
         // Callers select only the validated login-cookie or OpenIddict-ticket claim, explicitly.
+        if (!AccountSecurityVersion.Matches(mfaSource, user))
+            throw new InvalidOperationException("Account security version changed or is missing.");
         var identity = new ClaimsIdentity(
             TokenValidationParameters.DefaultAuthenticationType, Claims.Name, Claims.Role);
 
         identity.AddClaim(new Claim(Claims.Subject, user.Id));
+        identity.AddClaim(new Claim(PandaAuthClaims.SecurityVersion,
+            mfaSource!.FindFirstValue(PandaAuthClaims.SecurityVersion)!));
         identity.AddClaim(new Claim(Claims.Name, user.UserName ?? user.Id));
         // 人类主体事实（subject_type=human + 标准 auth_time 整秒）经 FleetHumanPrincipalClaims 从
         // 受信登录凭据继承；缺失/畸形/重复即抛出（上层转 invalid grant），绝不回退合成 "now"。

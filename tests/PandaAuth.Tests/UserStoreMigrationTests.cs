@@ -58,32 +58,22 @@ public class UserStoreMigrationTests
     }
 
     [PostgresFact]
-    public async Task SigningKeys_GenerateReuseRotateAndRetireExpiredKeys()
+    public async Task SigningKeys_PrecreateSuccessorAndReuseEncryptionKeyOnRestart()
     {
         await using var fixture = await TestDatabase.CreateAsync();
         await using var db = fixture.Context();
         await db.Database.MigrateAsync();
-        var options = new SigningKeyOptions { RotationIntervalDays = 1, ValidityDays = 3 };
+        var options = new SigningKeyOptions { RotationIntervalDays = 1, ValidityDays = 16 };
 
         var first = await SigningKeyStore.LoadOrCreateAsync(fixture.ConnectionString, options);
-        var firstSigningId = Assert.Single(first, item => item.Record.Use == KeyUse.Signing).Record.KeyId;
-        Assert.Single(first, item => item.Record.Use == KeyUse.Encryption);
+        Assert.Equal(2, first.Count(item => item.Record.Use == KeyUse.Signing));
+        var encryptionId = Assert.Single(first, item => item.Record.Use == KeyUse.Encryption).Record.KeyId;
 
         var restarted = await SigningKeyStore.LoadOrCreateAsync(fixture.ConnectionString, options);
-        Assert.Equal(firstSigningId,
-            Assert.Single(restarted, item => item.Record.Use == KeyUse.Signing).Record.KeyId);
-
-        var old = await db.SigningKeys.SingleAsync(item => item.KeyId == firstSigningId);
-        old.NotBefore = DateTimeOffset.UtcNow.AddDays(-2);
-        old.NotAfter = DateTimeOffset.UtcNow.AddDays(-1);
-        await db.SaveChangesAsync();
-
-        var rotated = await SigningKeyStore.LoadOrCreateAsync(fixture.ConnectionString, options);
-        var activeSigning = Assert.Single(rotated, item => item.Record.Use == KeyUse.Signing);
-        Assert.NotEqual(firstSigningId, activeSigning.Record.KeyId);
-        db.ChangeTracker.Clear();
-        Assert.True((await db.SigningKeys.SingleAsync(item => item.KeyId == firstSigningId)).Retired);
-        Assert.False((await db.SigningKeys.SingleAsync(item => item.KeyId == activeSigning.Record.KeyId)).Retired);
+        Assert.Equal(first.Select(item => item.Record.KeyId).Order(), restarted.Select(item => item.Record.KeyId).Order());
+        Assert.Equal(encryptionId, Assert.Single(restarted, item => item.Record.Use == KeyUse.Encryption).Record.KeyId);
+        Assert.All(first.Where(item => item.Record.Use == KeyUse.Signing), item =>
+            Assert.True(item.Record.VerifyUntil >= item.Record.SigningEndsAt + TimeSpan.FromDays(14) + TimeSpan.FromMinutes(5)));
     }
 
     [Fact]
@@ -91,6 +81,37 @@ public class UserStoreMigrationTests
     {
         using var db = new DesignTimeDbContextFactory().CreateDbContext([]);
         Assert.False(db.Database.HasPendingModelChanges());
+    }
+
+    [PostgresTheory]
+    [InlineData(-1)]
+    [InlineData(60)]
+    public async Task OnlineKeyMigration_PreservesLegacyPrivateKeyAndExtendsVerificationWithoutSigning(int remainingDays)
+    {
+        await using var fixture = await TestDatabase.CreateAsync();
+        await using var db = fixture.Context();
+        var previous = db.Database.GetMigrations().Last(name => !name.EndsWith("OnlineSigningKeyLifecycle", StringComparison.Ordinal));
+        await db.GetService<IMigrator>().MigrateAsync(previous);
+        using var rsa = System.Security.Cryptography.RSA.Create(2048);
+        var privateKey = rsa.ExportPkcs8PrivateKey();
+        var before = DateTimeOffset.UtcNow;
+        var notAfter = before.AddDays(remainingDays);
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO signing_keys ("KeyId", "Use", "Algorithm", "PrivateKey", "NotBefore", "NotAfter", "Retired")
+            VALUES ('legacy-test', 'sig', 'RS256', {privateKey}, {before.AddDays(-90)}, {notAfter}, true)
+            """);
+        await db.Database.MigrateAsync();
+        var legacy = await db.SigningKeys.SingleAsync();
+        Assert.Equal(privateKey, legacy.PrivateKey);
+        Assert.Null(legacy.SigningStartsAt);
+        Assert.Null(legacy.SigningEndsAt);
+        Assert.Equal(notAfter.UtcTicks / 10, legacy.NotAfter.UtcTicks / 10); // PostgreSQL timestamps have microsecond precision.
+        Assert.True(legacy.VerifyUntil >= legacy.NotAfter);
+        Assert.True(legacy.VerifyUntil >= before.AddDays(14).AddMinutes(5));
+        var ring = new SigningKeyRing(fixture.ConnectionString, new(), TimeProvider.System);
+        await ring.RefreshAsync();
+        Assert.NotEqual(legacy.KeyId, ring.Signer().Key.KeyId);
+        Assert.Contains(legacy.KeyId, ring.VerificationKeys().Select(key => key.KeyId));
     }
 
     [PostgresFact]
@@ -468,8 +489,7 @@ public class UserStoreMigrationTests
         }
         public async ValueTask DisposeAsync()
         {
-            await using var db = Context();
-            await db.Database.EnsureDeletedAsync();
+            await PostgresTestBoundary.DropOwnedDatabaseAsync(ConnectionString, "panda_store_test_");
         }
     }
 

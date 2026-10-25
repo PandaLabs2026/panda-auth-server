@@ -439,9 +439,7 @@ public sealed class ManagementApiE2eTests
 
         public async ValueTask DisposeAsync()
         {
-            await using var db = new PandaAuthDbContext(new DbContextOptionsBuilder<PandaAuthDbContext>()
-                .UseNpgsql(ConnectionString).UseOpenIddict().Options);
-            await db.Database.EnsureDeletedAsync();
+            await PostgresTestBoundary.DropOwnedDatabaseAsync(ConnectionString, "panda_mgmt_e2e_");
         }
     }
 }

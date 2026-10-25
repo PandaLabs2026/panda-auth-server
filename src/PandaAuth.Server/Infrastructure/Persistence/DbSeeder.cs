@@ -85,8 +85,10 @@ public static class DbSeeder
 
         if (options.Seed.AdminWeb.Enabled)
         {
+            await SeedAdminScopeAsync(scopes);
             await SeedFirstPartyWebApplicationAsync(
                 applications, reconciliation, logger, db, FirstPartyClients.AdminWeb, "PandaAuth 管理后台", "Auth:Seed:AdminWeb", options.Seed.AdminWeb, options.TenantRouting, "admin",
+                permissions: [.. FirstPartyWebPermissions(), Permissions.Prefixes.Scope + PandaAuthAdminApi.Scope],
                 postLogoutSuffix: "callback/logout/pandaauth");
         }
 
@@ -560,6 +562,19 @@ public static class DbSeeder
             CreatedAt = DateTimeOffset.UtcNow,
         });
         await db.SaveChangesAsync();
+    }
+
+    private static async Task SeedAdminScopeAsync(IOpenIddictScopeManager scopes)
+    {
+        var descriptor = new OpenIddictScopeDescriptor
+        {
+            Name = PandaAuthAdminApi.Scope,
+            DisplayName = "PandaAuth administration",
+            Resources = { PandaAuthAdminApi.Audience },
+        };
+        var existing = await scopes.FindByNameAsync(PandaAuthAdminApi.Scope);
+        if (existing is null) await scopes.CreateAsync(descriptor);
+        else await scopes.UpdateAsync(existing, descriptor);
     }
 
     private static async Task SeedFirstPartyWebApplicationAsync(

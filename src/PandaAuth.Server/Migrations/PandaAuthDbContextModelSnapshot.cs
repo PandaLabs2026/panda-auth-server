@@ -1007,9 +1007,18 @@ namespace PandaAuth.Server.Migrations
                     b.Property<bool>("Retired")
                         .HasColumnType("boolean");
 
+                    b.Property<DateTimeOffset?>("SigningEndsAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("SigningStartsAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("Use")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("VerifyUntil")
+                        .HasColumnType("timestamp with time zone");
 
                     b.HasKey("KeyId");
 

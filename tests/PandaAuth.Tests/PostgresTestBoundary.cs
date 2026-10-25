@@ -5,6 +5,30 @@ namespace PandaAuth.Tests;
 
 internal static class PostgresTestBoundary
 {
+    internal static async Task DropOwnedDatabaseAsync(string connectionString, string prefix)
+    {
+        var endpoint = new NpgsqlConnectionStringBuilder(connectionString);
+        ValidateEndpoint(endpoint, SharedMode);
+        var database = endpoint.Database;
+        if (!Regex.IsMatch(database ?? "", "^" + Regex.Escape(prefix) + "[0-9a-f]{32}$", RegexOptions.CultureInvariant))
+            throw new InvalidOperationException("Refusing cleanup outside the task-owned database namespace.");
+        NpgsqlConnection.ClearPool(new NpgsqlConnection(connectionString));
+        endpoint.Database = "postgres";
+        await using var admin = new NpgsqlConnection(endpoint.ConnectionString);
+        await admin.OpenAsync();
+        await using var ownership = new NpgsqlCommand("SELECT pg_get_userbyid(datdba) = current_user FROM pg_database WHERE datname = $1", admin);
+        ownership.Parameters.AddWithValue(database!);
+        if (await ownership.ExecuteScalarAsync() is not true)
+            throw new InvalidOperationException("Task role must own the database being removed.");
+        // Terminate only this role's clients. Ordinary DROP handles autovacuum itself;
+        // FORCE can perform privilege checks on a concurrent administrator-owned backend.
+        await using var clients = new NpgsqlCommand("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND usename = current_user AND backend_type = 'client backend'", admin);
+        clients.Parameters.AddWithValue(database!);
+        await clients.ExecuteNonQueryAsync();
+        await using var drop = new NpgsqlCommand($"DROP DATABASE \"{database}\"", admin);
+        await drop.ExecuteNonQueryAsync();
+    }
+
     internal static bool SharedMode => Environment.GetEnvironmentVariable("PANDA_AUTH_TEST_SHARED_POSTGRES") == "1";
 
     internal static void ValidateEndpoint(NpgsqlConnectionStringBuilder connection, bool shared)
