@@ -8,8 +8,6 @@ using PandaAuth.Server.Infrastructure.Persistence;
 
 namespace PandaAuth.Server.Infrastructure.Security.Mfa;
 
-public enum MfaFactorType { Totp, WebAuthn }
-
 public sealed class MfaPolicyException(string message) : InvalidOperationException(message);
 
 public sealed record MfaStatus(
@@ -36,12 +34,10 @@ public sealed class MfaService(
     private const int RecoveryCodeCount = 10;
 
     public async Task<TotpEnrollment> BeginEnrollmentAsync(
-        string userId, ClaimsPrincipal principal, MfaFactorType factor, CancellationToken cancellationToken)
+        string userId, ClaimsPrincipal principal, CancellationToken cancellationToken)
     {
         await RequireEnrollmentPolicyAsync(userId, principal, cancellationToken);
-        if (factor != MfaFactorType.Totp)
-            throw new MfaPolicyException("WebAuthn enrollment must use its ceremony service.");
-        return await totpFactors.BeginEnrollmentAsync(userId, cancellationToken, requirePasskey: false);
+        return await totpFactors.BeginEnrollmentAsync(userId, cancellationToken);
     }
 
     public Task RequireEnrollmentAsync(string userId, ClaimsPrincipal principal, CancellationToken cancellationToken)
@@ -136,11 +132,12 @@ public sealed class MfaService(
             ? await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
             : null;
         var totp = await db.TotpFactors.SingleOrDefaultAsync(x => x.Id == factorId && x.UserId == userId && x.RevokedAt == null, cancellationToken);
-        var activeTotp = await db.TotpFactors.CountAsync(x => x.UserId == userId && x.RevokedAt == null && x.ConfirmedAt != null, cancellationToken);
-        var activeWebAuthn = await db.WebAuthnCredentials.CountAsync(x => x.UserId == userId && x.RevokedAt == null, cancellationToken);
         if (totp is not null)
         {
-            if (activeTotp + activeWebAuthn <= 1)
+            // Passkey 已退役（AUTH-DELIVERY-002）：可验证因子口径下唯一 TOTP 不得自撤——
+            // 换绑路径是「先加新 TOTP 再撤旧的」，这里守护最后一个可验证因子。
+            var confirmedTotp = await db.TotpFactors.CountAsync(x => x.UserId == userId && x.RevokedAt == null && x.ConfirmedAt != null, cancellationToken);
+            if (confirmedTotp <= 1)
                 throw new MfaPolicyException("Cannot remove the last active factor.");
             totp.RevokedAt = clock.GetUtcNow();
             await RemoveRecoveryCodesAsync(userId, cancellationToken);
@@ -151,11 +148,11 @@ public sealed class MfaService(
         var passkey = await db.WebAuthnCredentials.SingleOrDefaultAsync(x => x.Id == factorId && x.UserId == userId && x.RevokedAt == null, cancellationToken);
         if (passkey is not null)
         {
-            if (activeTotp + activeWebAuthn <= 1)
-                throw new MfaPolicyException("Cannot remove the last active factor.");
+            // 退役存量行：Passkey 已不可验证，撤销是迁移动作而非解除防护——不受「最后一个因子」
+            // 护栏限制，也不作废恢复码（恢复码仍服务于现存 TOTP；passkey-only 账号的恢复码是其
+            // 迁移期自救通道）。
             passkey.RevokedAt = clock.GetUtcNow();
             passkey.UpdatedAt = clock.GetUtcNow();
-            await RemoveRecoveryCodesAsync(userId, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
             if (transaction is not null) await transaction.CommitAsync(cancellationToken);
             return;
@@ -167,11 +164,12 @@ public sealed class MfaService(
     {
         var user = await users.FindByIdAsync(userId) ?? throw new MfaPolicyException("User not found.");
         var totp = await db.TotpFactors.AnyAsync(x => x.UserId == userId && x.RevokedAt == null && x.ConfirmedAt != null, cancellationToken);
-        var passkey = await db.WebAuthnCredentials.AnyAsync(x => x.UserId == userId && x.RevokedAt == null, cancellationToken);
         var recovery = await db.MfaRecoveryCodes.CountAsync(x => x.UserId == userId && x.ConsumedAt == null, cancellationToken);
-        var activePasskeyCount = await db.WebAuthnCredentials.CountAsync(
+        var retiredPasskeyCount = await db.WebAuthnCredentials.CountAsync(
             x => x.UserId == userId && x.RevokedAt == null, cancellationToken);
-        return new MfaStatus(totp || passkey, user.TwoFactorEnabled && !totp && !passkey, recovery, activePasskeyCount);
+        // Passkey 退役后口径：活跃因子=已确认 TOTP；重配置标志不再被 passkey 抚平——
+        // passkey-only 存量账号将进入重配置流强制重建 TOTP（AUTH-DELIVERY-002 迁移口径）。
+        return new MfaStatus(totp, user.TwoFactorEnabled && !totp, recovery, retiredPasskeyCount);
     }
 
     /// <summary>自助管理的因子清单（撤销所需的 factorId 来源）。</summary>
@@ -215,7 +213,7 @@ public sealed class MfaService(
         // “重置 MFA”会被一个仍持有旧会话的人原地撤销。重置后重新登录（auth_time 晚于
         // 重置事件）才可按首因子流程重新绑定——这是本批选定的恢复口径，带外一次性
         // 再注册令牌是更强但更重的后续方案。
-        if (!await HasActiveFactorAsync(userId, cancellationToken) &&
+        if (!await HasVerifiableFactorAsync(userId, cancellationToken) &&
             SessionSecurityService.HasRecentAuthentication(principal, now, RecentAuthenticationWindow) &&
             !await WasResetAfterAuthenticationAsync(userId, principal, cancellationToken))
             return;
@@ -244,10 +242,17 @@ public sealed class MfaService(
         db.MfaRecoveryCodes.RemoveRange(codes);
     }
 
-    /// <summary>是否存在活跃因子（已确认 TOTP 或未撤销 Passkey）——登录路径 MFA 挑战的判定依据。</summary>
-    public async Task<bool> HasActiveFactorAsync(string userId, CancellationToken cancellationToken)
-        => await db.TotpFactors.AnyAsync(x => x.UserId == userId && x.RevokedAt == null && x.ConfirmedAt != null, cancellationToken)
-            || await db.WebAuthnCredentials.AnyAsync(x => x.UserId == userId && x.RevokedAt == null, cancellationToken);
+    /// <summary>
+    /// 是否存在可验证因子（已确认 TOTP）——登录路径 MFA 挑战与首因子解锁的判定依据。
+    /// Passkey 退役后不再计入：退役 passkey 无法产生任何合法验证事实，
+    /// 仅剩退役 passkey 的账号按「无可验证因子」对待（密码登录即可重建首个 TOTP，全程审计）。
+    /// </summary>
+    public async Task<bool> HasVerifiableFactorAsync(string userId, CancellationToken cancellationToken)
+        => await db.TotpFactors.AnyAsync(x => x.UserId == userId && x.RevokedAt == null && x.ConfirmedAt != null, cancellationToken);
+
+    /// <summary>是否存在未消费恢复码——登录挑战页自救通道的可用性判定。</summary>
+    public async Task<bool> HasRecoveryCodesAsync(string userId, CancellationToken cancellationToken)
+        => await db.MfaRecoveryCodes.AnyAsync(x => x.UserId == userId && x.ConsumedAt == null, cancellationToken);
 
     private static string HashRecoveryCode(string salt, string code)
         => Convert.ToHexString(Rfc2898DeriveBytes.Pbkdf2(

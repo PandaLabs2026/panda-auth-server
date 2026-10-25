@@ -27,6 +27,7 @@ public sealed class AdminUsersController(
     SessionSecurityService sessionSecurity,
     AdminAuditWriter audit,
     SecurityEventWriter securityEvents,
+    PandaAuth.Server.Infrastructure.Security.Mfa.MfaOperationGrantService grants,
     PandaAuthDbContext db,
     ILogger<AdminUsersController> logger) : Controller
 {
@@ -186,7 +187,13 @@ public sealed class AdminUsersController(
         [FromBody] AdminUserStatusRequest? request,
         CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
+        if (await MfaOperationGrantGate.ConsumeAsync(this, grants, securityEvents,
+                User.FindFirst(Claims.Subject)?.Value ?? string.Empty, MfaOperations.AdminSetStatus, id,
+                new Dictionary<string, string?> { ["status"] = request?.Status.ToString() }, cancellationToken)
+            is { } grantDenied)
+        {
+            return grantDenied;
+        }
         // Deleted 是注销语义（软删除），不经本端点设置——注销走专门的 deactivate 端点（逐字确认）。
         if (request is null || request.Status is not (UserStatus.Active or UserStatus.Frozen))
         {
@@ -335,7 +342,19 @@ public sealed class AdminUsersController(
         [FromBody] AdminUserRolesRequest? request,
         CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
+        if (await MfaOperationGrantGate.ConsumeAsync(this, grants, securityEvents,
+                User.FindFirst(Claims.Subject)?.Value ?? string.Empty, MfaOperations.AdminUpdateRoles, id,
+                new Dictionary<string, string?>
+                {
+                    // 角色集合按 Ordinal 排序后拼接：授权绑定的是集合内容，与请求里的顺序无关。
+                    ["roles"] = request?.Roles is null
+                        ? null
+                        : string.Join(",", request.Roles.Order(StringComparer.Ordinal)),
+                }, cancellationToken)
+            is { } grantDenied)
+        {
+            return grantDenied;
+        }
         if (request?.Roles is null || request.Roles.Any(string.IsNullOrWhiteSpace))
         {
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "无效的角色集合",
@@ -652,9 +671,12 @@ public sealed class AdminUsersController(
     [HttpPost("{id}/reset-2fa")]
     public async Task<IActionResult> ResetTwoFactor(string id, CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User))
+        if (await MfaOperationGrantGate.ConsumeAsync(this, grants, securityEvents,
+                User.FindFirst(Claims.Subject)?.Value ?? string.Empty, MfaOperations.AdminResetTwoFactor, id,
+                null, cancellationToken)
+            is { } grantDenied)
         {
-            return AdminApiAuthorization.MfaRequired();
+            return grantDenied;
         }
 
         var user = await userManager.FindByIdAsync(id);
@@ -726,7 +748,13 @@ public sealed class AdminUsersController(
         [FromBody] AdminDeactivateRequest? request,
         CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
+        if (await MfaOperationGrantGate.ConsumeAsync(this, grants, securityEvents,
+                User.FindFirst(Claims.Subject)?.Value ?? string.Empty, MfaOperations.AdminDeactivate, id,
+                new Dictionary<string, string?> { ["confirmUserName"] = request?.ConfirmUserName }, cancellationToken)
+            is { } grantDenied)
+        {
+            return grantDenied;
+        }
         var user = await userManager.FindByIdAsync(id);
         if (user is null)
         {

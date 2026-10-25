@@ -67,6 +67,8 @@ public sealed class AdminResourceProtocolTests
     {
         await using var fixture = await SecurityProtocolFixture.CreateAsync();
         await fixture.RegisterClientAsync(clientId, scope, audience);
+        // AUTH-DELIVERY-002：admin-api 主策略要求操作者已绑定 TOTP。
+        await fixture.EnableTotpAsync();
         using var browser = fixture.Browser();
         var tokens = await fixture.IssueAsync(browser, clientId,
             "openid roles offline_access" + (requestScope ? " " + scope : ""));

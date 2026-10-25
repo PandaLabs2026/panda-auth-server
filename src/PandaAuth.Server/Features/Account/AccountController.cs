@@ -97,7 +97,7 @@ public sealed class AccountController(
                 // TwoFactorEnabled 只是「曾开启 MFA」的遗留标志；MfaService.MfaStatus 的口径是
                 // 「标志开启且无活跃因子」才需重配置——两处真值源在此对齐：标志遗留但仍有活跃
                 // 因子时清标志自愈，按正常（挑战/直登）路径继续；无因子才进重配置流。
-                if (mfa is null || !await mfa.HasActiveFactorAsync(result.User.Id, cancellationToken))
+                if (mfa is null || !await mfa.HasVerifiableFactorAsync(result.User.Id, cancellationToken))
                 {
                     await signInManager.SignInForMfaReconfigurationAsync(HttpContext, result.User);
                     return LocalRedirect("/account/mfa/user/reconfigure");
@@ -130,11 +130,14 @@ public sealed class AccountController(
             return ViewWithError("用户名或密码错误。");
         }
 
-        // 登录路径 MFA 挑战：开关开启且已有活跃因子时，签入前先要求第二因子（2026-09-30 拍板）。
-        // 此时只签发自包含的 pending 挑战 cookie，不签发任何已认证身份。
-        if (authOptions.Value.LoginMfa.Enabled &&
+        // 登录路径 MFA 挑战（2026-09-30 拍板；AUTH-DELIVERY-002 起 Passkey 退役，挑战因子=TOTP/恢复码）：
+        // 实例开关开启，或登录者是管理员（管理员即使实例未开启也强制「密码＋已验证 TOTP」挑战），
+        // 且已有可验证因子时，签入前先要求第二因子。此时只签发自包含的 pending 挑战 cookie，不签发任何已认证身份。
+        var isAdminLogin = (await userManager.GetRolesAsync(signedInUser!))
+            .Contains(PandaUser.AdminRole, StringComparer.OrdinalIgnoreCase);
+        if ((authOptions.Value.LoginMfa.Enabled || isAdminLogin) &&
             mfa is not null && loginMfaChallenges is not null &&
-            await mfa.HasActiveFactorAsync(signedInUser!.Id, cancellationToken))
+            await mfa.HasVerifiableFactorAsync(signedInUser!.Id, cancellationToken))
         {
             loginMfaChallenges.Issue(HttpContext, signedInUser.Id, signedInUser.SecurityStamp ?? "");
             await RecordSecurityEventAsync("login.mfa_challenge_required", signedInUser.Id, cancellationToken);

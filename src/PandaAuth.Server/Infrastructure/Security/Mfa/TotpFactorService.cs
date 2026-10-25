@@ -7,14 +7,12 @@ namespace PandaAuth.Server.Infrastructure.Security.Mfa;
 
 public sealed record TotpEnrollment(Guid FactorId, string Secret, string ProvisioningUri);
 
-/// <summary>Creates and confirms the encrypted TOTP fallback factor after a Passkey already exists.</summary>
+/// <summary>Creates and confirms the encrypted TOTP factor（AUTH-DELIVERY-002 起 TOTP 为唯一可验证因子，可作首因子绑定）。</summary>
 public sealed class TotpFactorService(PandaAuthDbContext db, TotpSecretProtector protector, TimeProvider clock)
 {
     public async Task<TotpEnrollment> BeginEnrollmentAsync(
-        string userId, CancellationToken cancellationToken, bool requirePasskey = true)
+        string userId, CancellationToken cancellationToken)
     {
-        var hasPasskey = await db.WebAuthnCredentials.AnyAsync(item => item.UserId == userId && item.RevokedAt == null, cancellationToken);
-        if (requirePasskey && !hasPasskey) throw new InvalidOperationException("启用 TOTP 前必须已有有效 Passkey。");
         var pending = await db.TotpFactors
             .Where(item => item.UserId == userId && item.RevokedAt == null && item.ConfirmedAt == null)
             .ToListAsync(cancellationToken);

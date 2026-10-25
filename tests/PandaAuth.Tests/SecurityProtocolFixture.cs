@@ -106,6 +106,8 @@ internal sealed class SecurityProtocolFixture : IAsyncDisposable
         BaseAddress = new Uri("http://localhost"), AllowAutoRedirect = false, HandleCookies = true,
     });
 
+    internal string AdminPassword => password;
+
     internal async Task EnableTotpAsync(bool administrator = true)
     {
         using var scope = Host.Services.CreateScope();
@@ -151,6 +153,15 @@ internal sealed class SecurityProtocolFixture : IAsyncDisposable
             using var challengePage = await browser.GetAsync(login.Headers.Location);
             var csrf = Regex.Match(await challengePage.Content.ReadAsStringAsync(), "name=\"__RequestVerificationToken\"[^>]*value=\"([^\"]+)\"");
             Assert.True(csrf.Success);
+            // 同一 30 秒时间步内的重复登录会被 TOTP 防重放拒绝（LastAcceptedTimeStep）；
+            // 协议测试多次签发属测试编排而非重放，提交前重置时间步标记。
+            using (var reset = Host.Services.CreateScope())
+            {
+                var db = reset.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+                var factor = await db.TotpFactors.SingleAsync(item => item.UserId == UserId && item.RevokedAt == null && item.ConfirmedAt != null);
+                factor.LastAcceptedTimeStep = null;
+                await db.SaveChangesAsync();
+            }
             var counter = new byte[8];
             System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(counter, DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 30);
             var hash = HMACSHA1.HashData(mfaSecret, counter);

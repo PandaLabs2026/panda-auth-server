@@ -18,6 +18,7 @@ public sealed class AccountSecurityVersionTests
     {
         await using var fixture = await SecurityProtocolFixture.CreateAsync();
         await fixture.RegisterClientAsync(PandaAuthAdminApi.ClientId, PandaAuthAdminApi.Scope, PandaAuthAdminApi.Audience);
+        await fixture.EnableTotpAsync();
         using var browser = fixture.Browser();
         var tokens = await fixture.IssueAsync(browser, PandaAuthAdminApi.ClientId, "openid roles offline_access " + PandaAuthAdminApi.Scope);
         var access = tokens.GetProperty("access_token").GetString()!;
@@ -80,6 +81,7 @@ public sealed class AccountSecurityVersionTests
     {
         await using var fixture = await SecurityProtocolFixture.CreateAsync();
         await fixture.RegisterClientAsync(PandaAuthAdminApi.ClientId, PandaAuthAdminApi.Scope, PandaAuthAdminApi.Audience);
+        await fixture.EnableTotpAsync();
         using var browser = fixture.Browser();
         var tokens = await fixture.IssueAsync(browser, PandaAuthAdminApi.ClientId, "openid roles offline_access " + PandaAuthAdminApi.Scope);
         var access = tokens.GetProperty("access_token").GetString()!;

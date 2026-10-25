@@ -3,18 +3,14 @@
     ViewData["Title"] = "管理员安全验证";
 }
 
-<div id="mfa" data-return-url="@Model.ReturnUrl" data-options-url="/account/mfa/enrollment/options" data-enroll-url="/account/mfa/enrollment/complete" data-assertion-options-url="/account/mfa/assertion/options" data-assertion-url="/account/mfa/assertion/complete" data-totp-options-url="/account/mfa/totp/options" data-totp-confirm-url="/account/mfa/totp/confirm" data-totp-assert-url="/account/mfa/totp/assert">
+<div id="mfa" data-return-url="@Model.ReturnUrl" data-totp-options-url="/account/mfa/totp/options" data-totp-confirm-url="/account/mfa/totp/confirm" data-totp-assert-url="/account/mfa/totp/assert">
     @Html.AntiForgeryToken()
-    <p class="footnote">已配置 @Model.ActivePasskeyCount 个 Passkey。设备会要求生物识别或 PIN。</p>
+    <p class="footnote">管理员须以密码＋TOTP 完成验证。Passkey 已于本版本退役。</p>
     <div id="mfa-message" class="notice" hidden></div>
-    <button type="button" id="enroll-passkey">添加 Passkey</button>
-    @if (Model.ActivePasskeyCount > 0)
+    @if (!Model.HasTotp)
     {
-        <button type="button" id="assert-passkey">验证 Passkey</button>
-    }
-    @if (!Model.HasTotp && Model.ActivePasskeyCount > 0)
-    {
-        <button type="button" id="begin-totp">配置 TOTP 备用验证</button>
+        <p class="footnote">尚未绑定 TOTP：绑定后才能进入管理台。</p>
+        <button type="button" id="begin-totp">绑定 TOTP</button>
         <div id="totp-setup" hidden>
             <p class="footnote">在认证器中手动添加密钥：<code id="totp-secret"></code></p>
             <label for="totp-code">输入认证器验证码以确认</label>
@@ -22,11 +18,16 @@
             <button type="button" id="confirm-totp">确认 TOTP</button>
         </div>
     }
-    @if (Model.HasTotp)
+    else
     {
-        <label for="totp-assert-code">使用 TOTP 备用验证</label>
+        <label for="totp-assert-code">输入认证器验证码</label>
         <input id="totp-assert-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" />
-        <button type="button" id="assert-totp">验证 TOTP</button>
+        <button type="button" id="assert-totp">验证并继续</button>
+        <p class="footnote">如需更换或撤销 TOTP，请前往账户中心安全设置（需验证码与当前密码）。</p>
+    }
+    @if (Model.RetiredPasskeyCount > 0)
+    {
+        <p class="footnote">存在 @Model.RetiredPasskeyCount 个已退役 Passkey 记录（仅存量数据，可在账户中心安全设置撤销）。</p>
     }
 </div>
 <script src="/account/mfa.js" defer></script>
