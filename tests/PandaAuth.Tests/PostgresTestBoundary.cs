@@ -20,9 +20,12 @@ internal static class PostgresTestBoundary
         ownership.Parameters.AddWithValue(database!);
         if (await ownership.ExecuteScalarAsync() is not true)
             throw new InvalidOperationException("Task role must own the database being removed.");
-        // Native FORCE handles autovacuum workers. EF's pg_terminate_backend loop requires
-        // excessive privileges when such a worker belongs to the cluster administrator.
-        await using var drop = new NpgsqlCommand($"DROP DATABASE \"{database}\" WITH (FORCE)", admin);
+        // Terminate only this role's clients. Ordinary DROP handles autovacuum itself;
+        // FORCE can perform privilege checks on a concurrent administrator-owned backend.
+        await using var clients = new NpgsqlCommand("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND usename = current_user AND backend_type = 'client backend'", admin);
+        clients.Parameters.AddWithValue(database!);
+        await clients.ExecuteNonQueryAsync();
+        await using var drop = new NpgsqlCommand($"DROP DATABASE \"{database}\"", admin);
         await drop.ExecuteNonQueryAsync();
     }
 

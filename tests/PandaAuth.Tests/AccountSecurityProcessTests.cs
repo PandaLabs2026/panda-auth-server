@@ -7,6 +7,10 @@ using Xunit;
 
 namespace PandaAuth.Tests;
 
+[CollectionDefinition("Security process isolation", DisableParallelization = true)]
+public sealed class SecurityProcessCollection;
+
+[Collection("Security process isolation")]
 public sealed class AccountSecurityProcessTests
 {
     [PostgresFact]
