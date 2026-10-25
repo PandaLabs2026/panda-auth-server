@@ -24,6 +24,13 @@ using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Shared;
 using PandaAuth.Server.Features.PortalClients;
 
+if (OperationalCommand.IsRequested(args))
+{
+    var commandBuilder = WebApplication.CreateBuilder([]);
+    Environment.ExitCode = await OperationalCommand.RunAsync(args, commandBuilder.Configuration, commandBuilder.Environment, Console.Out);
+    return;
+}
+
 if (args.Length == 1 && args[0] == "--migrate-pandamade")
 {
     var migrationBuilder = WebApplication.CreateBuilder([]);
@@ -70,6 +77,13 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 });
 
 var isMigrateCommand = args.Contains("--migrate", StringComparer.Ordinal);
+var startupConfiguration = StartupConfiguration.Validate(builder.Configuration, builder.Environment, isMigrateCommand);
+if (!startupConfiguration.Valid)
+{
+    OperationalCommand.Write(Console.Error, startupConfiguration);
+    Environment.ExitCode = 2;
+    return;
+}
 var connectionStringName = isMigrateCommand ? "Migration" : "Default";
 var connectionString = builder.Configuration.GetConnectionString(connectionStringName)
     ?? throw new InvalidOperationException($"缺少连接字符串 ConnectionStrings:{connectionStringName}。");
@@ -93,16 +107,12 @@ builder.Services.AddControllersWithViews(o =>
 
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
 var authOptions = builder.Configuration.GetSection(AuthOptions.SectionName).Get<AuthOptions>() ?? new AuthOptions();
-CloudConfigRegistration.Validate(authOptions);
 builder.Services.AddSingleton(authOptions.TenantRouting);
 builder.Services.AddSingleton<ITenantHostResolver, TenantHostResolver>();
 builder.Services.AddSingleton<TenantRedirectPolicy>();
 builder.Services.AddScoped<TenantContextAccessor>();
 builder.Services.AddScoped<ITenantContextAccessor>(services => services.GetRequiredService<TenantContextAccessor>());
-// 签名密钥周期误配会让旧 Access Token 在旧密钥退役后静默验签失败，必须在读取密钥表之前失败关闭。
-authOptions.Keys.Validate();
-authOptions.Retention.Validate();
-authOptions.Mfa.Validate(builder.Environment.IsProduction());
+// 安全配置已在任何数据库访问之前由集中预检校验。
 
 builder.Services.AddDbContext<PandaAuthDbContext>(options =>
 {
@@ -317,28 +327,8 @@ builder.Services.AddSingleton<DummyPasswordHash>();
 var emailTransport = builder.Configuration["Email:Transport"] ?? "Resend";
 builder.Services.AddOptions<EmailOptions>()
     .Bind(builder.Configuration.GetSection(EmailOptions.SectionName))
-    .Validate(options =>
-    {
-        if (!builder.Environment.IsProduction())
-        {
-            return true;
-        }
-
-        if (options.Transport.Equals("Resend", StringComparison.OrdinalIgnoreCase))
-        {
-            return !string.IsNullOrWhiteSpace(options.ApiKey) && !string.IsNullOrWhiteSpace(options.FromAddress);
-        }
-
-        if (options.Transport.Equals("Notify", StringComparison.OrdinalIgnoreCase))
-        {
-            return (!string.IsNullOrWhiteSpace(options.NotifyUrl) || !string.IsNullOrWhiteSpace(options.NotifyUrls))
-                   && !string.IsNullOrWhiteSpace(options.NotifyTenantId)
-                   && (!string.IsNullOrWhiteSpace(options.NotifyTokenFile)
-                       || !string.IsNullOrWhiteSpace(options.NotifyClientCertificateFile));
-        }
-
-        return false;
-    }, "生产环境邮件通道配置不完整：Resend 需要 ApiKey/FromAddress；Notify 需要 NotifyUrl/NotifyTenantId 及 token 或客户端证书。")
+    .Validate(options => StartupConfiguration.EmailIsValid(options, builder.Environment.IsProduction()),
+        "生产环境邮件通道配置不完整。")
     .ValidateOnStart();
 if (builder.Environment.IsProduction())
 {
