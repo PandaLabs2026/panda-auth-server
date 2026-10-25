@@ -10,7 +10,7 @@ public static class HarnessProgram
     {
         try
         {
-            if (args is not ["--load-stdin" or "--seed-stdin" or "--proxy-stdin" or "--create-tls-stdin" or "--probe-stdin" or "--verify-ip-limit-stdin" or "--verify-account-limit-stdin" or "--create-recovery-crypto-stdin" or "--verify-recovery-crypto-stdin"]) throw new InvalidOperationException();
+            if (args is not ["--load-stdin" or "--seed-stdin" or "--proxy-stdin" or "--create-tls-stdin" or "--probe-stdin" or "--verify-ip-limit-stdin" or "--verify-account-limit-stdin" or "--create-recovery-crypto-stdin" or "--verify-recovery-crypto-stdin" or "--snapshot-session-stdin" or "--snapshot-revoked-session-stdin" or "--verify-valid-snapshot-stdin" or "--verify-rejected-snapshot-stdin"]) throw new InvalidOperationException();
             var line = await Console.In.ReadLineAsync();
             if (args[0] is "--create-recovery-crypto-stdin" or "--verify-recovery-crypto-stdin")
             {
@@ -34,6 +34,14 @@ public static class HarnessProgram
                 return 0;
             }
             var input = JsonSerializer.Deserialize<LoadRequest>(line ?? "", Json) ?? throw new InvalidOperationException();
+            if (args[0] is "--snapshot-session-stdin" or "--snapshot-revoked-session-stdin" or "--verify-valid-snapshot-stdin" or "--verify-rejected-snapshot-stdin")
+            {
+                var report = args[0].StartsWith("--snapshot-", StringComparison.Ordinal)
+                    ? await ProtocolSnapshot.CreateAsync(input, args[0] == "--snapshot-revoked-session-stdin")
+                    : await ProtocolSnapshot.VerifyAsync(input, args[0] == "--verify-rejected-snapshot-stdin");
+                Console.WriteLine(JsonSerializer.Serialize(report, Json));
+                return 0;
+            }
             if (args[0] is "--verify-ip-limit-stdin" or "--verify-account-limit-stdin")
             {
                 Console.WriteLine(JsonSerializer.Serialize(await DefaultLimitProbe.RunAsync(input, args[0] == "--verify-account-limit-stdin"), Json));

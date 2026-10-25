@@ -19,6 +19,9 @@ public sealed record LoadRequest
     public bool RecoveryScenario { get; init; }
     public bool LegacySchema { get; init; }
     public string RecoveryTotpKey { get; init; } = "";
+    public string SnapshotFile { get; init; } = "";
+    public int SnapshotUserIndex { get; init; }
+    public string SnapshotSha256 { get; init; } = "";
     public string AdminUserName => "r1-admin-" + RunId[..16] + "@example.invalid";
 
     public string ClientId => "r1-load-" + RunId[..16];

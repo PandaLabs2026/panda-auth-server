@@ -17,16 +17,26 @@ internal interface IProtocolActor : IDisposable
     Task<HttpStatusCode> StepAsync(CancellationToken cancellation);
 }
 
-internal sealed class ProtocolUser(LoadRequest settings, int index, X509Certificate2 root) : IProtocolActor
+internal sealed class ProtocolUser : IProtocolActor
 {
-    private HttpClient browser = CreateBrowser(settings, root);
+    private readonly LoadRequest settings;
+    private readonly int index;
+    private readonly X509Certificate2 root;
+    private CookieContainer cookies = new();
+    private HttpClient browser;
     private string accessToken = "";
     private string refreshToken = "";
     private DateTimeOffset refreshAt;
 
-    internal static HttpClient CreateBrowser(LoadRequest settings, X509Certificate2 root)
+    internal ProtocolUser(LoadRequest settings, int index, X509Certificate2 root)
     {
-        var handler = new HttpClientHandler { AllowAutoRedirect = false, CookieContainer = new CookieContainer(), UseProxy = false };
+        this.settings = settings; this.index = index; this.root = root;
+        browser = CreateBrowser(settings, root, cookies);
+    }
+
+    internal static HttpClient CreateBrowser(LoadRequest settings, X509Certificate2 root, CookieContainer? cookies = null)
+    {
+        var handler = new HttpClientHandler { AllowAutoRedirect = false, CookieContainer = cookies ?? new CookieContainer(), UseProxy = false };
         handler.ServerCertificateCustomValidationCallback = (_, certificate, _, errors) =>
         {
             if (certificate is null || (errors & (SslPolicyErrors.RemoteCertificateNameMismatch | SslPolicyErrors.RemoteCertificateNotAvailable)) != 0)
@@ -56,7 +66,8 @@ internal sealed class ProtocolUser(LoadRequest settings, int index, X509Certific
         if (settings.Workload == "login")
         {
             browser.Dispose();
-            browser = CreateBrowser(settings, root);
+            cookies = new CookieContainer();
+            browser = CreateBrowser(settings, root, cookies);
             await LoginAsync(cancellation);
             return HttpStatusCode.OK;
         }
@@ -130,6 +141,21 @@ internal sealed class ProtocolUser(LoadRequest settings, int index, X509Certific
     }
 
     private static void Require(bool condition) { if (!condition) throw new InvalidOperationException("readiness_protocol_assertion_failed"); }
+    internal SessionSnapshot Snapshot() => new(settings.RunId, settings.BaseUri, index, DateTimeOffset.UtcNow,
+        cookies.GetAllCookies().Cast<Cookie>().Select(cookie => new SnapshotCookie(cookie.Name, cookie.Value, cookie.Domain,
+            cookie.Path, cookie.Secure, cookie.HttpOnly, cookie.Expires)).ToArray(), accessToken, refreshToken);
+
+    internal async Task LogoutAsync()
+    {
+        using var page = await browser.GetAsync("/account/change-password");
+        Require(page.StatusCode == HttpStatusCode.OK);
+        var csrf = Regex.Match(await page.Content.ReadAsStringAsync(), "name=\"__RequestVerificationToken\"[^>]*value=\"([^\"]+)\"");
+        Require(csrf.Success);
+        using var form = new FormUrlEncodedContent(new Dictionary<string, string>
+            { ["__RequestVerificationToken"] = WebUtility.HtmlDecode(csrf.Groups[1].Value) });
+        using var response = await browser.PostAsync("/account/logout", form);
+        Require(response.StatusCode == HttpStatusCode.Redirect);
+    }
     public void Dispose() => browser.Dispose();
 }
 
