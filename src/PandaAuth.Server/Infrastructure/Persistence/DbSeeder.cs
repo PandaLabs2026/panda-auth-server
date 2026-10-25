@@ -753,6 +753,11 @@ public static class DbSeeder
         Permissions.Scopes.Email,
         Permissions.Scopes.Profile,
         Permissions.Prefixes.Scope + Scopes.OfflineAccess,
+        // asst-server 经 /connect/introspect 裁决 asst* 客户端的用户令牌（ADR 0095 exchange）。
+        // OpenIddict 只在内省方 ∈ 令牌 aud 时返回敏感应用声明（email/panda:tenant_id），
+        // 缺失时内省结果只剩 active/sub——换发端拿不到邮箱，Dual 窗口既不能匹配也不能 JIT，
+        // 一律 oidc_subject_not_bound。asst 系客户端的令牌受众因此必须含 asst-server。
+        Permissions.Prefixes.Audience + FirstPartyClients.AsstServer,
         Requirements.Features.ProofKeyForCodeExchange,
     ];
 
