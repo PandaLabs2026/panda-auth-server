@@ -33,9 +33,12 @@ internal sealed class SigningKeyRing(string connectionString, SigningKeyOptions 
         await using var db = new PandaAuthDbContext(new DbContextOptionsBuilder<PandaAuthDbContext>().UseNpgsql(connectionString).Options);
         var records = await db.SigningKeys.ToListAsync(cancellationToken);
         var now = clock.GetUtcNow();
-        invalidSchedule = records.Any(key => key.Use == KeyUse.Signing &&
-            (key.VerifyUntil is null || (key.SigningStartsAt is null) != (key.SigningEndsAt is null)));
-        if (invalidSchedule) throw new InvalidOperationException("Incomplete signing-key metadata.");
+        if (records.Any(key => key.Use == KeyUse.Signing &&
+            (key.VerifyUntil is null || (key.SigningStartsAt is null) != (key.SigningEndsAt is null))))
+        {
+            invalidSchedule = true;
+            throw new InvalidOperationException("Incomplete signing-key metadata.");
+        }
         if (records.All(key => key.Use != KeyUse.Encryption))
             Add(KeyUse.Encryption, now, null);
         var managed = records.Where(key => key.Use == KeyUse.Signing && key.SigningStartsAt is not null)
@@ -54,16 +57,21 @@ internal sealed class SigningKeyRing(string connectionString, SigningKeyOptions 
 
         var signing = records.Where(key => key.Use == KeyUse.Signing).ToArray();
         var scheduled = signing.Where(key => key.SigningStartsAt is not null).OrderBy(key => key.SigningStartsAt).ToArray();
-        invalidSchedule = signing.Any(key => key.VerifyUntil is null ||
+        var invalid = signing.Any(key => key.VerifyUntil is null ||
             (key.SigningStartsAt is not null && (key.SigningEndsAt <= key.SigningStartsAt ||
               key.NotBefore > key.SigningStartsAt ||
               key.VerifyUntil < key.SigningEndsAt + MaximumTokenLifetime + ClockMargin)))
             || scheduled.Zip(scheduled.Skip(1)).Any(pair => pair.First.SigningEndsAt > pair.Second.SigningStartsAt);
-        if (invalidSchedule) throw new InvalidOperationException("Invalid signing-key schedule.");
+        if (invalid)
+        {
+            invalidSchedule = true;
+            throw new InvalidOperationException("Invalid signing-key schedule.");
+        }
         await db.SaveChangesAsync(cancellationToken);
         var materials = records.Where(key => key.Use == KeyUse.Encryption || key.VerifyUntil > now)
             .Select(Material).ToImmutableArray();
         Volatile.Write(ref snapshot, new(now, materials));
+        invalidSchedule = false;
 
         void Add(string use, DateTimeOffset published, DateTimeOffset? starts)
         {
