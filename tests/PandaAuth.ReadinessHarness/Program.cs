@@ -1,9 +1,18 @@
 using System.Text.Json;
+using System.Diagnostics;
 
 namespace PandaAuth.ReadinessHarness;
 
 public static class HarnessProgram
 {
+    public static object DescribeFailure(Exception exception) => new
+    {
+        schema = 1, valid = false, error = "readiness_harness_failed", kind = exception.GetType().Name,
+        stack = (new StackTrace(exception, true).GetFrames() ?? []).Where(frame =>
+            frame.GetMethod()?.DeclaringType?.Assembly == typeof(HarnessProgram).Assembly).Take(6)
+            .Select(frame => new { type = frame.GetMethod()?.DeclaringType?.FullName,
+                method = frame.GetMethod()?.Name, line = frame.GetFileLineNumber() }).ToArray()
+    };
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     public static async Task<int> Main(string[] args)
@@ -62,9 +71,9 @@ public static class HarnessProgram
             Console.WriteLine(JsonSerializer.Serialize(result, Json));
             return 0;
         }
-        catch (Exception)
+        catch (Exception exception)
         {
-            Console.WriteLine("{\"schema\":1,\"valid\":false,\"error\":\"readiness_harness_failed\"}");
+            Console.WriteLine(JsonSerializer.Serialize(DescribeFailure(exception), Json));
             return 2;
         }
     }
