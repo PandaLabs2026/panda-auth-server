@@ -41,6 +41,14 @@ public sealed class AccountSecurityVersionTests
         Assert.Equal(AccountSecurityVersion.From(user), issued.FindFirstValue(PandaAuthClaims.SecurityVersion));
         Assert.DoesNotContain(OpenIddictConstants.Destinations.IdentityToken,
             issued.FindFirst(PandaAuthClaims.SecurityVersion)!.GetDestinations());
+        var duplicate = new ClaimsPrincipal(new ClaimsIdentity(source.Claims.Append(
+            new Claim(PandaAuthClaims.SecurityVersion, AccountSecurityVersion.From(user))), "verified"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => controller.CreatePrincipalAsync(user, ["openid"], duplicate));
+        foreach (var invalid in new[] { "", new string('A', 64), new string('0', 64) })
+        {
+            var malformed = source.Clone().SetClaim(PandaAuthClaims.SecurityVersion, invalid);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => controller.CreatePrincipalAsync(user, ["openid"], malformed));
+        }
         Assert.True((await users.UpdateSecurityStampAsync(user)).Succeeded);
         await Assert.ThrowsAsync<InvalidOperationException>(() => controller.CreatePrincipalAsync(user, ["openid"], source));
         var missing = new ClaimsPrincipal(new ClaimsIdentity([new Claim(LoginSessionService.AuthenticatedAtClaim, "1700000000")], "verified"));

@@ -3,6 +3,8 @@ using Xunit;
 using PandaAuth.Shared;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using Microsoft.Extensions.DependencyInjection;
+using OpenIddict.Abstractions;
 
 namespace PandaAuth.Tests;
 
@@ -17,6 +19,33 @@ public sealed class PostgresTheoryAttribute : TheoryAttribute
 
 public sealed class AdminResourceProtocolTests
 {
+    [PostgresFact]
+    public async Task MachineToken_EvenFromAdmittedClientAndResource_CannotAdministerHumanAccounts()
+    {
+        await using var fixture = await SecurityProtocolFixture.CreateAsync();
+        await fixture.RegisterClientAsync(PandaAuthAdminApi.ClientId, PandaAuthAdminApi.Scope, PandaAuthAdminApi.Audience);
+        using (var scope = fixture.Host.Services.CreateScope())
+        {
+            var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+            var application = (await applications.FindByClientIdAsync(PandaAuthAdminApi.ClientId))!;
+            var descriptor = new OpenIddictApplicationDescriptor();
+            await applications.PopulateAsync(descriptor, application);
+            descriptor.Permissions.Add(OpenIddictConstants.Permissions.GrantTypes.ClientCredentials);
+            await applications.UpdateAsync(application, descriptor);
+        }
+        using var client = fixture.Browser();
+        using var credentials = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["client_id"] = PandaAuthAdminApi.ClientId, ["client_secret"] = SecurityProtocolFixture.Secret,
+            ["scope"] = PandaAuthAdminApi.Scope, ["grant_type"] = "client_credentials",
+        });
+        using var response = await client.PostAsync("/connect/token", credentials);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var payload = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.Forbidden, await SecurityProtocolFixture.ReadAdminAsync(client,
+            payload.RootElement.GetProperty("access_token").GetString()!));
+    }
+
     [PostgresFact]
     public async Task OrdinaryClientAdministratorToken_CannotReadAdminApi()
     {
