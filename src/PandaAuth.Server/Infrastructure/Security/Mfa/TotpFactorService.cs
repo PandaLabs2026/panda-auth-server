@@ -18,8 +18,9 @@ public sealed class TotpFactorService(PandaAuthDbContext db, TotpSecretProtector
             .ToListAsync(cancellationToken);
         foreach (var pendingFactor in pending)
             pendingFactor.RevokedAt = clock.GetUtcNow();
-        if (await db.TotpFactors.AnyAsync(item => item.UserId == userId && item.RevokedAt == null && item.ConfirmedAt != null, cancellationToken))
-            throw new InvalidOperationException("此账号已有未撤销的 TOTP 因子。");
+        // 轮换注册（AUTH-DELIVERY-002）：允许已有确认因子时再开一个 pending——旧因子在
+        // 新因子确认成功时由 MfaService.ConfirmEnrollmentAsync 原子撤销。先撤后建会在
+        // 「撤了旧的、新的未确认」间留下无因子窗口（确认失败即锁死），故必须并存过渡。
 
         var factor = new MfaTotpFactor { Id = Guid.NewGuid(), UserId = userId, CreatedAt = clock.GetUtcNow() };
         var secret = RandomNumberGenerator.GetBytes(20);

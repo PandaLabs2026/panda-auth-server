@@ -127,6 +127,53 @@ public sealed class MfaServiceTests
     }
 
     [Fact]
+    public async Task TotpRotation_NewConfirmRevokesSupersededFactorWithoutGap()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "rotating", Email = "rotating@example.com", EmailConfirmed = true };
+        Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
+        var service = CreateService(provider);
+        var principal = Principal(user.Id, recentMethod: MfaClaimTypes.Totp);
+
+        var first = await service.BeginEnrollmentAsync(user.Id, principal, CancellationToken.None);
+        Assert.True(await service.ConfirmEnrollmentAsync(
+            user.Id, principal, first.FactorId, TestGrants.TotpCode(FromBase32(first.Secret)), CancellationToken.None));
+
+        // 轮换：已有确认因子时仍可再开 pending（旧因子保持可用，无无因子窗口）。
+        var second = await service.BeginEnrollmentAsync(user.Id, principal, CancellationToken.None);
+        var db = provider.GetRequiredService<PandaAuthDbContext>();
+        Assert.Equal(2, await db.TotpFactors.CountAsync(x => x.UserId == user.Id && x.RevokedAt == null));
+
+        // 确认新因子 = 换绑收口：旧确认因子被原子撤销，只剩新因子。
+        Assert.True(await service.ConfirmEnrollmentAsync(
+            user.Id, principal, second.FactorId, TestGrants.TotpCode(FromBase32(second.Secret)), CancellationToken.None));
+        var active = await db.TotpFactors
+            .Where(x => x.UserId == user.Id && x.RevokedAt == null && x.ConfirmedAt != null)
+            .ToListAsync();
+        Assert.Equal(second.FactorId, Assert.Single(active).Id);
+    }
+
+    private static byte[] FromBase32(string value)
+    {
+        const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+        var bits = 0;
+        var buffer = 0;
+        var output = new List<byte>();
+        foreach (var character in value)
+        {
+            buffer = (buffer << 5) | alphabet.IndexOf(character);
+            bits += 5;
+            if (bits >= 8)
+            {
+                output.Add((byte)((buffer >> (bits - 8)) & 0xff));
+                bits -= 8;
+            }
+        }
+        return [.. output];
+    }
+
+    [Fact]
     public async Task LegacyTwoFactorWithoutActiveFactor_RequiresReconfiguration()
     {
         using var provider = TestUserStoreHost.Create();

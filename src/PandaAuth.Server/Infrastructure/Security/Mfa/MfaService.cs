@@ -62,6 +62,15 @@ public sealed class MfaService(
         await RequireEnrollmentPolicyAsync(userId, principal, cancellationToken);
         var confirmed = await totpFactors.ConfirmAsync(userId, factorId, code, cancellationToken);
         if (!confirmed) return false;
+        // 轮换收口：新因子确认成功即撤销其余确认因子——换绑全程旧因子保持可用，
+        // 不存在无因子窗口；到达此处的路径都已验证现有因子（self.totp-enroll 授权
+        // 要求 TOTP+密码），恢复码不作废（比原撤销路径的 amr 窗验证更强）。
+        var superseded = await db.TotpFactors
+            .Where(item => item.UserId == userId && item.RevokedAt == null && item.ConfirmedAt != null && item.Id != factorId)
+            .ToListAsync(cancellationToken);
+        foreach (var stale in superseded)
+            stale.RevokedAt = clock.GetUtcNow();
+        if (superseded.Count > 0) await db.SaveChangesAsync(cancellationToken);
         var user = await users.FindByIdAsync(userId);
         if (user is not null && user.TwoFactorEnabled)
         {
