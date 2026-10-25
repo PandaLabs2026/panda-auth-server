@@ -24,4 +24,5 @@
   </ItemGroup>
 
   <ItemGroup><ProjectReference Include="../CloudConfig.JointFixture/CloudConfig.JointFixture.csproj" /></ItemGroup>
+  <ItemGroup><ProjectReference Include="../PandaAuth.ReadinessHarness/PandaAuth.ReadinessHarness.csproj" /></ItemGroup>
 </Project>

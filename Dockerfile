@@ -12,21 +12,16 @@
 FROM mcr.microsoft.com/dotnet/sdk@sha256:0eeb52c76e35a5431ca707ad2bc75e38006a05393045d8532ae44c15d9474523 AS build
 WORKDIR /src
 
-# restore 缓存层：先只进清单文件（slnx/global.json/props + 本仓全部 csproj + share 的
-# props 与被引用的 share/src csproj），NuGet 还原只随这些文件变化，日常源码改动
-# 直接命中缓存层，不再重跑 restore。csproj 覆盖 slnx 全部三工程（src/samples/tests，
-# samples 无 ProjectReference）与引用图上的 panda-auth-share/src。
-COPY panda-auth-server/PandaAuth.Server.slnx \
-     panda-auth-server/global.json \
+# restore 缓存层只覆盖实际发布的 Server → Share 项目引用图。
+# 样例、测试及就绪夹具不属于运行制品，不为它们还原构建依赖。
+COPY panda-auth-server/global.json \
      panda-auth-server/Directory.Build.props \
      panda-auth-server/Directory.Packages.props \
      panda-auth-server/
 COPY panda-auth-server/src/PandaAuth.Server/PandaAuth.Server.csproj panda-auth-server/src/PandaAuth.Server/
-COPY panda-auth-server/samples/PandaAuth.DemoClient/PandaAuth.DemoClient.csproj panda-auth-server/samples/PandaAuth.DemoClient/
-COPY panda-auth-server/tests/PandaAuth.Tests/PandaAuth.Tests.csproj panda-auth-server/tests/PandaAuth.Tests/
 COPY panda-auth-share/Directory.Build.props panda-auth-share/
 COPY panda-auth-share/src/PandaAuth.Shared/PandaAuth.Shared.csproj panda-auth-share/src/PandaAuth.Shared/
-RUN dotnet restore panda-auth-server/PandaAuth.Server.slnx
+RUN dotnet restore panda-auth-server/src/PandaAuth.Server/PandaAuth.Server.csproj
 
 # 全量源码层：bin/obj 已被 Dockerfile.dockerignore 挡在上下文外，restore 生成的
 # obj/project.assets.json 不会被宿主产物覆盖，publish --no-restore 直接复用。
