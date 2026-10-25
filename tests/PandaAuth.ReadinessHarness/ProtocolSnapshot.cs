@@ -130,7 +130,7 @@ public static class ProtocolSnapshot
             bearerStatus = (int)bearerResponse.StatusCode, refreshStatus = (int)refresh.StatusCode };
     }
 
-    private static X509Certificate2 Certificate(LoadRequest settings)
+    internal static X509Certificate2 Certificate(LoadRequest settings)
     {
         var root = X509CertificateLoader.LoadCertificateFromFile(settings.RootCertificateFile);
         if (root.GetNameInfo(X509NameType.SimpleName, false) != "panda-auth-r1-" + settings.RunId)
