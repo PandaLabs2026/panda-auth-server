@@ -5,6 +5,14 @@ namespace PandaAuth.Tests;
 
 public sealed class BffCookieSnapshotTests
 {
+    [Theory]
+    [InlineData(200, 200)]
+    [InlineData(401, 503)]
+    [InlineData(403, 401)]
+    public void LegacyCookieRejectionCannotAcceptAnAuthenticatedAdminOrAnUnavailableService(int admin, int me)
+        => Assert.Throws<InvalidOperationException>(() => BffCookieSnapshot.RequireLegacyRejected(
+            (System.Net.HttpStatusCode)admin, (System.Net.HttpStatusCode)me));
+
     private static LoadRequest Request(string runId, string file) => new()
     {
         RunId = runId, BaseUri = "https://localhost:39001/", RootCertificateFile = "fixture.pem",

@@ -11,6 +11,12 @@ public sealed record StoredBffSession(string RunId, string BaseUri, int Index, D
 
 public static class BffCookieSnapshot
 {
+    public static void RequireLegacyRejected(HttpStatusCode admin, HttpStatusCode me)
+    {
+        if (admin != HttpStatusCode.Unauthorized || me is not (HttpStatusCode.OK or HttpStatusCode.Unauthorized or HttpStatusCode.Redirect))
+            throw new InvalidOperationException("readiness_legacy_bff_rejection_not_proven");
+    }
+
     public static async Task<object> CreateAsync(LoadRequest settings)
     {
         ProtocolSnapshot.ValidateFile(settings, bff: true);
@@ -28,7 +34,7 @@ public static class BffCookieSnapshot
         return new { schema = 1, valid = true, login, snapshotSha256 = checksum };
     }
 
-    public static async Task<object> VerifyAsync(LoadRequest settings)
+    public static async Task<object> VerifyAsync(LoadRequest settings, bool legacyRejected = false)
     {
         ProtocolSnapshot.ValidateFile(settings, bff: true);
         var content = await ProtocolSnapshot.ReadPrivateAsync(settings);
@@ -49,6 +55,14 @@ public static class BffCookieSnapshot
         }
         using var root = ProtocolSnapshot.Certificate(settings);
         using var browser = ProtocolUser.CreateBrowser(settings, root, cookies);
+        if (legacyRejected)
+        {
+            using var oldAdmin = await browser.GetAsync("/admin/api/session");
+            using var originalMe = await browser.GetAsync("/me/api/session");
+            RequireLegacyRejected(oldAdmin.StatusCode, originalMe.StatusCode);
+            return new { schema = 1, valid = true, legacyAdminCookiesRejected = true,
+                adminStatus = (int)oldAdmin.StatusCode, meStatus = (int)originalMe.StatusCode };
+        }
         var admin = await BffLogin.SessionAsync(browser, "/admin/api/session", requireAdmin: true);
         var me = await BffLogin.SessionAsync(browser, "/me/api/session", requireAdmin: false);
         var subject = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(admin)));
