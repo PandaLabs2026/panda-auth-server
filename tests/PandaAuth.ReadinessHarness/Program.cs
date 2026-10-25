@@ -10,7 +10,9 @@ public static class HarnessProgram
         schema = 1, valid = false, error = "readiness_harness_failed", kind = exception.GetType().Name,
         protocol = exception is SnapshotProtocolException protocol ? new { cookieStatus = protocol.CookieStatus,
             bearerStatus = protocol.BearerStatus, refreshStatus = protocol.RefreshStatus,
-            loginRedirect = protocol.LoginRedirect, refreshError = protocol.RefreshError } : null,
+            loginRedirect = protocol.LoginRedirect, refreshError = protocol.RefreshError,
+            redirectOwnerMatches = protocol.RedirectOwnerMatches, redirectScheme = protocol.RedirectScheme,
+            redirectPath = protocol.RedirectPath } : null,
         stack = (new StackTrace(exception, true).GetFrames() ?? []).Where(frame =>
             frame.GetMethod()?.DeclaringType?.Assembly == typeof(HarnessProgram).Assembly).Take(6)
             .Select(frame => new { type = frame.GetMethod()?.DeclaringType?.FullName,

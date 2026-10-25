@@ -14,8 +14,14 @@ public sealed record SessionSnapshot(string RunId, string BaseUri, int UserIndex
     SnapshotCookie[] Cookies, string AccessToken, string RefreshToken);
 
 public sealed class SnapshotProtocolException(HttpStatusCode cookie, HttpStatusCode bearer, HttpStatusCode refresh,
-    bool loginRedirect, string error) : InvalidOperationException("readiness_snapshot_protocol_failed")
+    bool loginRedirect, string error, Uri? owner = null, Uri? location = null) : InvalidOperationException("readiness_snapshot_protocol_failed")
 {
+    public bool RedirectOwnerMatches { get; } = owner is not null && location is not null &&
+        new Uri(owner, location).GetLeftPart(UriPartial.Authority) == owner.GetLeftPart(UriPartial.Authority);
+    public string RedirectScheme { get; } = owner is not null && location is not null
+        ? new Uri(owner, location).Scheme switch { "https" => "https", "http" => "http", _ => "other" } : "none";
+    public string RedirectPath { get; } = owner is not null && location is not null
+        ? new Uri(owner, location).AbsolutePath switch { "/account/login" => "login", "/Account/Login" => "login-capitalized", _ => "other" } : "none";
     public int CookieStatus { get; } = (int)cookie;
     public int BearerStatus { get; } = (int)bearer;
     public int RefreshStatus { get; } = (int)refresh;
@@ -118,7 +124,8 @@ public static class ProtocolSnapshot
                 bearerResponse.StatusCode == HttpStatusCode.Unauthorized && refresh.StatusCode == HttpStatusCode.BadRequest &&
                 refreshError == "invalid_grant";
         }
-        if (!valid) throw new SnapshotProtocolException(cookieResponse.StatusCode, bearerResponse.StatusCode, refresh.StatusCode, loginRedirect, refreshError);
+        if (!valid) throw new SnapshotProtocolException(cookieResponse.StatusCode, bearerResponse.StatusCode, refresh.StatusCode, loginRedirect, refreshError,
+            browser.BaseAddress, cookieResponse.Headers.Location);
         return new { schema = 1, valid = true, rejected, cookieStatus = (int)cookieResponse.StatusCode,
             bearerStatus = (int)bearerResponse.StatusCode, refreshStatus = (int)refresh.StatusCode };
     }
