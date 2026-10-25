@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using PandaAuth.Server.Configuration;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Persistence;
@@ -19,12 +20,17 @@ public sealed class OnlineSigningKeyTests
     {
         var clock = new ControlledClock();
         await using var fixture = await SecurityProtocolFixture.CreateAsync(services =>
+        {
+            // This test drives refresh explicitly; wall-clock hosted ticks must not race its controlled clock.
+            foreach (var descriptor in services.Where(item => item.ServiceType == typeof(IHostedService)
+                && item.ImplementationType == typeof(SigningKeyRefreshService)).ToArray()) services.Remove(descriptor);
             services.AddSingleton(provider =>
             {
                 using var scope = provider.CreateScope();
                 return new SigningKeyRing(scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>()
                     .Database.GetConnectionString()!, new SigningKeyOptions(), clock);
-            }));
+            });
+        });
         var ring = fixture.Host.Services.GetRequiredService<SigningKeyRing>();
         await using (var db = fixture.Context())
         {
