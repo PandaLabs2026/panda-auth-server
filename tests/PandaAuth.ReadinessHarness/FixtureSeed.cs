@@ -63,6 +63,7 @@ public static class FixtureSeed
             db.TotpFactors.Add(factor);
             administrator.TwoFactorEnabled = true;
             await db.SaveChangesAsync();
+            await FixtureRecoveryState.PopulateAsync(db, users, scope.ServiceProvider.GetRequiredService<LoginSessionService>(), settings, administrator);
         }
         return new { schema = 1, valid = true, settings.RunId, users = settings.Concurrency };
     }
