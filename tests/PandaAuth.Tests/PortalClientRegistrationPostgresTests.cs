@@ -374,7 +374,8 @@ internal sealed class RegistrationDatabase : IAsyncDisposable
     public static async Task<RegistrationDatabase> CreateAsync()
     {
         var builder = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("PANDA_AUTH_TEST_POSTGRES"));
-        if (builder.Host != "127.0.0.1" || builder.Port != 43823 || builder.Database != "postgres") throw new InvalidOperationException("Wrong task PG boundary.");
+        PostgresTestBoundary.ValidateEndpoint(builder, PostgresTestBoundary.SharedMode);
+        if (builder.Database != "postgres") throw new InvalidOperationException("Wrong task PG boundary.");
         var name = "panda_auth_registration_test_" + Guid.NewGuid().ToString("N");
         await using (var connection = new NpgsqlConnection(builder.ConnectionString))
         {
@@ -395,9 +396,9 @@ internal sealed class RegistrationDatabase : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         var builder = new NpgsqlConnectionStringBuilder(_connection);
-        if (builder.Host != "127.0.0.1" || builder.Port != 43823 || builder.Database is null || !Regex.IsMatch(builder.Database, "^panda_auth_registration_test_[0-9a-f]{32}$")) throw new InvalidOperationException("Wrong task PG cleanup boundary.");
-        await using (var scope = Provider.CreateAsyncScope()) await scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>().Database.EnsureDeletedAsync();
+        PostgresTestBoundary.ValidateEndpoint(builder, PostgresTestBoundary.SharedMode);
         await Provider.DisposeAsync();
+        await PostgresTestBoundary.DropOwnedDatabaseAsync(_connection, "panda_auth_registration_test_");
     }
 }
 

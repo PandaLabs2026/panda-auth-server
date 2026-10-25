@@ -17,8 +17,8 @@ public class SigningKeyOptionsTests
 
     [Theory]
     [InlineData(90, 180)]
-    [InlineData(1, 2)]
-    [InlineData(365, 366)]
+    [InlineData(1, 16)]
+    [InlineData(365, 380)]
     public void ValidOptions_DoNotThrow(int rotationIntervalDays, int validityDays)
     {
         var options = new SigningKeyOptions
@@ -33,6 +33,8 @@ public class SigningKeyOptionsTests
     [Theory]
     [InlineData(90, 90)]
     [InlineData(180, 90)]
+    [InlineData(1, 2)]
+    [InlineData(365, 366)]
     public void ValidityNotGreaterThanRotation_Throws(int rotationIntervalDays, int validityDays)
     {
         var options = new SigningKeyOptions

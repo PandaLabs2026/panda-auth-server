@@ -27,7 +27,7 @@ public class FleetHumanPrincipalTests
         using var provider = TestUserStoreHost.Create();
         var user = await UserAsync(provider);
         var principal = await TestUserStoreHost.CreateAuthorizationController(provider)
-            .CreatePrincipalAsync(user, [Scopes.OpenId], TrustedSource("1700000000"));
+            .CreatePrincipalAsync(user, [Scopes.OpenId], AuthorizationTimeClaimsTests.Source("1700000000", user));
 
         Assert.Equal(PandaAuthClaims.SubjectTypes.Human,
             principal.FindFirst(PandaAuthClaims.SubjectType)?.Value);
@@ -42,7 +42,7 @@ public class FleetHumanPrincipalTests
         using var provider = TestUserStoreHost.Create();
         var user = await UserAsync(provider);
         var principal = await TestUserStoreHost.CreateAuthorizationController(provider)
-            .CreatePrincipalAsync(user, [Scopes.OpenId], TrustedSource("1700000000"));
+            .CreatePrincipalAsync(user, [Scopes.OpenId], AuthorizationTimeClaimsTests.Source("1700000000", user));
 
         Assert.Contains(Destinations.AccessToken, principal.FindFirst(Claims.AuthenticationTime)!.GetDestinations());
         Assert.Contains(Destinations.IdentityToken, principal.FindFirst(Claims.AuthenticationTime)!.GetDestinations());

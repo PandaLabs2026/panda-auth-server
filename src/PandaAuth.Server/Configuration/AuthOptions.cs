@@ -97,11 +97,12 @@ public sealed class SigningKeyOptions
     /// <exception cref="InvalidOperationException">RotationIntervalDays ≤ 0，或 ValidityDays ≤ RotationIntervalDays。</exception>
     public void Validate()
     {
-        if (RotationIntervalDays <= 0 || ValidityDays <= RotationIntervalDays)
+        if (RotationIntervalDays <= 0 || ValidityDays <= RotationIntervalDays ||
+            (long)ValidityDays - RotationIntervalDays < 15)
         {
             throw new InvalidOperationException(
                 $"Auth:Keys 配置非法：RotationIntervalDays={RotationIntervalDays}、ValidityDays={ValidityDays}；" +
-                "要求 RotationIntervalDays > 0 且 ValidityDays > RotationIntervalDays。" +
+                "要求 RotationIntervalDays > 0 且 ValidityDays > RotationIntervalDays，且至少保留 15 天验证窗口（14 天刷新令牌加时钟余量）。" +
                 "当前取值下旧签名密钥会在上一轮签发的 Access Token 过期前退役，导致验签静默失败。");
         }
     }

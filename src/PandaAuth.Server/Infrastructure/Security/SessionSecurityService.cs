@@ -57,6 +57,7 @@ public sealed class SessionSecurityService(
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        await using var transaction = await AccountSecurityTransaction.BeginAsync(users.Store, cancellationToken);
         var result = await users.UpdateSecurityStampAsync(user);
         if (!result.Succeeded) return result;
 
@@ -76,6 +77,7 @@ public sealed class SessionSecurityService(
                 null), cancellationToken);
         }
 
+        await transaction.CommitAsync(cancellationToken);
         return AccountResult.Success;
     }
 

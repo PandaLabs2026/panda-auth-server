@@ -160,13 +160,11 @@ if (isMigrateCommand)
     return;
 }
 
-// OpenIddict 要求在容器构建前注册密钥：从数据库加载（无密钥自动生成、超期自动轮换）。
-// 密钥生成同为「查-生成-写」：经同一租约串行化，杜绝同库并发启动签出两套主密钥。
-List<(SigningKeyRecord Record, RsaSecurityKey Key)> keys;
-await using (await DatabaseLease.AcquireAsync(connectionString))
-{
-    keys = await SigningKeyStore.LoadOrCreateAsync(connectionString, authOptions.Keys);
-}
+// Initialize the live key ring under the database lease; runtime handlers use refreshed snapshots.
+var signingKeyRing = new SigningKeyRing(connectionString, authOptions.Keys, TimeProvider.System);
+await signingKeyRing.RefreshAsync();
+builder.Services.AddSingleton(signingKeyRing);
+builder.Services.AddHostedService<SigningKeyRefreshService>();
 
 openIddict.AddServer(options =>
     {
@@ -201,7 +199,8 @@ openIddict.AddServer(options =>
             OpenIddictConstants.Scopes.Roles,
             OpenIddictConstants.Scopes.OfflineAccess,
             "api",
-            PandaAuthSessionApi.Scope);
+            PandaAuthSessionApi.Scope,
+            PandaAuthAdminApi.Scope);
         // 控制面七 scope 单一事实源在 Share（PandaAuthScopes.FleetAll），注册与 seed 共用。
         options.RegisterScopes([.. PandaAuthScopes.FleetAll]);
         if (authOptions.Seed.CloudConfig.Enabled)
@@ -210,17 +209,24 @@ openIddict.AddServer(options =>
         // Issuer 全部来自配置（平台级生产 https://auth.appliket.com/，租户级 https://t####-auth.sNNN.pandalabs.cn/，改环境变量即可，零代码切换）。
         options.SetIssuer(IssuerUri());
 
-        foreach (var (record, key) in keys)
+        foreach (var key in signingKeyRing.Snapshot.Keys)
         {
-            if (record.Use == KeyUse.Signing)
+            if (key.Use == KeyUse.Signing)
             {
-                options.AddSigningKey(key);
+                options.AddSigningKey(key.PrivateKey);
             }
             else
             {
-                options.AddEncryptionKey(key);
+                options.AddEncryptionKey(key.PrivateKey);
             }
         }
+        options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.GenerateTokenContext>(handler =>
+            handler.UseSingletonHandler<SelectLiveSigningKey>().SetOrder(int.MinValue + 100_500));
+        options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ValidateTokenContext>(handler =>
+            handler.UseSingletonHandler<LiveServerVerificationKeys>().SetOrder(int.MinValue + 100_500));
+        options.RemoveEventHandler(OpenIddict.Server.OpenIddictServerHandlers.Discovery.AttachSigningKeys.Descriptor);
+        options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.HandleJsonWebKeySetRequestContext>(handler =>
+            handler.UseSingletonHandler<PublishLiveSigningKeys>().SetOrder(int.MinValue + 100_500));
 
         options.UseAspNetCore()
             .EnableAuthorizationEndpointPassthrough()
@@ -246,17 +252,20 @@ openIddict.AddServer(options =>
         // Make TokenRevocationService effective for API requests: revoked token entries
         // must not continue to authenticate merely because the token is self-contained.
         options.EnableTokenEntryValidation();
+        options.AddEventHandler<OpenIddict.Validation.OpenIddictValidationEvents.ValidateTokenContext>(handler =>
+            handler.UseSingletonHandler<LiveLocalVerificationKeys>().SetOrder(int.MinValue + 100_500));
         options.AddEventHandler<OpenIddict.Validation.OpenIddictValidationEvents.ProcessAuthenticationContext>(handler =>
             handler.UseScopedHandler<RejectRevokedSsoBearer>().SetOrder(int.MaxValue));
     });
 
 // Admin API 角色门禁：按 claim 短名（"role"）断言而非 Roles=——后者走 IsInRole，
 // 依赖 identity 的 RoleClaimType 映射（validation 方案默认是 ASP.NET 长名 URI），会静默 403。
-// 这里只做登录、邮箱确认和 admin 角色门禁；GET 只读接口不能被 MFA 阻断。
+// Resource scope/audience/presenter, human identity and current active account are mandatory.
 // 写操作在控制器动作内按风险分级检查：普通写操作要求八小时内任一 MFA，
 // 高风险操作继续要求五分钟内 WebAuthn（见 AdminApiAuthorization）。
+builder.Services.AddScoped<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, AdminResourceHandler>();
 builder.Services.AddAuthorization(options => options.AddPolicy(AdminApiAuthorization.PolicyName, policy =>
-    policy.RequireClaim(OpenIddict.Abstractions.OpenIddictConstants.Claims.Role, PandaAuthRoles.Admin)));
+    policy.RequireAuthenticatedUser().AddRequirements(new AdminResourceRequirement())));
 
 // Management API 作用域门禁（M0）：audience + scope 双条件，缺一拒绝；M2M 主体无角色、无 MFA step-up，
 // 替代控制是专用机密客户端、最小 scope、部署面总开关、速率限制与写审计。
@@ -364,7 +373,7 @@ builder.Services.AddHostedService<LoginLogRetentionService>();
 builder.Services.AddHostedService<SecurityDataRetentionService>();
 // /healthz 必须反映核心依赖：空检查会对「数据库停摆」假绿（门户状态页据此渲染组件状态）。
 // DbContextCheck 执行 CanConnectAsync，库不可达时健康端点转为 503。
-builder.Services.AddHealthChecks().AddDbContextCheck<PandaAuthDbContext>();
+builder.Services.AddHealthChecks().AddDbContextCheck<PandaAuthDbContext>().AddCheck<SigningKeyHealthCheck>("signing-keys");
 
 var app = builder.Build();
 

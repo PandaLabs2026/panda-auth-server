@@ -101,7 +101,14 @@ public sealed class CredentialController(
         }
 
         var outcome = await verification.ConsumePasswordResetAsync(
-            email, model.Token, model.NewPassword, cancellationToken);
+            email, model.Token, model.NewPassword, cancellationToken, beforeCommit: async (userId, token) =>
+            {
+                await tokenRevoker.RevokeUserTokensAsync(userId, cancellationToken: token);
+                await securityEvents.RecordAsync(new SecurityEventEntry(
+                    "user.password_reset", userId, null, "user", userId, "email_token",
+                    new { source = "forgot_password" }, HttpContext.Connection.RemoteIpAddress?.ToString(),
+                    Request.Headers.UserAgent.ToString(), HttpContext.TraceIdentifier), token);
+            });
         if (!outcome.Succeeded)
         {
             return ViewWithError(model, outcome.Error == AccountVerificationError.PasswordPolicy
@@ -109,19 +116,7 @@ public sealed class CredentialController(
                 : "令牌错误、已使用或已过期。");
         }
 
-        await tokenRevoker.RevokeUserTokensAsync(outcome.SecurityEvent!.SubjectId, cancellationToken: cancellationToken);
-        await securityEvents.RecordAsync(new SecurityEventEntry(
-            EventType: "user.password_reset",
-            UserId: outcome.SecurityEvent.SubjectId,
-            ActorUserId: null,
-            TargetType: "user",
-            TargetId: outcome.SecurityEvent.SubjectId,
-            AuthenticationMethod: "email_token",
-            Metadata: new { source = "forgot_password" },
-            IpAddress: HttpContext.Connection.RemoteIpAddress?.ToString(),
-            UserAgent: Request.Headers.UserAgent.ToString(),
-            CorrelationId: HttpContext.TraceIdentifier), cancellationToken);
-        logger.LogInformation("用户通过邮箱恢复重置密码 userId={UserId}", outcome.SecurityEvent.SubjectId);
+        logger.LogInformation("用户通过邮箱恢复重置密码 userId={UserId}", outcome.SecurityEvent!.SubjectId);
 
         // 重置成功通知（尽力而为）：账号持有人有权知道凭据刚被换过——受害者（令牌被钓鱼/邮箱被劫持）
         // 凭此接管。通知失败只记日志：重置本身已完成，不能因通道故障回滚或卡住流程。
@@ -283,6 +278,7 @@ public sealed class CredentialController(
 
         // ReplacePasswordAsync（哈希+安全戳）经 UserService 的单次 SaveAsync 落库：
         // 策略校验在写库之前，失败即零变更；并发冲突路径由 UserService 内部重试消化。
+        await using var transaction = await AccountSecurityTransaction.BeginAsync(userManager.Store, cancellationToken);
         var changed = await userManager.ReplacePasswordAsync(user, model.NewPassword);
         if (!changed.Succeeded)
         {
@@ -290,8 +286,12 @@ public sealed class CredentialController(
             return View(model);
         }
 
-        await userManager.UpdateSecurityStampAsync(user);
         await tokenRevoker.RevokeUserTokensAsync(user.Id, cancellationToken: cancellationToken);
+        await securityEvents.RecordAsync(new SecurityEventEntry(
+            "user.password_changed", user.Id, user.Id, "user", user.Id, "password",
+            null, HttpContext.Connection.RemoteIpAddress?.ToString(), Request.Headers.UserAgent.ToString(),
+            HttpContext.TraceIdentifier), cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         await signInManager.SignOutAsync(HttpContext);
         logger.LogInformation("用户自助修改密码 userId={UserId}（已吊销全部令牌并登出）", user.Id);
 

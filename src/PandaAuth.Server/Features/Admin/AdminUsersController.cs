@@ -220,7 +220,9 @@ public sealed class AdminUsersController(
         }
 
         var previous = user.Status;
+        await using var transaction = await AccountSecurityTransaction.BeginAsync(db, cancellationToken);
         user.Status = request.Status;
+        user.SecurityStamp = Guid.NewGuid().ToString();
         user.UpdatedAt = DateTimeOffset.UtcNow;
         var update = await userManager.UpdateAsync(user);
         if (!update.Succeeded)
@@ -239,6 +241,7 @@ public sealed class AdminUsersController(
         await securityEvents.RecordAsync(SecurityEventEntryFor(
             "user.status_changed", user.Id,
             new { from = previous.ToString(), to = request.Status.ToString() }), cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         logger.LogInformation(
             "管理员 {Actor} 将用户 {UserId}（{UserName}）状态由 {Previous} 变更为 {Status}。",
             User.FindFirst(Claims.Subject)?.Value, user.Id, user.UserName, previous, request.Status);
@@ -308,7 +311,6 @@ public sealed class AdminUsersController(
                 detail: string.Join("; ", add.Errors.Select(error => error.Description)));
         }
 
-        await userManager.UpdateSecurityStampAsync(user);
         await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: CancellationToken.None);
         await audit.RecordAsync(
             AdminAuditing.Entry(User!, AdminAuditAction.UserResetPassword, "user", user.Id,
@@ -384,9 +386,7 @@ public sealed class AdminUsersController(
             return Ok(await DetailOf(user));
         }
 
-        // Identity 的角色增删每次调用即提交（EF 自动保存）：中途失败时已生效的部分无法整体回滚，
-        // 因此以「读回的实际状态」收尾——审计记录 from → 实际 to，令牌照常吊销，再如实报 500。
-        // 审计与吊销缺位的部分成功，比失败本身更糟（授权变更无迹可循）。
+        await using var transaction = await AccountSecurityTransaction.BeginAsync(db, cancellationToken);
         string? failure = null;
         foreach (var role in toAdd)
         {
@@ -412,7 +412,8 @@ public sealed class AdminUsersController(
         }
 
         user.UpdatedAt = DateTimeOffset.UtcNow;
-        await userManager.UpdateSecurityStampAsync(user);
+        if (failure is not null)
+            return Problem(statusCode: StatusCodes.Status409Conflict, title: "角色变更失败", detail: failure);
         await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: cancellationToken);
         var actualRoles = await userManager.GetRolesAsync(user);
         await audit.RecordAsync(
@@ -423,15 +424,7 @@ public sealed class AdminUsersController(
         await securityEvents.RecordAsync(SecurityEventEntryFor(
             "user.roles_changed", user.Id,
             new { from = currentRoles.ToArray(), to = actualRoles.ToArray() }), cancellationToken);
-
-        if (failure is not null)
-        {
-            logger.LogWarning(
-                "管理员 {Actor} 对用户 {UserId}（{UserName}）的角色变更部分失败：{Failure}（实际结果 [{Roles}]）。",
-                User.FindFirst(Claims.Subject)?.Value, user.Id, user.UserName, failure, string.Join(",", actualRoles));
-            return Problem(statusCode: StatusCodes.Status500InternalServerError, title: "角色变更部分失败",
-                detail: $"{failure} 已生效的部分变更已写入审计并吊销令牌，当前角色以详情接口为准。");
-        }
+        await transaction.CommitAsync(cancellationToken);
 
         logger.LogInformation(
             "管理员 {Actor} 将用户 {UserId}（{UserName}）的角色由 [{Previous}] 变更为 [{Current}]。",
@@ -615,6 +608,7 @@ public sealed class AdminUsersController(
             return Ok(await DetailOf(user));
         }
 
+        await using var transaction = await AccountSecurityTransaction.BeginAsync(db, cancellationToken);
         if (emailChanged)
         {
             // 直写字段而非 SetEmailAsync：要同时覆盖「清空邮箱」（Email = null）这一分支。
@@ -625,6 +619,7 @@ public sealed class AdminUsersController(
 
         user.Nickname = newNickname;
         user.Region = newRegion;
+        user.SecurityStamp = Guid.NewGuid().ToString();
         user.UpdatedAt = DateTimeOffset.UtcNow;
         var update = await userManager.UpdateAsync(user);
         if (!update.Succeeded)
@@ -634,7 +629,6 @@ public sealed class AdminUsersController(
         }
 
         // nickname/role 一样会进访问令牌 claim（profile scope），吊销保证新资料即时生效。
-        await userManager.UpdateSecurityStampAsync(user);
         await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: cancellationToken);
         await audit.RecordAsync(
             AdminAuditing.Entry(User!, AdminAuditAction.UserUpdateProfile, "user", user.Id,
@@ -644,6 +638,7 @@ public sealed class AdminUsersController(
         await securityEvents.RecordAsync(SecurityEventEntryFor(
             "user.profile_updated", user.Id,
             new { emailChanged, nicknameChanged, regionChanged }), cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         logger.LogInformation(
             "管理员 {Actor} 更新了用户 {UserId}（{UserName}）的资料（email={EmailChanged}, nickname={NicknameChanged}, region={RegionChanged}）。",
             User.FindFirst(Claims.Subject)?.Value, user.Id, user.UserName, emailChanged, nicknameChanged, regionChanged);
@@ -759,7 +754,9 @@ public sealed class AdminUsersController(
         }
 
         var previous = user.Status;
+        await using var transaction = await AccountSecurityTransaction.BeginAsync(db, cancellationToken);
         user.Status = UserStatus.Deleted;
+        user.SecurityStamp = Guid.NewGuid().ToString();
         user.UpdatedAt = DateTimeOffset.UtcNow;
         var update = await userManager.UpdateAsync(user);
         if (!update.Succeeded)
@@ -768,7 +765,6 @@ public sealed class AdminUsersController(
                 detail: string.Join("; ", update.Errors.Select(error => error.Description)));
         }
 
-        await userManager.UpdateSecurityStampAsync(user);
         await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: cancellationToken);
         await audit.RecordAsync(
             AdminAuditing.Entry(User!, AdminAuditAction.UserDeactivate, "user", user.Id,
@@ -777,6 +773,7 @@ public sealed class AdminUsersController(
             cancellationToken);
         await securityEvents.RecordAsync(SecurityEventEntryFor(
             "user.deactivated", user.Id, new { from = previous.ToString() }), cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         logger.LogInformation(
             "管理员 {Actor} 注销了用户 {UserId}（{UserName}）。",
             User.FindFirst(Claims.Subject)?.Value, user.Id, user.UserName);

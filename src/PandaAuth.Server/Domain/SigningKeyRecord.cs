@@ -25,5 +25,9 @@ public class SigningKeyRecord
 
     public DateTimeOffset NotAfter { get; set; }
 
+    public DateTimeOffset? SigningStartsAt { get; set; }
+    public DateTimeOffset? SigningEndsAt { get; set; }
+    public DateTimeOffset? VerifyUntil { get; set; }
+
     public bool Retired { get; set; }
 }

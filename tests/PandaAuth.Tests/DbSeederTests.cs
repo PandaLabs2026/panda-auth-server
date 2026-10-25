@@ -8,6 +8,7 @@ using OpenIddict.EntityFrameworkCore.Models;
 using PandaAuth.Server.Configuration;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Persistence;
+using PandaAuth.Server.Features.Admin;
 using PandaAuth.Shared;
 using Xunit;
 using static OpenIddict.Abstractions.OpenIddictConstants;
@@ -917,6 +918,20 @@ public class DbSeederTests
         Assert.Equal(ClientTypes.Confidential, await applications.GetClientTypeAsync(adminWeb));
         // 门禁依赖 roles scope：admin-web 注册必须带该 scope 权限。
         Assert.True(await applications.HasPermissionAsync(adminWeb, Permissions.Scopes.Roles));
+        Assert.True(await applications.HasPermissionAsync(adminWeb, Permissions.Prefixes.Scope + PandaAuthAdminApi.Scope));
+        Assert.False(PermissionCatalog.IsAllowed(Permissions.Prefixes.Scope + PandaAuthAdminApi.Scope));
+        var scopes = provider.GetRequiredService<IOpenIddictScopeManager>();
+        var resource = await scopes.FindByNameAsync(PandaAuthAdminApi.Scope);
+        Assert.NotNull(resource);
+        Assert.Equal(new[] { PandaAuthAdminApi.Audience }, (await scopes.GetResourcesAsync(resource)).ToArray());
+        foreach (var clientId in new[] { "me-web", "oasis-web" })
+        {
+            var other = await applications.FindByClientIdAsync(clientId);
+            if (other is not null)
+                Assert.False(await applications.HasPermissionAsync(other, Permissions.Prefixes.Scope + PandaAuthAdminApi.Scope));
+        }
+        await DbSeeder.SeedAsync(provider);
+        Assert.Equal(new[] { PandaAuthAdminApi.Audience }, (await scopes.GetResourcesAsync((await scopes.FindByNameAsync(PandaAuthAdminApi.Scope))!)).ToArray());
     }
 
     [Fact]

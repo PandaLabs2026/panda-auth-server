@@ -3,7 +3,6 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -18,8 +17,8 @@ using static OpenIddict.Abstractions.OpenIddictConstants;
 namespace PandaAuth.Tests;
 
 /// <summary>
-/// 热路径性能与 Seeder 可观测性回归：cookie 校验 stamp 短缓存（命中免查库、stamp 轮换立即生效、
-/// 冻结类状态变化最迟 TTL 生效）；DbSeeder 密钥对账改写必须留下 admin_audit 痕迹（改写发生与
+/// Cookie validation reads current account state on every request.
+/// DbSeeder 密钥对账改写必须留下 admin_audit 痕迹（改写发生与
 /// 未发生两条路径都钉住）。
 /// </summary>
 public class PerfAndSeederTests
@@ -27,7 +26,7 @@ public class PerfAndSeederTests
     private const string CorrectPassword = "Strong!Pass123";
 
     [Fact]
-    public async Task StampCache_SecondValidationWithinTtlSkipsDatabase()
+    public async Task StampValidation_EveryRequestReadsDatabase()
     {
         using var provider = TestUserStoreHost.Create();
         var (users, user) = await CreateUserAsync(provider);
@@ -35,43 +34,38 @@ public class PerfAndSeederTests
             provider.GetRequiredService<PandaAuthDbContext>(),
             provider.GetRequiredService<IPasswordHasher>(),
             provider.GetRequiredService<TimeProvider>());
-        // 用 provider 的 IMemoryCache 单例：UserService 轮换 stamp 时作废的就是这个实例，
-        // 与生产路径（校验与作废共享同一单例）一致。
-        var cache = provider.GetRequiredService<IMemoryCache>();
         var context = ValidationContext(provider, user);
 
-        await LoginSessionService.ValidateCookieAsync(context, spy, cache);
+        await LoginSessionService.ValidateCookieAsync(context, spy);
         var queriesAfterFirst = spy.FindByIdCalls;
 
-        // 同 stamp 第二次校验：命中缓存，不再查库（可数桩直接观测）。
-        await LoginSessionService.ValidateCookieAsync(context, spy, cache);
-        Assert.Equal(queriesAfterFirst, spy.FindByIdCalls);
+        // Even the same stamp requires a new authoritative read.
+        await LoginSessionService.ValidateCookieAsync(context, spy);
+        Assert.Equal(queriesAfterFirst + 1, spy.FindByIdCalls);
         Assert.NotNull(context.Principal);
 
-        // stamp 轮换（改密）：UserService 同步作废旧 stamp 的缓存键，旧 cookie 立即失效
+        // A committed stamp rotation rejects the next old-cookie validation.
         // （构造旧 stamp 主体验证——user 实例的 stamp 已就地更新，不能直接复用）。
         var oldStamp = user.SecurityStamp;
         await users.ReplacePasswordAsync(user, "Rotated!Pass123");
         var rotated = ValidationContext(provider, user, oldStamp);
-        await LoginSessionService.ValidateCookieAsync(rotated, spy, cache);
-        Assert.Equal(queriesAfterFirst + 1, spy.FindByIdCalls);
+        await LoginSessionService.ValidateCookieAsync(rotated, spy);
+        Assert.Equal(queriesAfterFirst + 2, spy.FindByIdCalls);
         Assert.Null(rotated.Principal);
     }
 
     [Fact]
-    public async Task StampCache_FrozenUserStillValidUntilTtl_TradeoffWindow()
+    public async Task StampValidation_FrozenUserIsRejectedOnNextRequest()
     {
-        // 取舍钉住：冻结不轮换 stamp，缓存命中期间（60 秒内）旧会话仍通过校验——
-        // 这是「每请求一查库」与「状态即时生效」之间的显式让步（见 LoginSessionService 注释）。
+        // State changes must be visible even if a caller did not rotate the stamp.
         using var provider = TestUserStoreHost.Create();
         var (users, user) = await CreateUserAsync(provider);
         var spy = new SpyUserService(
             provider.GetRequiredService<PandaAuthDbContext>(),
             provider.GetRequiredService<IPasswordHasher>(),
             provider.GetRequiredService<TimeProvider>());
-        using var cache = new MemoryCache(new MemoryCacheOptions());
         var context = ValidationContext(provider, user);
-        await LoginSessionService.ValidateCookieAsync(context, spy, cache);
+        await LoginSessionService.ValidateCookieAsync(context, spy);
 
         var db = provider.GetRequiredService<PandaAuthDbContext>();
         db.Users.Single(u => u.Id == user.Id).Status = UserStatus.Frozen;
@@ -79,14 +73,13 @@ public class PerfAndSeederTests
         db.ChangeTracker.Clear();
 
         var withinWindow = ValidationContext(provider, user);
-        await LoginSessionService.ValidateCookieAsync(withinWindow, spy, cache);
-        Assert.NotNull(withinWindow.Principal);
-        Assert.Equal(1, spy.FindByIdCalls);
+        await LoginSessionService.ValidateCookieAsync(withinWindow, spy);
+        Assert.Null(withinWindow.Principal);
+        Assert.Equal(2, spy.FindByIdCalls);
 
-        // 校验失败结果绝不缓存：另一用户维度的失败（此处直接用新缓存）必须查库并拒绝。
-        using var freshCache = new MemoryCache(new MemoryCacheOptions());
+        // A later failure is also checked against the store.
         var frozenContext = ValidationContext(provider, user);
-        await LoginSessionService.ValidateCookieAsync(frozenContext, spy, freshCache);
+        await LoginSessionService.ValidateCookieAsync(frozenContext, spy);
         Assert.Null(frozenContext.Principal);
     }
 

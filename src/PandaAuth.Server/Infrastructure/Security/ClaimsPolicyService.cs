@@ -15,6 +15,7 @@ public sealed class ClaimsPolicyService(PandaAuthDbContext db)
         ClaimTypes.NameIdentifier, ClaimTypes.Name, ClaimTypes.Email,
         OpenIddictConstants.Claims.AuthenticationTime, OpenIddictConstants.Claims.Name,
         LoginSessionService.AuthenticatedAtClaim,
+        PandaAuthClaims.SecurityVersion,
         // 租户声明由服务端从已校验主机写入；自定义 claim 不得覆盖/伪造。
         PandaAuthClaims.TenantId, PandaAuthClaims.TenantHost, PandaAuthClaims.SsoSessionId, PandaAuthClaims.SubjectType,
     ];
@@ -102,7 +103,7 @@ public sealed class ClaimsPolicyService(PandaAuthDbContext db)
 
         return userClaims.Concat(roleClaims)
             // Historical/imported rows may predate write validation. They cannot supply trusted claims.
-            .Where(claim => !Reserved.Contains(claim.ClaimType))
+            .Where(claim => claim.ClaimType.StartsWith("panda:", StringComparison.Ordinal) && !Reserved.Contains(claim.ClaimType))
             .Select(claim => new Claim(claim.ClaimType, claim.ClaimValue))
             .ToArray();
     }

@@ -27,6 +27,7 @@ public static class FixtureEntry
     [DllImport("libc")]private static extern uint geteuid();
     public static async Task<int> Main(string[] args)
     {
+        if (args is ["--account-security-stdin"]) return await AccountSecurityProbe.RunAsync();
         string? database=null;string? baseConnection=null;string? content=null;string? nonce=null;var exit=0;var createdDatabase=false;string? diagnosticsRoot=null;string? previousDirectory=null;var stage="admission";
         try
         {

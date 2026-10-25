@@ -5,6 +5,8 @@ using OpenIddict.Server;
 using PandaAuth.Server.Features.SessionState;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Shared;
+using PandaAuth.Server.Domain;
+using PandaAuth.Server.Infrastructure.Security;
 using Xunit;
 
 namespace PandaAuth.Tests;
@@ -21,7 +23,7 @@ public sealed class SsoTokenValidationTests
         var context = new OpenIddictServerEvents.ProcessAuthenticationContext(new OpenIddictServerTransaction
         { Request = new OpenIddictRequest() })
         { AccessTokenPrincipal = new ClaimsPrincipal(new ClaimsIdentity([new Claim(PandaAuthClaims.SubjectType, kind)], "verified")) };
-        await new RejectRevokedSsoSession(new(db, TimeProvider.System)).HandleAsync(context);
+        await new RejectRevokedSsoSession(new(db, TimeProvider.System), new(db, new Argon2idPasswordHasher(), TimeProvider.System)).HandleAsync(context);
         Assert.Equal(rejected, context.IsRejected);
     }
 
@@ -36,7 +38,7 @@ public sealed class SsoTokenValidationTests
         var context = new OpenIddict.Validation.OpenIddictValidationEvents.ProcessAuthenticationContext(
             new OpenIddict.Validation.OpenIddictValidationTransaction())
         { AccessTokenPrincipal = new ClaimsPrincipal(new ClaimsIdentity([new Claim(PandaAuthClaims.SsoSessionId, sid)], "verified")) };
-        await new RejectRevokedSsoBearer(service).HandleAsync(context);
+        await new RejectRevokedSsoBearer(service, new(db, new Argon2idPasswordHasher(), TimeProvider.System)).HandleAsync(context);
         Assert.True(context.IsRejected);
     }
 
@@ -52,12 +54,17 @@ public sealed class SsoTokenValidationTests
         var service = new SessionRevocationService(db, TimeProvider.System);
         const string revoked = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         await service.RevokeAsync(PandaAuthSessionApi.SsoPartition, revoked, default);
-        var handler = new RejectRevokedSsoSession(service);
+        var users = new UserService(db, new Argon2idPasswordHasher(), TimeProvider.System);
+        var user = new PandaUser { UserName = "sso-user" };
+        Assert.True((await users.CreateAsync(user)).Succeeded);
+        var handler = new RejectRevokedSsoSession(service, users);
         foreach (var sid in new[] { revoked, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" })
         {
             var context = new OpenIddictServerEvents.ProcessAuthenticationContext(new OpenIddictServerTransaction
             { Request = new OpenIddictRequest() });
-            var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim(PandaAuthClaims.SsoSessionId, sid)], "verified"));
+            var principal = new ClaimsPrincipal(new ClaimsIdentity([
+                new Claim(PandaAuthClaims.SsoSessionId, sid), new Claim("sub", user.Id),
+                new Claim(PandaAuthClaims.SecurityVersion, AccountSecurityVersion.From(user))], "verified"));
             switch (kind)
             {
                 case "access": context.AccessTokenPrincipal = principal; break;

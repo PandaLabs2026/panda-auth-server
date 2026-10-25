@@ -2,11 +2,12 @@ using System.Security.Claims;
 using OpenIddict.Abstractions;
 using OpenIddict.Server;
 using PandaAuth.Shared;
+using PandaAuth.Server.Infrastructure.Security;
 
 namespace PandaAuth.Server.Features.SessionState;
 
 /// <summary>Checks validated bearer/code/refresh/introspection identities, never an unverified request field.</summary>
-public sealed class RejectRevokedSsoSession(SessionRevocationService revocations)
+public sealed class RejectRevokedSsoSession(SessionRevocationService revocations, UserService users)
     : IOpenIddictServerHandler<OpenIddictServerEvents.ProcessAuthenticationContext>
 {
     public async ValueTask HandleAsync(OpenIddictServerEvents.ProcessAuthenticationContext context)
@@ -20,10 +21,11 @@ public sealed class RejectRevokedSsoSession(SessionRevocationService revocations
             var kinds = principal?.FindAll(PandaAuthClaims.SubjectType).ToArray() ?? [];
             if (principal is null || (ids.Length == 0 && kinds.Length == 1 && kinds[0].Value == PandaAuthClaims.SubjectTypes.Machine))
                 continue; // Machine identities have no browser login session.
-            if (ids.Length != 1 || !Guid.TryParseExact(ids[0].Value, "N", out _)
+            if (!await AccountSecurityVersion.IsCurrentAsync(principal, users)
+                || ids.Length != 1 || !Guid.TryParseExact(ids[0].Value, "N", out _)
                 || await revocations.IsRevokedAsync(PandaAuthSessionApi.SsoPartition, ids[0].Value, context.CancellationToken))
             {
-                context.Reject(error: context.Request?.IsRefreshTokenGrantType() == true
+                context.Reject(error: context.Request?.IsRefreshTokenGrantType() == true || context.Request?.IsAuthorizationCodeGrantType() == true
                     ? OpenIddictConstants.Errors.InvalidGrant : OpenIddictConstants.Errors.InvalidToken);
                 return;
             }
