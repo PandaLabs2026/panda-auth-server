@@ -5,6 +5,7 @@ using Npgsql;
 using PandaAuth.Server.Features.Tokens;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Server.Configuration;
 
 namespace PandaAuth.CloudConfig.JointFixture;
 
@@ -13,7 +14,7 @@ internal static class AccountSecurityProbe
 {
     internal sealed record Input(string Connection, string UserId, bool BeforeCommit);
 
-    internal static async Task<int> RunAsync()
+    internal static async Task<int> RunAsync(bool keyRefresh = false)
     {
         try
         {
@@ -26,6 +27,12 @@ internal static class AccountSecurityProbe
             if (endpoint.Host != "127.0.0.1" || (!shared && endpoint.Port != 43823)
                 || !Regex.IsMatch(endpoint.Database ?? "", "^panda_protocol_test_[0-9a-f]{32}$"))
                 throw new InvalidOperationException();
+            if (keyRefresh)
+            {
+                var keys = await SigningKeyStore.LoadOrCreateAsync(endpoint.ConnectionString, new SigningKeyOptions());
+                Console.WriteLine(JsonSerializer.Serialize(keys.Select(key => key.Record.KeyId).Order()));
+                return 0;
+            }
             await using var db = new PandaAuthDbContext(new DbContextOptionsBuilder<PandaAuthDbContext>()
                 .UseNpgsql(endpoint.ConnectionString).UseOpenIddict().Options);
             var users = new UserService(db, new Argon2idPasswordHasher(), TimeProvider.System);
