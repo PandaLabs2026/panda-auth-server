@@ -489,8 +489,7 @@ public class UserStoreMigrationTests
         }
         public async ValueTask DisposeAsync()
         {
-            await using var db = Context();
-            await db.Database.EnsureDeletedAsync();
+            await PostgresTestBoundary.DropOwnedDatabaseAsync(ConnectionString, "panda_store_test_");
         }
     }
 

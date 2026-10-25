@@ -56,8 +56,6 @@ internal sealed class AuthQualityPostgresFixture : IAsyncDisposable
         PostgresTestBoundary.ValidateEndpoint(builder, PostgresTestBoundary.SharedMode);
         if (builder.Database is null || !Regex.IsMatch(builder.Database, "^panda_auth_quality_[0-9a-f]{32}$"))
             throw new InvalidOperationException("Refusing cleanup outside the task-owned quality database.");
-        await using var db = new PandaAuthDbContext(new DbContextOptionsBuilder<PandaAuthDbContext>()
-            .UseNpgsql(connection).UseOpenIddict().Options);
-        await db.Database.EnsureDeletedAsync();
+        await PostgresTestBoundary.DropOwnedDatabaseAsync(connection, "panda_auth_quality_");
     }
 }

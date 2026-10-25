@@ -300,8 +300,7 @@ public class FleetIntrospectionTests
             if (
                 builder.Database is null || !Regex.IsMatch(builder.Database, "^panda_protocol_test_[0-9a-f]{32}$", RegexOptions.CultureInvariant))
                 throw new InvalidOperationException("Refusing cleanup outside this task-owned Auth database.");
-            await using var db = Context();
-            await db.Database.EnsureDeletedAsync();
+            await PostgresTestBoundary.DropOwnedDatabaseAsync(_connection, "panda_protocol_test_");
         }
     }
 }
