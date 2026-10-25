@@ -14,6 +14,47 @@ namespace PandaAuth.Tests;
 
 public class LoginCookieTests
 {
+    [Theory]
+    [InlineData(false, "missing")]
+    [InlineData(false, "wrong")]
+    [InlineData(false, "duplicate")]
+    [InlineData(true, "missing")]
+    [InlineData(true, "wrong")]
+    [InlineData(true, "duplicate")]
+    public async Task CookieSecurityVersion_IsRequiredExactlyOnceForBothSchemes(bool restricted, string variant)
+    {
+        using var provider = TestUserStoreHost.Create();
+        var user = new PandaUser { UserName = "cookie-version-fixture", TwoFactorEnabled = true };
+        await provider.GetRequiredService<UserService>().CreateAsync(user, "Fixture!Password123");
+        var scheme = restricted ? LoginSessionService.ReconfigurationScheme : LoginSessionService.Scheme;
+        string cookie;
+        if (restricted)
+        {
+            using var issueScope = provider.CreateScope();
+            var issue = Context(issueScope.ServiceProvider);
+            await issueScope.ServiceProvider.GetRequiredService<LoginSessionService>().SignInForMfaReconfigurationAsync(issue, user);
+            cookie = issue.Response.Headers.SetCookie.Single()!.Split(';')[0];
+        }
+        else cookie = await IssueAsync(provider, user);
+        var format = provider.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationOptions>>()
+            .Get(scheme).TicketDataFormat;
+        var ticket = format.Unprotect(cookie[(scheme.Length + 1)..])!;
+        var claims = ticket.Principal.Claims.Where(claim => claim.Type != PandaAuthClaims.SecurityVersion).ToList();
+        if (variant == "wrong") claims.Add(new(PandaAuthClaims.SecurityVersion, new string('0', 64)));
+        if (variant == "duplicate")
+        {
+            claims.Add(new(PandaAuthClaims.SecurityVersion, AccountSecurityVersion.From(user)));
+            claims.Add(new(PandaAuthClaims.SecurityVersion, AccountSecurityVersion.From(user)));
+        }
+        var principal = new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(claims, scheme));
+        var malformed = scheme + "=" + format.Protect(new AuthenticationTicket(principal, ticket.Properties, scheme));
+        using var verifyScope = provider.CreateScope();
+        var context = Context(verifyScope.ServiceProvider, malformed);
+        Assert.False((await context.AuthenticateAsync(scheme)).Succeeded);
+        Assert.Contains(context.Response.Headers.SetCookie, header => header!.StartsWith(scheme + "=;", StringComparison.Ordinal));
+        Assert.DoesNotContain(context.Response.Headers.SetCookie, header => !header!.StartsWith(scheme + "=", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task LegacyCookieWithoutSharedIdentity_RequiresFreshLogin()
     {

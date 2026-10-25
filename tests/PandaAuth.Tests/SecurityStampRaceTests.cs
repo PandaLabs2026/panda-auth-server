@@ -43,6 +43,7 @@ public sealed class SecurityStampRaceTests
         var principal = new ClaimsPrincipal(new ClaimsIdentity(new[]
         {
             new Claim(ClaimTypes.NameIdentifier, id), new Claim(LoginSessionService.StampClaim, stamp),
+            new Claim(PandaAuthClaims.SecurityVersion, AccountSecurityVersion.From(new PandaUser { Id = id, SecurityStamp = stamp })),
             new Claim(PandaAuthClaims.SsoSessionId, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         }, LoginSessionService.Scheme));
         return new(new DefaultHttpContext { RequestServices = provider },

@@ -172,6 +172,8 @@ public class PerfAndSeederTests
         [
             new Claim(ClaimTypes.NameIdentifier, user.Id),
             new Claim(LoginSessionService.StampClaim, stampOverride ?? user.SecurityStamp ?? ""),
+            new Claim(PandaAuthClaims.SecurityVersion, AccountSecurityVersion.From(new PandaUser
+                { Id = user.Id, SecurityStamp = stampOverride ?? user.SecurityStamp })),
             new Claim(PandaAuth.Shared.PandaAuthClaims.SsoSessionId, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         ], LoginSessionService.Scheme));
         var ticket = new AuthenticationTicket(principal, LoginSessionService.Scheme);
