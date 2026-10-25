@@ -47,6 +47,20 @@ public sealed class ReadinessLoadSafetyTests
         Assert.Equal(upstream.Authority, target.Authority);
     }
 
+    [Theory]
+    [InlineData("/admin/healthz", 6001)]
+    [InlineData("/me/healthz", 6002)]
+    public void RecoveryBffRouting_IsExplicitAndConfinedToTheOwnedNamespace(string path, int port)
+    {
+        var server = new Uri("http://panda-r1-server-" + new string('a', 32) + ":8080/");
+        Assert.Equal(server, FixtureProxy.SelectUpstream(server, path, false));
+        var target = FixtureProxy.SelectUpstream(server, path, true);
+        Assert.True(target.IsLoopback);
+        Assert.Equal(port, target.Port);
+        Assert.Equal(server, FixtureProxy.SelectUpstream(server, "/account/login", true));
+        Assert.Equal(server, FixtureProxy.SelectUpstream(server, "//auth.appliket.com/admin", true));
+    }
+
     [Fact]
     public void ConcurrentMeasurements_AreNotLost_AndPercentilesExcludeFailedRequests()
     {

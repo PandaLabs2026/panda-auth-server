@@ -8,10 +8,16 @@ using Microsoft.Extensions.Logging;
 
 namespace PandaAuth.ReadinessHarness;
 
-public sealed record ProxyRequest(string RunId, string UpstreamUri, string CertificateFile, string CertificatePassword, int Port);
+public sealed record ProxyRequest(string RunId, string UpstreamUri, string CertificateFile, string CertificatePassword, int Port, bool EnableBffs = false);
 
 public static class FixtureProxy
 {
+    public static Uri SelectUpstream(Uri server, PathString path, bool enableBffs)
+    {
+        if (enableBffs && path.StartsWithSegments("/admin")) return new Uri("http://127.0.0.1:6001/");
+        if (enableBffs && path.StartsWithSegments("/me")) return new Uri("http://127.0.0.1:6002/");
+        return server;
+    }
     public static Uri BuildTarget(Uri upstream, PathString path, QueryString query) =>
         new UriBuilder(upstream) { Path = path.Value, Query = query.Value?.TrimStart('?') }.Uri;
     private static readonly HashSet<string> HopHeaders = new(StringComparer.OrdinalIgnoreCase)
@@ -34,7 +40,7 @@ public static class FixtureProxy
         app.Run(async context =>
         {
             using var request = new HttpRequestMessage(new HttpMethod(context.Request.Method),
-                BuildTarget(upstream, context.Request.Path, context.Request.QueryString));
+                BuildTarget(SelectUpstream(upstream, context.Request.Path, settings.EnableBffs), context.Request.Path, context.Request.QueryString));
             if (context.Request.ContentLength > 0 || context.Request.Headers.ContainsKey("Transfer-Encoding"))
                 request.Content = new StreamContent(context.Request.Body);
             foreach (var header in context.Request.Headers)
