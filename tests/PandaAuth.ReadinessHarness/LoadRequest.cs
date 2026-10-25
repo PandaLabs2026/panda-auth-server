@@ -27,7 +27,7 @@ public sealed record LoadRequest
             !uri.IsLoopback || uri.Port < 20000 || uri.UserInfo.Length > 0 || uri.Query.Length > 0 || uri.Fragment.Length > 0 ||
             uri.AbsolutePath != "/" || string.IsNullOrWhiteSpace(RootCertificateFile) ||
             string.IsNullOrWhiteSpace(Password) || string.IsNullOrWhiteSpace(ClientSecret) ||
-            Workload is not ("cookie" or "bearer" or "refresh" or "login") ||
+            Workload is not ("cookie" or "bearer" or "refresh" or "login" or "mixed") ||
             Concurrency is < 1 or > 64 || WarmupSeconds is < 0 or > 300 || DurationSeconds is < 1 or > 1800)
             throw new InvalidOperationException("readiness_load_admission_failed");
         if (StopFile.Length > 0 && Path.GetFileName(StopFile) != "r1-" + RunId + ".stop")

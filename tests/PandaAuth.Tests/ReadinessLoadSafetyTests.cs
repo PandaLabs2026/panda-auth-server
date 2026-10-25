@@ -1,4 +1,5 @@
 using PandaAuth.ReadinessHarness;
+using Microsoft.AspNetCore.Http;
 using Xunit;
 
 namespace PandaAuth.Tests;
@@ -34,6 +35,17 @@ public sealed class ReadinessLoadSafetyTests
 
     [Fact]
     public void BoundedLoopbackFixture_IsAdmitted() => Valid.Validate();
+
+    [Fact]
+    public void MixedSteadyState_UsesTheSameBoundedSyntheticAdmission() => (Valid with { Workload = "mixed" }).Validate();
+
+    [Fact]
+    public void ProxyPath_CannotReplaceTheOwnedUpstreamAuthority()
+    {
+        var upstream = new Uri("http://panda-r1-server-" + new string('a', 32) + ":8080/");
+        var target = FixtureProxy.BuildTarget(upstream, new PathString("//auth.appliket.com/"), new QueryString("?x=1"));
+        Assert.Equal(upstream.Authority, target.Authority);
+    }
 
     [Fact]
     public void ConcurrentMeasurements_AreNotLost_AndPercentilesExcludeFailedRequests()

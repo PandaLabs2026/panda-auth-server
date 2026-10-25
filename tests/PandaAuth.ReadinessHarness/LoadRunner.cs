@@ -23,7 +23,8 @@ public static class LoadRunner
             if (discovery.RootElement.GetProperty("issuer").GetString() != settings.BaseUri)
                 throw new InvalidOperationException("readiness_fixture_issuer_mismatch");
         }
-        var users = Enumerable.Range(0, settings.Concurrency).Select(index => new ProtocolUser(settings, index, certificate)).ToArray();
+        var users = Enumerable.Range(0, settings.Concurrency).Select(index => settings.Workload == "mixed"
+            ? (IProtocolActor)new MixedProtocolUser(settings, index, certificate) : new ProtocolUser(settings, index, certificate)).ToArray();
         try
         {
             await Task.WhenAll(users.Select(user => user.InitializeAsync(cancellation)));

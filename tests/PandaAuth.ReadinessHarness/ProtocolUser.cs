@@ -11,7 +11,13 @@ using PandaAuth.Shared;
 
 namespace PandaAuth.ReadinessHarness;
 
-internal sealed class ProtocolUser(LoadRequest settings, int index, X509Certificate2 root) : IDisposable
+internal interface IProtocolActor : IDisposable
+{
+    Task InitializeAsync(CancellationToken cancellation);
+    Task<HttpStatusCode> StepAsync(CancellationToken cancellation);
+}
+
+internal sealed class ProtocolUser(LoadRequest settings, int index, X509Certificate2 root) : IProtocolActor
 {
     private HttpClient browser = CreateBrowser(settings, root);
     private string accessToken = "";
@@ -20,7 +26,7 @@ internal sealed class ProtocolUser(LoadRequest settings, int index, X509Certific
 
     internal static HttpClient CreateBrowser(LoadRequest settings, X509Certificate2 root)
     {
-        var handler = new HttpClientHandler { AllowAutoRedirect = false, CookieContainer = new CookieContainer() };
+        var handler = new HttpClientHandler { AllowAutoRedirect = false, CookieContainer = new CookieContainer(), UseProxy = false };
         handler.ServerCertificateCustomValidationCallback = (_, certificate, _, errors) =>
         {
             if (certificate is null || (errors & (SslPolicyErrors.RemoteCertificateNameMismatch | SslPolicyErrors.RemoteCertificateNotAvailable)) != 0)
@@ -34,9 +40,9 @@ internal sealed class ProtocolUser(LoadRequest settings, int index, X509Certific
         return new HttpClient(handler) { BaseAddress = new Uri(settings.BaseUri), Timeout = TimeSpan.FromSeconds(15) };
     }
 
-    internal async Task InitializeAsync(CancellationToken cancellation) => await LoginAsync(cancellation);
+    public async Task InitializeAsync(CancellationToken cancellation) => await LoginAsync(cancellation);
 
-    internal async Task<HttpStatusCode> StepAsync(CancellationToken cancellation)
+    public async Task<HttpStatusCode> StepAsync(CancellationToken cancellation)
     {
         if (settings.Workload == "bearer" && DateTimeOffset.UtcNow >= refreshAt)
         {
@@ -125,4 +131,16 @@ internal sealed class ProtocolUser(LoadRequest settings, int index, X509Certific
 
     private static void Require(bool condition) { if (!condition) throw new InvalidOperationException("readiness_protocol_assertion_failed"); }
     public void Dispose() => browser.Dispose();
+}
+
+internal sealed class MixedProtocolUser : IProtocolActor
+{
+    private readonly ProtocolUser[] users;
+    private int next;
+    internal MixedProtocolUser(LoadRequest request, int index, X509Certificate2 root)
+        => users = new[] { "cookie", "bearer", "refresh", "login" }.Select(workload => new ProtocolUser(request with { Workload = workload }, index, root)).ToArray();
+    public Task InitializeAsync(CancellationToken cancellation) => Task.WhenAll(users.Select(user => user.InitializeAsync(cancellation)));
+    public Task<HttpStatusCode> StepAsync(CancellationToken cancellation)
+        => users[next++ % users.Length].StepAsync(cancellation);
+    public void Dispose() { foreach (var user in users) user.Dispose(); }
 }

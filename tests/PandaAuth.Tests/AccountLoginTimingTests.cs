@@ -16,6 +16,24 @@ namespace PandaAuth.Tests;
 /// </summary>
 public class AccountLoginTimingTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ThrottledLogin_Returns429WithRetryAdvice_AndSkipsPasswordWork(bool ipLimit)
+    {
+        var hasher = new RecordingPasswordHasher();
+        using var provider = TestUserStoreHost.Create(new PandaAuth.Server.Configuration.AuthOptions
+        {
+            RateLimit = new() { IpPerMinute = ipLimit ? 1 : 10, AccountPerMinute = ipLimit ? 10 : 1 }
+        }, hasher);
+        await TestUserStoreHost.CreateAccountController(provider, hasher).Login(UnknownUser(), CancellationToken.None);
+        var controller = TestUserStoreHost.CreateAccountController(provider, hasher);
+        var result = Assert.IsType<ViewResult>(await controller.Login(UnknownUser(ipLimit ? "another-ghost" : "ghost-user"), CancellationToken.None));
+        Assert.Equal(429, result.StatusCode);
+        Assert.Equal("60", controller.Response.Headers["Retry-After"]);
+        Assert.Equal(1, hasher.VerifyCalls);
+    }
+
     private static LoginViewModel UnknownUser(string userName = "ghost-user") => new()
     {
         UserName = userName,

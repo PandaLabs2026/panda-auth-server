@@ -16,9 +16,10 @@ public static class FixtureSeed
     {
         settings.Validate();
         var connection = new NpgsqlConnectionStringBuilder(settings.MigrationConnection);
-        if (connection.Host != "127.0.0.1" || connection.Port < 20000 ||
-            !Regex.IsMatch(connection.Database ?? "", "^panda_r1_[0-9a-f]{32}$") ||
-            !Regex.IsMatch(connection.Username ?? "", "^panda_r1_[0-9a-f]{16}_owner$"))
+        var isolatedContainer = OperatingSystem.IsLinux() && File.Exists("/.dockerenv") &&
+            Environment.GetEnvironmentVariable("PANDA_AUTH_R1_ISOLATED_RUN") == settings.RunId;
+        if (connection.Host != "127.0.0.1" || (connection.Port < 20000 && !(connection.Port == 5432 && isolatedContainer)) ||
+            connection.Database != "panda_r1_" + settings.RunId || connection.Username != "panda_r1_" + settings.RunId[..16] + "_owner")
             throw new InvalidOperationException("readiness_database_admission_failed");
         var services = new ServiceCollection().AddLogging();
         services.AddDbContext<PandaAuthDbContext>(options => options.UseNpgsql(connection.ConnectionString).UseOpenIddict());

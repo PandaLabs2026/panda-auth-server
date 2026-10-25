@@ -12,6 +12,8 @@ public sealed record ProxyRequest(string RunId, string UpstreamUri, string Certi
 
 public static class FixtureProxy
 {
+    public static Uri BuildTarget(Uri upstream, PathString path, QueryString query) =>
+        new UriBuilder(upstream) { Path = path.Value, Query = query.Value?.TrimStart('?') }.Uri;
     private static readonly HashSet<string> HopHeaders = new(StringComparer.OrdinalIgnoreCase)
         { "Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization", "TE", "Trailer", "Transfer-Encoding", "Upgrade" };
 
@@ -27,12 +29,12 @@ public static class FixtureProxy
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(server => server.ListenAnyIP(settings.Port, listener => listener.UseHttps(certificate)));
         await using var app = builder.Build();
-        using var client = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false })
+        using var client = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false, UseProxy = false })
             { Timeout = TimeSpan.FromSeconds(30) };
         app.Run(async context =>
         {
             using var request = new HttpRequestMessage(new HttpMethod(context.Request.Method),
-                new Uri(upstream, context.Request.Path + context.Request.QueryString));
+                BuildTarget(upstream, context.Request.Path, context.Request.QueryString));
             if (context.Request.ContentLength > 0 || context.Request.Headers.ContainsKey("Transfer-Encoding"))
                 request.Content = new StreamContent(context.Request.Body);
             foreach (var header in context.Request.Headers)
