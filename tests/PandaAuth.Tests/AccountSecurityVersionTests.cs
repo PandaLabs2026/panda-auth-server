@@ -6,12 +6,32 @@ using OpenIddict.Abstractions;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Security;
 using PandaAuth.Shared;
+using PandaAuth.Server.Features.Tokens;
 using Xunit;
 
 namespace PandaAuth.Tests;
 
 public sealed class AccountSecurityVersionTests
 {
+    [PostgresFact]
+    public async Task BulkTokenRevocation_RejectsWarmBearerWithoutChangingCookieSecurityStamp()
+    {
+        await using var fixture = await SecurityProtocolFixture.CreateAsync();
+        await fixture.RegisterClientAsync(PandaAuthAdminApi.ClientId, PandaAuthAdminApi.Scope, PandaAuthAdminApi.Audience);
+        using var browser = fixture.Browser();
+        var tokens = await fixture.IssueAsync(browser, PandaAuthAdminApi.ClientId, "openid roles offline_access " + PandaAuthAdminApi.Scope);
+        var access = tokens.GetProperty("access_token").GetString()!;
+        Assert.Equal(HttpStatusCode.OK, await SecurityProtocolFixture.ReadAdminAsync(browser, access));
+        using (var scope = fixture.Host.Services.CreateScope())
+        {
+            var users = scope.ServiceProvider.GetRequiredService<UserService>();
+            var before = (await users.FindByIdAsync(fixture.UserId))!.SecurityStamp;
+            await scope.ServiceProvider.GetRequiredService<ITokenRevoker>().RevokeUserTokensAsync(fixture.UserId);
+            Assert.Equal(before, (await users.FindByIdAsync(fixture.UserId))!.SecurityStamp);
+        }
+        Assert.Equal(HttpStatusCode.Unauthorized, await SecurityProtocolFixture.ReadAdminAsync(browser, access));
+    }
+
     [PostgresFact]
     public async Task SecurityCommitBetweenAuthorizationAndExchange_RejectsAlreadyIssuedCode()
     {
