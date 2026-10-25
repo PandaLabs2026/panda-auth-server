@@ -7,7 +7,8 @@ using PandaAuth.Server.Infrastructure.Security.Mfa;
 
 namespace PandaAuth.ReadinessHarness;
 
-public sealed record RecoveryCryptoInput(string Directory, string RunId, string TotpKey);
+public sealed record RecoveryCryptoInput(string Directory, string RunId, string TotpKey, bool UseExistingKeyrings = false);
+public sealed class RecoveryKeyringMissingException() : InvalidOperationException("recovery_keyring_missing");
 
 public static class RecoveryCrypto
 {
@@ -17,17 +18,25 @@ public static class RecoveryCrypto
     };
     private sealed record Canary(string RunId, Dictionary<string, string> Dp, Guid FactorId, ProtectedTotpSecret Totp);
 
-    public static void Create(string root, string runId, byte[] totpKey)
+    public static void Create(string root, string runId, byte[] totpKey, bool useExistingKeyrings = false)
     {
         Admit(root, runId, totpKey);
         var protectedValues = new Dictionary<string, string>();
         foreach (var (component, application) in Applications)
         {
             var directory = Path.Combine(root, component);
-            if (Directory.Exists(directory)) throw new InvalidOperationException("recovery_keyring_already_exists");
-            Directory.CreateDirectory(directory);
-            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-            var provider = DataProtectionProvider.Create(new DirectoryInfo(directory), builder => builder.SetApplicationName(application));
+            if (useExistingKeyrings) RequireExistingKeyring(directory);
+            else
+            {
+                if (Directory.Exists(directory)) throw new InvalidOperationException("recovery_keyring_already_exists");
+                Directory.CreateDirectory(directory);
+                if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+            var provider = DataProtectionProvider.Create(new DirectoryInfo(directory), builder =>
+            {
+                builder.SetApplicationName(application);
+                if (useExistingKeyrings) builder.DisableAutomaticKeyGeneration();
+            });
             protectedValues[component] = provider.CreateProtector("PandaAuth.R1.RecoveryCanary").Protect(Value(runId, component));
         }
         var factor = Guid.NewGuid();
@@ -51,11 +60,7 @@ public static class RecoveryCrypto
         foreach (var (component, application) in Applications)
         {
             var directory = Path.Combine(root, component);
-            if (!Directory.Exists(directory) || File.GetAttributes(directory).HasFlag(FileAttributes.ReparsePoint) ||
-                Directory.GetFiles(directory, "*.xml").Length == 0)
-                throw new InvalidOperationException("recovery_keyring_missing");
-            foreach (var key in Directory.GetFiles(directory))
-                if (File.GetAttributes(key).HasFlag(FileAttributes.ReparsePoint)) throw new InvalidOperationException("recovery_keyring_link_invalid");
+            RequireExistingKeyring(directory);
             var provider = DataProtectionProvider.Create(new DirectoryInfo(directory), builder =>
             {
                 builder.SetApplicationName(application);
@@ -71,6 +76,16 @@ public static class RecoveryCrypto
 
     private static string Value(string runId, string component) => "panda-auth-r1-crypto-" + runId + "-" + component;
     internal static byte[] SyntheticTotpSecret(string runId) => SHA256.HashData(Encoding.UTF8.GetBytes("synthetic-totp-" + runId))[..20];
+
+    private static void RequireExistingKeyring(string directory)
+    {
+        if (!Directory.Exists(directory))
+            throw new RecoveryKeyringMissingException();
+        if (File.GetAttributes(directory).HasFlag(FileAttributes.ReparsePoint) ||
+            Directory.GetFiles(directory).Any(key => File.GetAttributes(key).HasFlag(FileAttributes.ReparsePoint)))
+            throw new InvalidOperationException("recovery_keyring_link_invalid");
+        if (Directory.GetFiles(directory, "*.xml").Length == 0) throw new RecoveryKeyringMissingException();
+    }
 
     private static void Admit(string root, string runId, byte[] totpKey)
     {

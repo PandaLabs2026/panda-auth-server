@@ -26,6 +26,27 @@ public sealed class RecoveryCryptoTests : IDisposable
         Assert.Equal(before, Directory.GetFiles(root, "*.xml", SearchOption.AllDirectories).Order().ToArray());
     }
 
+    [Fact]
+    public void ExistingServiceKeyringsCanProtectACanaryWithoutCreatingOrChangingKeys()
+    {
+        RecoveryCrypto.Create(root, run, key);
+        File.Delete(Path.Combine(root, "crypto-canary.json"));
+        var before = Directory.GetFiles(root, "*.xml", SearchOption.AllDirectories).ToDictionary(path => path,
+            path => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));
+        RecoveryCrypto.Create(root, run, key, useExistingKeyrings: true);
+        Assert.True(RecoveryCrypto.Verify(root, run, key));
+        Assert.Equal(before.OrderBy(pair => pair.Key), Directory.GetFiles(root, "*.xml", SearchOption.AllDirectories)
+            .ToDictionary(path => path, path => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)))).OrderBy(pair => pair.Key));
+    }
+
+    [Fact]
+    public void ExistingKeyringModeCannotReplaceAMissingServiceStore()
+    {
+        foreach (var component in new[] { "server", "admin", "me" }) Directory.CreateDirectory(Path.Combine(root, component));
+        Assert.ThrowsAny<Exception>(() => RecoveryCrypto.Create(root, run, key, useExistingKeyrings: true));
+        Assert.Empty(Directory.GetFiles(root, "*.xml", SearchOption.AllDirectories));
+    }
+
     [Theory]
     [InlineData("server")]
     [InlineData("admin")]

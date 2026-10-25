@@ -30,7 +30,7 @@ public static class HarnessProgram
             {
                 var cryptoInput = JsonSerializer.Deserialize<RecoveryCryptoInput>(line ?? "", Json) ?? throw new InvalidOperationException();
                 var key = Convert.FromBase64String(cryptoInput.TotpKey);
-                if (args[0] == "--create-recovery-crypto-stdin") RecoveryCrypto.Create(cryptoInput.Directory, cryptoInput.RunId, key);
+                if (args[0] == "--create-recovery-crypto-stdin") RecoveryCrypto.Create(cryptoInput.Directory, cryptoInput.RunId, key, cryptoInput.UseExistingKeyrings);
                 else RecoveryCrypto.Verify(cryptoInput.Directory, cryptoInput.RunId, key);
                 Console.WriteLine(JsonSerializer.Serialize(new { schema = 1, valid = true, cryptoInput.RunId }, Json));
                 return 0;
