@@ -163,6 +163,7 @@ public static class DbSeeder
         if (options.Seed.AsstServer.Enabled)
         {
             await SeedAsstServerApplicationAsync(applications, reconciliation, logger, db, options.Seed.AsstServer);
+            await SeedAsstEmailScopeAsync(scopes);
         }
 
         if (options.Seed.Fleet.Enabled)
@@ -930,6 +931,24 @@ public static class DbSeeder
         }
         await applications.PopulateAsync(existing, updated);
         await applications.UpdateAsync(existing);
+    }
+
+    /// <summary>
+    /// email 标准 scope 实体挂 asst-server 受众（ADR 0095）：asst* 客户端请求的都是标准
+    /// scope（无 scope 实体），令牌受众只能经 scope Resources 投影（InferResources）——
+    /// 缺失时内省方不在令牌 aud，OpenIddict 剔除敏感声明（email/panda:tenant_id），
+    /// exchange 拿不到身份断言。幂等；生产行已手工播种（2026-10-25）。
+    /// </summary>
+    private static async Task SeedAsstEmailScopeAsync(IOpenIddictScopeManager scopes)
+    {
+        if (await scopes.FindByNameAsync(Scopes.Email) is not null) return;
+
+        await scopes.CreateAsync(new OpenIddictScopeDescriptor
+        {
+            Name = Scopes.Email,
+            DisplayName = "Panda Assistant resource audience",
+            Resources = { FirstPartyClients.AsstServer },
+        });
     }
 
     /// <summary>
