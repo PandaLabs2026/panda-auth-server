@@ -4,8 +4,12 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.DependencyInjection;
+using OpenIddict.Abstractions;
+using OpenIddict.EntityFrameworkCore.Models;
 using PandaAuth.Server.Configuration;
+using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Persistence;
+using PandaAuth.Shared;
 using Xunit;
 
 namespace PandaAuth.Tests;
@@ -136,6 +140,79 @@ public sealed class StartupConfigurationProcessTests
         using var json = JsonDocument.Parse(result.Output);
         Assert.False(json.RootElement.GetProperty("valid").GetBoolean());
         Assert.DoesNotContain("Npgsql", result.Error + result.Output);
+    }
+
+    [Theory]
+    [InlineData("--migrate-admin-resource-only", "--migrate")]
+    [InlineData("--migrate-admin-resource-only=1")]
+    public async Task ResourceMigration_InvalidShapeFailsClosedBeforeDatabaseAccess(params string[] arguments)
+    {
+        await using var process = new ProcessFixture();
+        var result = await process.RunAsync(arguments);
+        Assert.Equal(2, result.Code);
+        using var json = JsonDocument.Parse(result.Output);
+        Assert.False(json.RootElement.GetProperty("valid").GetBoolean());
+        Assert.DoesNotContain("Npgsql", result.Error + result.Output);
+    }
+
+    [PostgresFact]
+    public async Task ResourceMigration_UpgradesLegacySchemaWithoutFullSeedingOrKeyInitialization()
+    {
+        await using var database = await AuthQualityPostgresFixture.CreateAsync();
+        using var scope = database.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        var manager = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+        await manager.CreateAsync(new OpenIddictApplicationDescriptor
+        {
+            ClientId = FirstPartyClients.AdminWeb, ClientType = OpenIddictConstants.ClientTypes.Confidential,
+            ClientSecret = "synthetic-original-secret",
+            Permissions = { OpenIddictConstants.Permissions.Endpoints.Authorization, OpenIddictConstants.Permissions.Endpoints.Token,
+                OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode, OpenIddictConstants.Permissions.ResponseTypes.Code },
+            RedirectUris = { new Uri("https://fixture.invalid/original-callback") },
+        });
+        var original = await db.Set<OpenIddictEntityFrameworkCoreApplication>().AsNoTracking().SingleAsync();
+        db.Users.Add(new PandaUser { Id = Guid.NewGuid().ToString(), UserName = "fixture-existing", PasswordHash = "unchanged", SecurityStamp = "unchanged" });
+        await db.SaveChangesAsync();
+        var migrations = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
+        await db.GetService<IMigrator>().MigrateAsync(migrations[^2]);
+        await using var process = new ProcessFixture();
+        process.Environment["ConnectionStrings__Migration"] = db.Database.GetConnectionString()!;
+        process.Environment["Auth__Seed__Admin__Email"] = "must-not-create@example.invalid";
+        process.Environment["Auth__Seed__Admin__Password"] = "synthetic-must-not-seed-password";
+        process.Environment["Auth__Seed__AdminWeb__ClientSecret"] = "synthetic-must-not-reconcile-secret";
+        var result = await process.RunAsync(["--migrate-admin-resource-only"]);
+        Assert.Equal(0, result.Code);
+        using var report = JsonDocument.Parse(result.Output);
+        Assert.True(report.RootElement.GetProperty("valid").GetBoolean());
+        var after = await db.Set<OpenIddictEntityFrameworkCoreApplication>().AsNoTracking().SingleAsync();
+        Assert.Equal(original.ClientSecret, after.ClientSecret);
+        Assert.Equal(original.RedirectUris, after.RedirectUris);
+        Assert.Contains(OpenIddictConstants.Permissions.Prefixes.Scope + PandaAuthAdminApi.Scope, after.Permissions ?? "");
+        Assert.Equal(1, await db.Users.CountAsync());
+        Assert.Empty(await db.SigningKeys.ToListAsync());
+        Assert.Empty(Directory.GetFiles(process.Root, "*.xml", SearchOption.AllDirectories));
+        Assert.Contains(OperationalCommand.SigningMigration, await db.Database.GetAppliedMigrationsAsync());
+        Assert.Equal(0, (await process.RunAsync(["--migrate-admin-resource-only"])).Code);
+    }
+
+    [PostgresFact]
+    public async Task ResourceMigration_MissingExistingAdminClientRejectsBeforeDdl()
+    {
+        await using var database = await AuthQualityPostgresFixture.CreateAsync();
+        using var scope = database.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        var migrations = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
+        await db.GetService<IMigrator>().MigrateAsync(migrations[^2]);
+        await using var process = new ProcessFixture();
+        process.Environment["ConnectionStrings__Migration"] = db.Database.GetConnectionString()!;
+        var result = await process.RunAsync(["--migrate-admin-resource-only"]);
+        Assert.Equal(2, result.Code);
+        using var json = JsonDocument.Parse(result.Output);
+        Assert.False(json.RootElement.GetProperty("valid").GetBoolean());
+        Assert.DoesNotContain(OperationalCommand.SigningMigration, await db.Database.GetAppliedMigrationsAsync());
+        Assert.Equal(0, await db.Users.CountAsync());
+        Assert.Equal(0, await db.SigningKeys.CountAsync());
+        Assert.DoesNotContain("Npgsql", result.Output + result.Error);
     }
 
     private sealed class ProcessFixture : IAsyncDisposable

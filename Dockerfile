@@ -33,7 +33,8 @@ RUN dotnet publish panda-auth-server/src/PandaAuth.Server -c Release -o /app --n
 # 基础镜像 digest 钉值，原 tag：mcr.microsoft.com/dotnet/aspnet:10.0（2026-10-06 解析）
 FROM mcr.microsoft.com/dotnet/aspnet:10.0.13@sha256:d5633778c754e89a386882eddf8dbee6942447a8a4b8267c19cf1e1158d0b0ac AS runtime
 LABEL cc.pandalabs.auth.operational-protocol="1" \
-      cc.pandalabs.auth.schema-floor="online-signing-v1"
+      cc.pandalabs.auth.schema-floor="online-signing-v1" \
+      cc.pandalabs.auth.activation-migrator="admin-resource-only-v1"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*

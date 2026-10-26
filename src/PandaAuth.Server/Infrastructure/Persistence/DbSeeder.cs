@@ -564,7 +564,7 @@ public static class DbSeeder
         await db.SaveChangesAsync();
     }
 
-    private static async Task SeedAdminScopeAsync(IOpenIddictScopeManager scopes)
+    internal static async Task SeedAdminScopeAsync(IOpenIddictScopeManager scopes)
     {
         var descriptor = new OpenIddictScopeDescriptor
         {

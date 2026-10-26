@@ -24,6 +24,13 @@ using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Shared;
 using PandaAuth.Server.Features.PortalClients;
 
+if (AdminResourceMigrationCommand.IsRequested(args))
+{
+    var commandBuilder = WebApplication.CreateBuilder([]);
+    Environment.ExitCode = await AdminResourceMigrationCommand.RunAsync(args, commandBuilder.Configuration, commandBuilder.Environment, Console.Out);
+    return;
+}
+
 if (OperationalCommand.IsRequested(args))
 {
     var commandBuilder = WebApplication.CreateBuilder([]);
