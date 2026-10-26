@@ -90,7 +90,8 @@ public class UserStoreMigrationTests
     {
         await using var fixture = await TestDatabase.CreateAsync();
         await using var db = fixture.Context();
-        var previous = db.Database.GetMigrations().Last(name => !name.EndsWith("OnlineSigningKeyLifecycle", StringComparison.Ordinal));
+        // 严格取 lifecycle 之前的最后一个迁移（删表批在其后，不能被选为上一版）。
+        var previous = db.Database.GetMigrations().TakeWhile(name => name != "20261025074425_OnlineSigningKeyLifecycle").Last();
         await db.GetService<IMigrator>().MigrateAsync(previous);
         using var rsa = System.Security.Cryptography.RSA.Create(2048);
         var privateKey = rsa.ExportPkcs8PrivateKey();
@@ -126,33 +127,22 @@ public class UserStoreMigrationTests
     }
 
     [PostgresFact]
-    public async Task MfaCredentialId_IsUniqueAfterMigration()
+    public async Task DropWebAuthnCredentials_MigratesThroughEntireHistory_IncludesRetiredTable()
     {
+        // 删表批（AUTH-DELIVERY-002）：全历史迁移贯通，panda_webauthn_credentials 在中间历史存在、终态消失。
         await using var fixture = await TestDatabase.CreateAsync();
         await using var db = fixture.Context();
-        await db.Database.MigrateAsync();
-
-        db.Users.AddRange(
-            new PandaUser { Id = "mfa-user-1", UserName = "mfa-user-1", NormalizedUserName = "MFA-USER-1" },
-            new PandaUser { Id = "mfa-user-2", UserName = "mfa-user-2", NormalizedUserName = "MFA-USER-2" });
-        await db.SaveChangesAsync();
-
-        db.WebAuthnCredentials.Add(new MfaWebAuthnCredential
-        {
-            UserId = "mfa-user-1",
-            CredentialId = [1, 2, 3],
-            PublicKeyCose = [4, 5, 6],
-        });
-        await db.SaveChangesAsync();
-
-        db.WebAuthnCredentials.Add(new MfaWebAuthnCredential
-        {
-            UserId = "mfa-user-2",
-            CredentialId = [1, 2, 3],
-            PublicKeyCose = [7, 8, 9],
-        });
-
-        await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
+        await db.GetService<IMigrator>().MigrateAsync("20261025074425_OnlineSigningKeyLifecycle");
+        var connection = db.Database.GetDbConnection();
+        await connection.OpenAsync();
+        using var check = ((Npgsql.NpgsqlConnection)connection).CreateCommand();
+        check.CommandText = "SELECT to_regclass('panda_webauthn_credentials') IS NOT NULL";
+        var existedBefore = (bool)((Npgsql.NpgsqlCommand)check).ExecuteScalar()!;
+        await db.GetService<IMigrator>().MigrateAsync("20261026120000_DropWebAuthnCredentials");
+        check.CommandText = "SELECT to_regclass('panda_webauthn_credentials') IS NOT NULL";
+        var existsAfter = (bool)((Npgsql.NpgsqlCommand)check).ExecuteScalar()!;
+        Assert.True(existedBefore);
+        Assert.False(existsAfter);
     }
 
     [PostgresFact]

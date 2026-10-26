@@ -13,8 +13,7 @@ public sealed class MfaPolicyException(string message) : InvalidOperationExcepti
 public sealed record MfaStatus(
     bool HasActiveFactor,
     bool RequiresReconfiguration,
-    int RecoveryCodeCount,
-    int ActivePasskeyCount);
+    int RecoveryCodeCount);
 
 public sealed record MfaFactorInfo(
     Guid Id,
@@ -154,18 +153,6 @@ public sealed class MfaService(
             if (transaction is not null) await transaction.CommitAsync(cancellationToken);
             return;
         }
-        var passkey = await db.WebAuthnCredentials.SingleOrDefaultAsync(x => x.Id == factorId && x.UserId == userId && x.RevokedAt == null, cancellationToken);
-        if (passkey is not null)
-        {
-            // 退役存量行：Passkey 已不可验证，撤销是迁移动作而非解除防护——不受「最后一个因子」
-            // 护栏限制，也不作废恢复码（恢复码仍服务于现存 TOTP；passkey-only 账号的恢复码是其
-            // 迁移期自救通道）。
-            passkey.RevokedAt = clock.GetUtcNow();
-            passkey.UpdatedAt = clock.GetUtcNow();
-            await db.SaveChangesAsync(cancellationToken);
-            if (transaction is not null) await transaction.CommitAsync(cancellationToken);
-            return;
-        }
         throw new MfaPolicyException("Factor not found.");
     }
 
@@ -174,11 +161,8 @@ public sealed class MfaService(
         var user = await users.FindByIdAsync(userId) ?? throw new MfaPolicyException("User not found.");
         var totp = await db.TotpFactors.AnyAsync(x => x.UserId == userId && x.RevokedAt == null && x.ConfirmedAt != null, cancellationToken);
         var recovery = await db.MfaRecoveryCodes.CountAsync(x => x.UserId == userId && x.ConsumedAt == null, cancellationToken);
-        var retiredPasskeyCount = await db.WebAuthnCredentials.CountAsync(
-            x => x.UserId == userId && x.RevokedAt == null, cancellationToken);
-        // Passkey 退役后口径：活跃因子=已确认 TOTP；重配置标志不再被 passkey 抚平——
-        // passkey-only 存量账号将进入重配置流强制重建 TOTP（AUTH-DELIVERY-002 迁移口径）。
-        return new MfaStatus(totp, user.TwoFactorEnabled && !totp, recovery, retiredPasskeyCount);
+        // 唯一可验证因子=已确认 TOTP（AUTH-DELIVERY-002；表已随删表批移除）。
+        return new MfaStatus(totp, user.TwoFactorEnabled && !totp, recovery);
     }
 
     /// <summary>自助管理的因子清单（撤销所需的 factorId 来源）。</summary>
@@ -189,12 +173,7 @@ public sealed class MfaService(
             .OrderBy(x => x.CreatedAt)
             .Select(x => new MfaFactorInfo(x.Id, "totp", null, x.CreatedAt, null))
             .ToListAsync(cancellationToken);
-        var passkeys = await db.WebAuthnCredentials
-            .Where(x => x.UserId == userId && x.RevokedAt == null)
-            .OrderBy(x => x.CreatedAt)
-            .Select(x => new MfaFactorInfo(x.Id, "passkey", x.FriendlyName, x.CreatedAt, x.LastUsedAt))
-            .ToListAsync(cancellationToken);
-        return [.. totp, .. passkeys];
+        return totp;
     }
 
     private async Task RequireEnrollmentPolicyAsync(string userId, ClaimsPrincipal principal, CancellationToken cancellationToken)

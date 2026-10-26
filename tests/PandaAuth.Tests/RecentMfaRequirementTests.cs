@@ -21,17 +21,17 @@ public class RecentMfaRequirementTests
     }
 
     [Fact]
-    public void LegacyWebAuthnAmr_FromPreRetirementTokens_IsStillHonoredWithinWindow()
+    public void LegacyWebAuthnAmr_AfterDropBatch_IsNoLongerAnMfaMethod()
     {
+        // 删表批：webauthn amr 从方法清单移除（旧令牌 8h 窗早已自然过期）。
         var now = DateTimeOffset.Parse("2026-09-20T12:00:00Z");
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
         [
-            new Claim(MfaClaimTypes.Method, MfaClaimTypes.WebAuthn),
+            new Claim(MfaClaimTypes.Method, "webauthn"),
             new Claim(MfaClaimTypes.VerifiedAt, now.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture)),
         ], "test"));
 
-        Assert.True(RecentMfaRequirement.HasValidMfa(principal, now, TimeSpan.FromHours(8)));
-        Assert.True(RecentMfaRequirement.HasValidMfa(principal, now, TimeSpan.FromMinutes(5)));
+        Assert.False(RecentMfaRequirement.HasValidMfa(principal, now, TimeSpan.FromHours(8)));
     }
 
     [Fact]

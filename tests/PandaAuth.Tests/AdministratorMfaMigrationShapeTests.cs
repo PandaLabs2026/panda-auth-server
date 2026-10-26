@@ -24,6 +24,22 @@ public class AdministratorMfaMigrationShapeTests
             operation.Name.StartsWith("AspNet", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void DropWebAuthnCredentials_DropsRetiredTableOnly()
+    {
+        var builder = new MigrationBuilder("Npgsql");
+
+        new TestDropMigration().BuildUp(builder);
+
+        var drop = Assert.Single(builder.Operations.OfType<DropTableOperation>());
+        Assert.Equal("panda_webauthn_credentials", drop.Name);
+    }
+
+    private sealed class TestDropMigration : DropWebAuthnCredentials
+    {
+        public void BuildUp(MigrationBuilder builder) => Up(builder);
+    }
+
     private sealed class TestMigration : AddAdministratorMfa
     {
         public void BuildUp(MigrationBuilder builder) => Up(builder);

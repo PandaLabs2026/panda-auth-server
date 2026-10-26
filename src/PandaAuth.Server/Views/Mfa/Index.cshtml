@@ -25,9 +25,5 @@
         <button type="button" id="assert-totp">验证并继续</button>
         <p class="footnote">如需更换或撤销 TOTP，请前往账户中心安全设置（需验证码与当前密码）。</p>
     }
-    @if (Model.RetiredPasskeyCount > 0)
-    {
-        <p class="footnote">存在 @Model.RetiredPasskeyCount 个已退役 Passkey 记录（仅存量数据，可在账户中心安全设置撤销）。</p>
-    }
 </div>
 <script src="/account/mfa.js" defer></script>

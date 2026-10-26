@@ -1,7 +1,7 @@
 namespace PandaAuth.Server.Domain;
 
 /// <summary>
-/// WebAuthn ceremony 的服务端一次性状态（完整 options JSON，等价于 OpenIddict 自存的授权码载荷）。
+/// MFA 一次性服务端状态：原 WebAuthn ceremony 载荷，现为操作授权行（op-grant:*，AUTH-DELIVERY-002）。
 /// 默认 5 分钟过期、单次消费；消费用条件 UPDATE 原子完成（多实例安全），过期行由保留任务回收。
 /// </summary>
 public sealed class MfaChallenge

@@ -16,11 +16,11 @@ public class AuthorizationMfaClaimsTests
         var user = new PandaUser { UserName = "admin" };
         await users.CreateAsync(user, "Strong!Pass123");
         var controller = TestUserStoreHost.CreateAuthorizationController(provider);
-        var source = await TestUserStoreHost.AuthenticatedPrincipalAsync(provider, user, MfaClaimTypes.WebAuthn);
+        var source = await TestUserStoreHost.AuthenticatedPrincipalAsync(provider, user, MfaClaimTypes.Totp);
 
         var principal = await controller.CreatePrincipalAsync(user, [OpenIddictConstants.Scopes.OpenId], source);
 
-        Assert.Equal(MfaClaimTypes.WebAuthn, principal.FindFirst(MfaClaimTypes.Method)!.Value);
+        Assert.Equal(MfaClaimTypes.Totp, principal.FindFirst(MfaClaimTypes.Method)!.Value);
         Assert.NotNull(principal.FindFirst(MfaClaimTypes.VerifiedAt));
     }
 }

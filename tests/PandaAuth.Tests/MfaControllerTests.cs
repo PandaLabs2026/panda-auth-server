@@ -31,12 +31,6 @@ public class MfaControllerTests
         var db = provider.GetRequiredService<PandaAuthDbContext>();
         var secret = System.Security.Cryptography.RandomNumberGenerator.GetBytes(20);
         await SeedConfirmedTotpAsync(db, user.Id, secret);
-        db.WebAuthnCredentials.Add(new MfaWebAuthnCredential
-        {
-            UserId = user.Id,
-            CredentialId = [1, 2, 3],
-            PublicKeyCose = [4, 5, 6],
-        });
         await db.SaveChangesAsync();
         var (context, principal) = await TestGrants.SignedInContextAsync(provider, user, MfaClaimTypes.Totp);
         var controller = CreateUserMfaController(provider, context, principal);
@@ -44,7 +38,6 @@ public class MfaControllerTests
         var status = Assert.IsType<JsonResult>(await controller.UserStatus(CancellationToken.None));
         var value = Assert.IsType<MfaStatus>(status.Value);
         Assert.True(value.HasActiveFactor);
-        Assert.Equal(1, value.ActivePasskeyCount);
 
         // 已绑定 TOTP → 恢复码重生成须持单次操作授权（TOTP + 本人密码）。
         var grants = TestGrants.Create(provider);
@@ -96,43 +89,28 @@ public class MfaControllerTests
     }
 
     [Fact]
-    public async Task RevokeRetiredPasskeyRow_AllowedWithoutGrant_LastTotpStillProtected()
+    public async Task RevokeLastTotp_WithValidGrant_ConsumedButStillGuardedByServer()
     {
+        // 轮换机制下唯一 TOTP 是稳态（确认新因子即撤旧），撤销它注定被服务层护栏拒绝；
+        // 此用例钉住「授权签发/消费成功 ≠ 业务放行」——消费与受保护动作保持一致。
         using var provider = TestUserStoreHost.Create();
-        var users = provider.GetRequiredService<UserService>();
-        var user = new PandaUser { UserName = "migrating-member", Email = "m@example.com", EmailConfirmed = true };
-        Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
+        var (user, secret) = await SeedConfirmedTotpUserAsync(provider, "guard-member");
         var db = provider.GetRequiredService<PandaAuthDbContext>();
-        var retiredPasskeyId = Guid.NewGuid();
-        db.WebAuthnCredentials.Add(new MfaWebAuthnCredential
-        {
-            UserId = user.Id, Id = retiredPasskeyId, CredentialId = [7], PublicKeyCose = [8],
-        });
-        await db.SaveChangesAsync();
-        var (context, principal) = await TestGrants.SignedInContextAsync(provider, user);
-        var controller = CreateUserMfaController(provider, context, principal);
-
-        // 退役 passkey 行撤销 = 迁移动作：不需要授权（首因子解锁：无可验证因子 + 新近密码登录）。
-        Assert.IsType<OkObjectResult>(await controller.RevokeUserFactor(
-            new RevokeMfaFactorRequest { FactorId = retiredPasskeyId }, CancellationToken.None));
-
-        // 唯一 TOTP 不可自撤：带授权头消费成功后仍被服务层最后因子护栏拒绝。
-        var (boundUser, boundSecret) = await SeedConfirmedTotpUserAsync(provider, "last-totp-member");
-        var db2 = provider.GetRequiredService<PandaAuthDbContext>();
-        var totpId = await db2.TotpFactors.AsNoTracking()
-            .Where(x => x.UserId == boundUser.Id && x.RevokedAt == null && x.ConfirmedAt != null)
+        var totpId = await db.TotpFactors.AsNoTracking()
+            .Where(x => x.UserId == user.Id && x.RevokedAt == null && x.ConfirmedAt != null)
             .Select(x => x.Id).SingleAsync();
         var grants = TestGrants.Create(provider);
-        var issued = await grants.IssueAsync(boundUser.Id, MfaOperations.SelfRevokeFactor, totpId.ToString(),
+        var issued = await grants.IssueAsync(user.Id, MfaOperations.SelfRevokeFactor, totpId.ToString(),
             new Dictionary<string, string?> { ["factorType"] = "totp" },
-            TotpCode(boundSecret), "Strong!Pass123", CancellationToken.None);
+            TotpCode(secret), "Strong!Pass123", CancellationToken.None);
         Assert.NotNull(issued.Issued);
-        var (ctx2, principal2) = await TestGrants.SignedInContextAsync(provider, boundUser, MfaClaimTypes.Totp);
-        ctx2.Request.Headers[MfaOperationGrantGate.GrantHeader] = issued.Issued!.GrantId.ToString();
-        var controller2 = CreateUserMfaController(provider, ctx2, principal2);
-        var rejected = Assert.IsType<BadRequestObjectResult>(await controller2.RevokeUserFactor(
+        var (context, principal) = await TestGrants.SignedInContextAsync(provider, user, MfaClaimTypes.Totp);
+        context.Request.Headers[MfaOperationGrantGate.GrantHeader] = issued.Issued!.GrantId.ToString();
+        var controller = CreateUserMfaController(provider, context, principal);
+        var rejected = Assert.IsType<BadRequestObjectResult>(await controller.RevokeUserFactor(
             new RevokeMfaFactorRequest { FactorId = totpId }, CancellationToken.None));
         Assert.Contains("Cannot remove the last active factor", rejected.Value!.ToString(), StringComparison.Ordinal);
+        Assert.NotNull((await db.TotpFactors.AsNoTracking().SingleAsync(x => x.Id == totpId)).ConfirmedAt);
     }
 
     [Fact]
@@ -175,27 +153,15 @@ public class MfaControllerTests
         var user = new PandaUser { UserName = "factors-member", Email = "factors@example.com", EmailConfirmed = true };
         Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
         var db = provider.GetRequiredService<PandaAuthDbContext>();
-        var passkeyId = Guid.NewGuid();
         await SeedConfirmedTotpAsync(db, user.Id);
-        db.WebAuthnCredentials.Add(new MfaWebAuthnCredential
-        {
-            UserId = user.Id, Id = passkeyId, CredentialId = [7], PublicKeyCose = [8], FriendlyName = "Windows Hello",
-        });
-        db.WebAuthnCredentials.Add(new MfaWebAuthnCredential
-        {
-            UserId = user.Id, Id = Guid.NewGuid(), CredentialId = [9], PublicKeyCose = [10], RevokedAt = DateTimeOffset.UtcNow,
-        });
         await db.SaveChangesAsync();
         var controller = CreateUserMfaController(provider, user.Id);
 
         var result = Assert.IsType<JsonResult>(await controller.UserFactors(CancellationToken.None));
 
         var factors = Assert.IsAssignableFrom<IReadOnlyList<MfaFactorInfo>>(result.Value);
-        Assert.Equal(2, factors.Count);
-        Assert.Contains(factors, factor => factor.Type == "totp");
-        var passkey = Assert.Single(factors, factor => factor.Type == "passkey");
-        Assert.Equal(passkeyId, passkey.Id);
-        Assert.Equal("Windows Hello", passkey.FriendlyName);
+        var factor = Assert.Single(factors);
+        Assert.Equal("totp", factor.Type);
     }
 
     [Fact]

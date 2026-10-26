@@ -340,7 +340,7 @@ public class PortalAuthTimeProtocolTests
         context.Request.Scheme = "http";
         context.Request.Host = new Microsoft.AspNetCore.Http.HostString("localhost");
         context.Request.Headers.Cookie = cookie;
-        await scope.ServiceProvider.GetRequiredService<LoginSessionService>().MarkMfaAsync(context, MfaClaimTypes.WebAuthn);
+        await scope.ServiceProvider.GetRequiredService<LoginSessionService>().MarkMfaAsync(context, MfaClaimTypes.Totp);
         var renewed = context.Response.Headers.SetCookie.Single()!.Split(';')[0];
         using var renewedClient = fixture.Browser(handleCookies: false);
         renewedClient.DefaultRequestHeaders.Add("Cookie", renewed);

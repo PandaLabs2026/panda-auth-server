@@ -26,8 +26,6 @@ public class TotpFactorServiceTests
     public async Task BeginEnrollment_PersistsOnlyProtectedSecret()
     {
         await using var db = Database();
-        db.WebAuthnCredentials.Add(new MfaWebAuthnCredential { UserId = "admin-1", CredentialId = [1], PublicKeyCose = [2] });
-        await db.SaveChangesAsync();
         var service = Service(db);
 
         var enrollment = await service.BeginEnrollmentAsync("admin-1", CancellationToken.None);

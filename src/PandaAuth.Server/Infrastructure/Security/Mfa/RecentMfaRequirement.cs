@@ -5,10 +5,9 @@ namespace PandaAuth.Server.Infrastructure.Security.Mfa;
 
 public static class RecentMfaRequirement
 {
-    // WebAuthn 仍在方法清单里：Passkey 已退役（AUTH-DELIVERY-002），但部署切换前签发的
-    // 旧令牌可能仍带 webauthn amr——8 小时窗内的存量事实按历史语义承认，不再新产生。
+    // 删表批（2026-10-26）：webauthn amr 从方法清单移除——旧令牌窗口早已自然过期，历史事件仍保留。
     public static bool HasValidMfa(ClaimsPrincipal principal, DateTimeOffset now, TimeSpan maximumAge)
-        => HasMethod(principal, MfaClaimTypes.WebAuthn, MfaClaimTypes.Totp, MfaClaimTypes.RecoveryCode) && IsWithinAge(principal, now, maximumAge);
+        => HasMethod(principal, MfaClaimTypes.Totp, MfaClaimTypes.RecoveryCode) && IsWithinAge(principal, now, maximumAge);
 
     private static bool HasMethod(ClaimsPrincipal principal, params string[] requiredMethods)
         => principal.FindAll(MfaClaimTypes.Method)
