@@ -14,13 +14,14 @@ public static class ControlledBffProtocol
 {
     private static readonly JsonSerializerOptions Json=new(){PropertyNamingPolicy=JsonNamingPolicy.CamelCase};
     private static void Require(bool value){if(!value)throw new InvalidOperationException("controlled_bff_failed");}
-    public static async Task<int> Dispatch(string line)
+    public static async Task<int> Dispatch(string line,bool verify=false)
     {
         var stage="admission";
         try
         {
             if(!OperatingSystem.IsLinux())throw new InvalidOperationException("controlled_bff_failed");
             var input=ControlledTransport.Decode<ControlledCryptoInput>(line);
+            if(verify){stage="verify";return await Verify(input);}
             var root=ControlledTransport.Guard(input.Spec);
             Require(Directory.Exists(root) && new DirectoryInfo(root).LinkTarget is null);
             stage="baseline";
@@ -68,5 +69,23 @@ public static class ControlledBffProtocol
                 kind=error.GetType().Name,line=error.Data["bffLine"] is int operationLine?operationLine:frame?.GetFileLineNumber() ?? 0,
                 status=error.Data["bffStatus"] is int status?status:0},Json));return 2;
         }
+    }
+
+    private static async Task<int> Verify(ControlledCryptoInput input)
+    {
+        var context=await ControlledProtocolContext.Open(input);
+        var stored=ControlledProtocolContext.Read<ControlledBffSession>(context.Root,"bff-session.json",131072);
+        var now=DateTimeOffset.UtcNow;var expected=ControlledActors.Subject(input.Spec,0);
+        Require(stored.Schema==1&&stored.SpecSha256==context.Binding&&stored.DatabaseFingerprint==input.RestoredDatabaseFingerprint&&
+            stored.CreatedAt<=now&&now-stored.CreatedAt<=TimeSpan.FromDays(1)&&stored.SubjectSha256==ControlledProtocolContext.Hash(expected));
+        context.Write("bff-verify-started.json",new{schema=1,specSha256=context.Binding});
+        var cookies=context.Cookies(stored.Cookies);using var root=context.Certificate();
+        using var browser=ProtocolUser.CreateBrowser(new Uri(input.Spec.Issuer),root,cookies);
+        var admin=await BffLogin.SessionAsync(browser,"/admin/api/session",true);
+        var me=await BffLogin.SessionAsync(browser,"/me/api/session",false);
+        Require(admin==expected&&me==expected);
+        context.Write("bff-session-verified.json",stored with{Cookies=ControlledProtocolContext.Capture(cookies)});
+        Console.WriteLine(JsonSerializer.Serialize(new{schema=1,scope="controlled-bff-continuity-component",valid=true,specSha256=context.Binding,
+            adminStatus=200,meStatus=200,subjectSha256=stored.SubjectSha256},Json));return 0;
     }
 }

@@ -100,6 +100,12 @@ public static class ProtocolSnapshot
         }
         using var root = Certificate(settings);
         using var browser = ProtocolUser.CreateBrowser(settings, root, cookies);
+        return await VerifyCoreAsync(browser,snapshot,settings.ClientId,settings.ClientSecret,rejected);
+    }
+
+    internal static async Task<object> VerifyCoreAsync(HttpClient browser,SessionSnapshot snapshot,string clientId,string clientSecret,
+        bool rejected,string? expectedSubject=null,Action<string,string>? renewed=null)
+    {
         using var cookieResponse = await browser.GetAsync("/account/change-password");
         using var bearer = new HttpRequestMessage(HttpMethod.Get, PandaAuthEndpoints.Userinfo);
         bearer.Headers.Authorization = new AuthenticationHeaderValue("Bearer", snapshot.AccessToken);
@@ -107,7 +113,7 @@ public static class ProtocolSnapshot
         using var form = new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["grant_type"] = "refresh_token", ["refresh_token"] = snapshot.RefreshToken,
-            ["client_id"] = settings.ClientId, ["client_secret"] = settings.ClientSecret
+            ["client_id"] = clientId, ["client_secret"] = clientSecret
         });
         using var refresh = await browser.PostAsync(PandaAuthEndpoints.Token, form);
         var loginRedirect = cookieResponse.StatusCode == HttpStatusCode.Redirect && cookieResponse.Headers.Location is { } location &&
@@ -124,7 +130,13 @@ public static class ProtocolSnapshot
             }
             catch (JsonException) { refreshError = "malformed"; }
         }
-        var valid = cookieResponse.StatusCode == HttpStatusCode.OK && bearerResponse.StatusCode == HttpStatusCode.OK && refresh.StatusCode == HttpStatusCode.OK;
+        var subjectMatches=true;
+        if(expectedSubject is not null&&!rejected&&bearerResponse.StatusCode==HttpStatusCode.OK)
+        {
+            using var info=JsonDocument.Parse(await bearerResponse.Content.ReadAsStringAsync());
+            subjectMatches=info.RootElement.GetProperty("sub").GetString()==expectedSubject;
+        }
+        var valid = cookieResponse.StatusCode == HttpStatusCode.OK && bearerResponse.StatusCode == HttpStatusCode.OK && refresh.StatusCode == HttpStatusCode.OK&&subjectMatches;
         if (rejected)
         {
             valid = (loginRedirect || cookieResponse.StatusCode == HttpStatusCode.Unauthorized) &&
@@ -133,6 +145,14 @@ public static class ProtocolSnapshot
         }
         if (!valid) throw new SnapshotProtocolException(cookieResponse.StatusCode, bearerResponse.StatusCode, refresh.StatusCode, loginRedirect, refreshError,
             browser.BaseAddress, cookieResponse.Headers.Location);
+        if(!rejected&&renewed is not null)
+        {
+            using var tokens=JsonDocument.Parse(await refresh.Content.ReadAsStringAsync());
+            var access=tokens.RootElement.GetProperty("access_token").GetString();
+            var next=tokens.RootElement.GetProperty("refresh_token").GetString();
+            if(string.IsNullOrEmpty(access)||string.IsNullOrEmpty(next))throw new InvalidOperationException("readiness_snapshot_protocol_failed");
+            renewed(access,next);
+        }
         return new { schema = 1, valid = true, rejected, cookieStatus = (int)cookieResponse.StatusCode,
             bearerStatus = (int)bearerResponse.StatusCode, refreshStatus = (int)refresh.StatusCode };
     }

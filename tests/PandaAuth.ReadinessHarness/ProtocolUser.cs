@@ -17,9 +17,12 @@ internal interface IProtocolActor : IDisposable
     Task<HttpStatusCode> StepAsync(CancellationToken cancellation);
 }
 
+internal sealed record ProtocolActorSettings(string RunId,string BaseUri,string Password,string ClientId,string ClientSecret,
+    string RedirectUri,string UserName,string Workload);
+
 internal sealed class ProtocolUser : IProtocolActor
 {
-    private readonly LoadRequest settings;
+    private readonly ProtocolActorSettings settings;
     private readonly int index;
     private readonly X509Certificate2 root;
     private CookieContainer cookies = new();
@@ -29,9 +32,13 @@ internal sealed class ProtocolUser : IProtocolActor
     private DateTimeOffset refreshAt;
 
     internal ProtocolUser(LoadRequest settings, int index, X509Certificate2 root)
+        : this(new ProtocolActorSettings(settings.RunId,settings.BaseUri,settings.Password,settings.ClientId,settings.ClientSecret,
+            settings.RedirectUri,settings.UserName(index),settings.Workload),index,root) { }
+
+    internal ProtocolUser(ProtocolActorSettings settings, int index, X509Certificate2 root)
     {
         this.settings = settings; this.index = index; this.root = root;
-        browser = CreateBrowser(settings, root, cookies);
+        browser = CreateBrowser(new Uri(settings.BaseUri), root, cookies);
     }
 
     internal static HttpClient CreateBrowser(LoadRequest settings, X509Certificate2 root, CookieContainer? cookies = null)
@@ -70,7 +77,7 @@ internal sealed class ProtocolUser : IProtocolActor
         {
             browser.Dispose();
             cookies = new CookieContainer();
-            browser = CreateBrowser(settings, root, cookies);
+            browser = CreateBrowser(new Uri(settings.BaseUri), root, cookies);
             await LoginAsync(cancellation);
             return HttpStatusCode.OK;
         }
@@ -109,7 +116,7 @@ internal sealed class ProtocolUser : IProtocolActor
         Require(csrf.Success);
         using var form = new FormUrlEncodedContent(new Dictionary<string, string>
         {
-            ["__RequestVerificationToken"] = WebUtility.HtmlDecode(csrf.Groups[1].Value), ["UserName"] = settings.UserName(index),
+            ["__RequestVerificationToken"] = WebUtility.HtmlDecode(csrf.Groups[1].Value), ["UserName"] = settings.UserName,
             ["Password"] = settings.Password, ["ReturnUrl"] = authorize
         });
         using var login = await browser.PostAsync("/account/login", form, cancellation);

@@ -24,6 +24,10 @@ public static class HarnessProgram
     {
         try
         {
+            if (args is ["--controlled-human-create-stdin" or "--controlled-human-verify-stdin"])
+                return await ControlledHumanProtocol.Dispatch(args[0],await Console.In.ReadLineAsync() ?? "");
+            if (args is ["--controlled-bff-verify-stdin"])
+                return await ControlledBffProtocol.Dispatch(await Console.In.ReadLineAsync() ?? "",verify:true);
             if (args is ["--controlled-bff-login-stdin"])
                 return await ControlledBffProtocol.Dispatch(await Console.In.ReadLineAsync() ?? "");
             if (args is ["--controlled-actors-stdin"])
