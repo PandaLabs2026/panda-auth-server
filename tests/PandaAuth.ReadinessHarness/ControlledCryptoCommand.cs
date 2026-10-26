@@ -17,7 +17,7 @@ public static class ControlledCryptoCommand
     private static string Binding(ControlledTransportSpec spec)=>Hash(ControlledTransport.Canonical(spec));
     private static byte[] Canary(ControlledTransportSpec spec)=>SHA256.HashData(Encoding.UTF8.GetBytes("controlled-totp\0"+Binding(spec)))[..20];
 
-    internal static void VerifyBaseline(string root,ControlledCryptoInput input,ControlledCryptoState current,TotpSecretProtector protector)
+    internal static void VerifyBaseline(string root,ControlledCryptoInput input,ControlledCryptoState current,TotpSecretProtector protector,bool allowParent=false)
     {
         if(!OperatingSystem.IsLinux()) throw new InvalidOperationException("controlled_crypto_failed");
         var path=Path.Combine(root,"crypto-baseline.json");
@@ -25,7 +25,8 @@ public static class ControlledCryptoCommand
         Require(file.Exists && file.LinkTarget is null && file.Length is >0 and <=4*1024*1024 &&
             File.GetUnixFileMode(path)==(UnixFileMode.UserRead|UnixFileMode.UserWrite));
         var baseline=ControlledTransport.DecodeBounded<ControlledCryptoBaseline>(File.ReadAllText(path),4*1024*1024);
-        Require(baseline.Schema==1 && baseline.SpecSha256==Binding(input.Spec) && baseline.DatabaseFingerprint==input.RestoredDatabaseFingerprint);
+        Require(baseline.Schema==1 && baseline.SpecSha256==Binding(input.Spec) &&
+            baseline.DatabaseFingerprint==(allowParent?ControlledParent.DataFingerprint(root,input):input.RestoredDatabaseFingerprint));
         ControlledCryptography.RequireOriginals(baseline.Original.Keys,current.Keys);
         ControlledCryptography.RequireOriginals(baseline.Original.Factors,current.Factors);
         ControlledCryptography.VerifyDp(Path.Combine(root,"dp"),input.Spec,baseline.Dp);
@@ -38,7 +39,7 @@ public static class ControlledCryptoCommand
         try
         {
             if (!OperatingSystem.IsLinux()) throw new InvalidOperationException("controlled_crypto_failed");
-            Require(command is "--controlled-crypto-baseline-stdin" or "--controlled-crypto-verify-stdin");
+            Require(command is "--controlled-crypto-baseline-stdin" or "--controlled-crypto-verify-stdin" or "--controlled-crypto-verify-restored-stdin");
             var input=ControlledTransport.Decode<ControlledCryptoInput>(line);
             var root=ControlledTransport.Guard(input.Spec);
             Require(Directory.Exists(root) && new DirectoryInfo(root).LinkTarget is null);
@@ -64,7 +65,7 @@ public static class ControlledCryptoCommand
                 }
                 else
                 {
-                    VerifyBaseline(root,input,current,protector);
+                    VerifyBaseline(root,input,current,protector,allowParent:command=="--controlled-crypto-verify-restored-stdin");
                 }
             }
             finally { CryptographicOperations.ZeroMemory(key); }

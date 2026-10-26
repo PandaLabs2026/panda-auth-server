@@ -76,7 +76,7 @@ public static class ControlledBffProtocol
         var context=await ControlledProtocolContext.Open(input);
         var stored=ControlledProtocolContext.Read<ControlledBffSession>(context.Root,"bff-session.json",131072);
         var now=DateTimeOffset.UtcNow;var expected=ControlledActors.Subject(input.Spec,0);
-        Require(stored.Schema==1&&stored.SpecSha256==context.Binding&&stored.DatabaseFingerprint==input.RestoredDatabaseFingerprint&&
+        Require(stored.Schema==1&&stored.SpecSha256==context.Binding&&stored.DatabaseFingerprint==context.DataFingerprint&&
             stored.CreatedAt<=now&&now-stored.CreatedAt<=TimeSpan.FromDays(1)&&stored.SubjectSha256==ControlledProtocolContext.Hash(expected));
         context.Write("bff-verify-started.json",new{schema=1,specSha256=context.Binding});
         var cookies=context.Cookies(stored.Cookies);using var root=context.Certificate();

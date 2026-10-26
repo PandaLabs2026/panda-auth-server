@@ -50,7 +50,7 @@ public static class ControlledHumanProtocol
             {
                 var stored=ControlledProtocolContext.Read<ControlledHumanSession>(context.Root,file,131072);var snapshot=stored.Session;
                 var now=DateTimeOffset.UtcNow;
-                ControlledProtocolContext.Require(stored.Schema==1&&stored.SpecSha256==context.Binding&&stored.DatabaseFingerprint==input.Crypto.RestoredDatabaseFingerprint&&
+                ControlledProtocolContext.Require(stored.Schema==1&&stored.SpecSha256==context.Binding&&stored.DatabaseFingerprint==context.DataFingerprint&&
                     stored.Revoked==revoked&&snapshot.RunId==input.Crypto.Spec.Attempt&&snapshot.BaseUri==input.Crypto.Spec.Issuer&&snapshot.UserIndex==index&&
                     snapshot.CreatedAt<=now&&now-snapshot.CreatedAt<=TimeSpan.FromDays(1)&&!string.IsNullOrEmpty(snapshot.AccessToken)&&!string.IsNullOrEmpty(snapshot.RefreshToken));
                 var cookies=context.Cookies(snapshot.Cookies);using var browser=ProtocolUser.CreateBrowser(new Uri(input.Crypto.Spec.Issuer),root,cookies);
