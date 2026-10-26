@@ -1,7 +1,5 @@
 using System.Net;
 using System.Security.Cryptography.X509Certificates;
-using Fido2NetLib;
-using Fido2NetLib.Serialization;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -87,9 +85,7 @@ builder.Services.AddControllersWithViews(o =>
         // （ADR 2026-10-11-admin-error-codes；前端按 code 走 i18n，未登记 title 降级 detail）。
         o.Filters.Add<AdminErrorCodeFilter>();
         o.Filters.Add<BusinessInputLimitFilter>();
-    })
-    .AddJsonOptions(options =>
-        options.JsonSerializerOptions.TypeInfoResolverChain.Insert(0, FidoModelSerializerContext.Default));
+    });
 
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
 var authOptions = builder.Configuration.GetSection(AuthOptions.SectionName).Get<AuthOptions>() ?? new AuthOptions();
@@ -261,11 +257,16 @@ openIddict.AddServer(options =>
 // Admin API 角色门禁：按 claim 短名（"role"）断言而非 Roles=——后者走 IsInRole，
 // 依赖 identity 的 RoleClaimType 映射（validation 方案默认是 ASP.NET 长名 URI），会静默 403。
 // Resource scope/audience/presenter, human identity and current active account are mandatory.
+// Passkey 退役后（AUTH-DELIVERY-002）：主策略还要求操作者已绑定已确认 TOTP；
 // 写操作在控制器动作内按风险分级检查：普通写操作要求八小时内任一 MFA，
-// 高风险操作继续要求五分钟内 WebAuthn（见 AdminApiAuthorization）。
+// 高风险/特敏感操作要求单次操作绑定 TOTP 授权（MfaOperationGrantService/Gate）。
 builder.Services.AddScoped<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, AdminResourceHandler>();
-builder.Services.AddAuthorization(options => options.AddPolicy(AdminApiAuthorization.PolicyName, policy =>
-    policy.RequireAuthenticatedUser().AddRequirements(new AdminResourceRequirement())));
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy(AdminApiAuthorization.PolicyName, policy =>
+        policy.RequireAuthenticatedUser().AddRequirements(new AdminResourceRequirement()));
+    options.AddPolicy(AdminApiAuthorization.SessionPolicyName, policy => policy.RequireAuthenticatedUser());
+});
 
 // Management API 作用域门禁（M0）：audience + scope 双条件，缺一拒绝；M2M 主体无角色、无 MFA step-up，
 // 替代控制是专用机密客户端、最小 scope、部署面总开关、速率限制与写审计。
@@ -280,10 +281,10 @@ builder.Services.AddAuthorization(options =>
 
 // 登录限流器条目承载在内存缓存上并按 TTL 回收（见 LoginRateLimiter）。
 builder.Services.AddMemoryCache();
-builder.Services.AddSingleton<IFido2>(_ => new Fido2(WebAuthnRelyingParty.Create(authOptions.Issuer)));
 // challenge 状态在数据库（panda_mfa_challenges），随 DbContext 作用域；换实现见 MfaChallengeStore。
+// 同表复用承载操作授权行（Purpose=op-grant:*，AUTH-DELIVERY-002）。
 builder.Services.AddScoped<MfaChallengeStore>();
-builder.Services.AddScoped<WebAuthnCeremonyService>();
+builder.Services.AddScoped<MfaOperationGrantService>();
 builder.Services.AddSingleton(serviceProvider => new TotpSecretProtector(
     authOptions.Mfa.GetEncryptionKey(builder.Environment.IsProduction()), authOptions.Mfa.TotpKeyVersion));
 builder.Services.AddScoped<TotpFactorService>();

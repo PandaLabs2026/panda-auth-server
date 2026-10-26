@@ -1,6 +1,5 @@
 using System.Security.Claims;
 using System.Security.Cryptography;
-using Fido2NetLib;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc;
@@ -166,10 +165,6 @@ public class AccountLandingTests
         return new LoginMfaChallengeController(
             provider.GetRequiredService<UserService>(),
             MfaService(provider),
-            new WebAuthnCeremonyService(
-                new Fido2(WebAuthnRelyingParty.Create("https://auth.example.test")),
-                db,
-                new MfaChallengeStore(db, TimeProvider.System)),
             provider.GetRequiredService<LoginSessionService>(),
             provider.GetRequiredService<LoginMfaChallengeService>(),
             provider.GetRequiredService<LoginRateLimiter>(),

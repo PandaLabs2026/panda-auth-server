@@ -8,7 +8,9 @@ using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Admin;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Shared;
+using System.Text.Json;
 using Xunit;
 
 namespace PandaAuth.Tests;
@@ -176,7 +178,8 @@ public sealed class AdminClaimsControllerTests
             provider.GetRequiredService<PandaAuthDbContext>(),
             provider.GetRequiredService<ClaimsPolicyService>(),
             provider.GetRequiredService<AdminAuditWriter>(),
-            provider.GetRequiredService<SecurityEventWriter>())
+            provider.GetRequiredService<SecurityEventWriter>(),
+            TestGrants.Create(provider))
         {
             ControllerContext = new()
             {
@@ -197,6 +200,8 @@ public sealed class AdminClaimsControllerTests
         var user = new PandaUser { UserName = "claims-user" };
         Assert.True((await provider.GetRequiredService<UserService>().CreateAsync(user)).Succeeded);
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminAddUserClaim, user.Id,
+            TestGrants.Claim("panda:tenant", "tenant-a", "api"));
         var created = Assert.IsType<CreatedResult>(await controller.AddUser(
             user.Id, new AdminClaimRequest("panda:tenant", "tenant-a", "api"), CancellationToken.None));
         var entry = Assert.IsType<AdminUserClaimEntry>(created.Value);
@@ -205,13 +210,15 @@ public sealed class AdminClaimsControllerTests
         var listed = Assert.IsType<OkObjectResult>(await controller.ListUser(user.Id));
         Assert.Single(Assert.IsType<AdminUserClaimEntry[]>(listed.Value));
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminRemoveUserClaim, user.Id, TestGrants.ClaimId(entry.Id));
         Assert.IsType<NoContentResult>(await controller.RemoveUser(user.Id, entry.Id, CancellationToken.None));
         Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().UserClaims.AsEnumerable());
         Assert.Equal(2, provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.Count());
         Assert.Equal(
             ["user.add_claim", "user.remove_claim"],
             provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents
-                .OrderBy(item => item.Id).Select(item => item.EventType).ToArray());
+                .OrderBy(item => item.Id).Select(item => item.EventType)
+                .Where(name => name.StartsWith("user.", StringComparison.Ordinal)).ToArray());
     }
 
     [Fact]
@@ -225,12 +232,15 @@ public sealed class AdminClaimsControllerTests
         var role = new PandaRole { Name = "claims-role" };
         Assert.True((await provider.GetRequiredService<RoleService>().CreateAsync(role)).Succeeded);
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminAddRoleClaim, role.Id,
+            TestGrants.Claim("panda:department", "engineering", "api"));
         var created = Assert.IsType<CreatedResult>(await controller.AddRole(
             role.Id, new AdminClaimRequest("panda:department", "engineering", "api"), CancellationToken.None));
         var entry = Assert.IsType<AdminRoleClaimEntry>(created.Value);
         var listed = Assert.IsType<OkObjectResult>(await controller.ListRole(role.Id));
         Assert.Equal(entry, Assert.Single(Assert.IsType<AdminRoleClaimEntry[]>(listed.Value)));
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminRemoveRoleClaim, role.Id, TestGrants.ClaimId(entry.Id));
         Assert.IsType<NoContentResult>(await controller.RemoveRole(role.Id, entry.Id, CancellationToken.None));
         Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().RoleClaims.AsEnumerable());
     }
@@ -244,6 +254,8 @@ public sealed class AdminClaimsControllerTests
 
         foreach (var claimType in new[] { PandaAuthClaims.TenantId, PandaAuthClaims.TenantHost })
         {
+            await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminAddUserClaim, user.Id,
+                TestGrants.Claim(claimType, "t9999", "openid"));
             var result = await controller.AddUser(
                 user.Id, new AdminClaimRequest(claimType, "t9999", "openid"), CancellationToken.None);
             var problem = Assert.IsType<ObjectResult>(result);
@@ -254,14 +266,17 @@ public sealed class AdminClaimsControllerTests
     }
 
     [Fact]
-    public async Task ClaimWrites_RequireRecentWebAuthn()
+    public async Task ClaimWrites_RequireOperationGrant()
     {
         var (controller, provider) = Create(withMfa: false);
         var user = new PandaUser { UserName = "claims-no-mfa" };
         Assert.True((await provider.GetRequiredService<UserService>().CreateAsync(user)).Succeeded);
 
-        AdminMfaResponseTests.AssertStepUpResponse(await controller.AddUser(
+        // 未携带操作授权：403 + 授权标记（前端据此弹 TOTP 授权对话框），且无任何写入。
+        var denied = Assert.IsType<ObjectResult>(await controller.AddUser(
             user.Id, new AdminClaimRequest("panda:tenant", "tenant-a", "api"), CancellationToken.None));
+        Assert.Equal(StatusCodes.Status403Forbidden, denied.StatusCode);
+        Assert.True(JsonSerializer.SerializeToElement(denied.Value).GetProperty("mfaGrantRequired").GetBoolean());
         Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().UserClaims.AsEnumerable());
         Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents.AsEnumerable());
     }
@@ -279,6 +294,7 @@ public sealed class AdminClaimsControllerTests
         Assert.True((await claims.AddUserClaimAsync(first.Id, "panda:tenant", "tenant-a", "api")).Succeeded);
         var claim = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().UserClaims.AsEnumerable());
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminRemoveUserClaim, second.Id, TestGrants.ClaimId(claim.Id));
         Assert.IsType<NotFoundResult>(await controller.RemoveUser(second.Id, claim.Id, CancellationToken.None));
         Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().UserClaims.AsEnumerable());
     }

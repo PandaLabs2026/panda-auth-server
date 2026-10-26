@@ -1,6 +1,5 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
-using Fido2NetLib;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
@@ -228,12 +227,10 @@ public class MfaHardeningTests
         var totp = new TotpFactorService(db, new TotpSecretProtector(TotpKey, "v1"), TimeProvider.System);
         return new MfaController(
             provider.GetRequiredService<UserService>(),
-            new WebAuthnCeremonyService(
-                new Fido2(WebAuthnRelyingParty.Create("https://auth.example.test")),
-                db, new MfaChallengeStore(db, TimeProvider.System)),
             totp,
             provider.GetRequiredService<LoginSessionService>(),
             db,
+            TestGrants.Create(provider),
             provider.GetRequiredService<ILoggerFactory>().CreateLogger<MfaController>(),
             provider.GetRequiredService<LoginRateLimiter>(),
             new MfaService(
@@ -256,13 +253,9 @@ public class MfaHardeningTests
 
     private static LoginMfaChallengeController ChallengeController(ServiceProvider provider, DefaultHttpContext context)
     {
-        var db = provider.GetRequiredService<PandaAuthDbContext>();
         return new LoginMfaChallengeController(
             provider.GetRequiredService<UserService>(),
             MfaService(provider),
-            new WebAuthnCeremonyService(
-                new Fido2(WebAuthnRelyingParty.Create("https://auth.example.test")),
-                db, new MfaChallengeStore(db, TimeProvider.System)),
             provider.GetRequiredService<LoginSessionService>(),
             provider.GetRequiredService<LoginMfaChallengeService>(),
             provider.GetRequiredService<LoginRateLimiter>(),

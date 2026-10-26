@@ -1,6 +1,5 @@
 using System.Security.Claims;
 using System.Security.Cryptography;
-using Fido2NetLib;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -217,70 +216,6 @@ public class LoginMfaChallengeTests
         Assert.Null(Cookie(context, "PandaAuth.Login.v2"));
     }
 
-    [Fact]
-    public async Task PasskeyChallenge_BeginRequiresPendingCookie()
-    {
-        using var provider = Host(true);
-        var (users, user, secret) = await SeedUserWithTotpFactorAsync(provider);
-
-        var controller = ChallengeController(provider);
-        var action = await controller.BeginPasskeyAssertion(CancellationToken.None);
-
-        Assert.IsType<BadRequestObjectResult>(action);
-    }
-
-    [Fact]
-    public async Task PasskeyChallenge_BeginWithPendingCookie_ReturnsCeremonyForActiveCredentials()
-    {
-        using var provider = Host(true);
-        var users = provider.GetRequiredService<UserService>();
-        var user = new PandaUser { UserName = "passkey-login" };
-        await users.CreateAsync(user, "Strong!Pass123");
-        var db = provider.GetRequiredService<PandaAuthDbContext>();
-        db.WebAuthnCredentials.Add(new MfaWebAuthnCredential
-        {
-            UserId = user.Id, CredentialId = [9, 9, 9], PublicKeyCose = [4, 5, 6],
-        });
-        await db.SaveChangesAsync();
-
-        var context = ChallengeContext(provider, user);
-        var controller = ChallengeController(provider, context);
-        var action = await controller.BeginPasskeyAssertion(CancellationToken.None);
-
-        var json = Assert.IsType<JsonResult>(action);
-        Assert.NotNull(json.Value);
-    }
-
-    [Fact]
-    public async Task PasskeyChallenge_CompleteWithUnknownCeremony_FailsClosedAndRecordsFailure()
-    {
-        using var provider = Host(true);
-        var users = provider.GetRequiredService<UserService>();
-        var user = new PandaUser { UserName = "passkey-unknown" };
-        await users.CreateAsync(user, "Strong!Pass123");
-        var db = provider.GetRequiredService<PandaAuthDbContext>();
-        db.WebAuthnCredentials.Add(new MfaWebAuthnCredential
-        {
-            UserId = user.Id, CredentialId = [9, 9, 9], PublicKeyCose = [4, 5, 6],
-        });
-        await db.SaveChangesAsync();
-
-        var context = ChallengeContext(provider, user);
-        var controller = ChallengeController(provider, context);
-        var action = await controller.CompletePasskeyAssertion(
-            new CompletePasskeyAssertionRequest
-            {
-                CeremonyId = Guid.NewGuid(),
-                Response = new AuthenticatorAssertionRawResponse { RawId = [9, 9, 9] },
-            },
-            CancellationToken.None);
-
-        Assert.IsType<BadRequestObjectResult>(action);
-        Assert.Null(Cookie(context, "PandaAuth.Login.v2"));
-        Assert.Contains(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents, logEvent =>
-            logEvent.EventType == "login.mfa_challenge_failed" && logEvent.AuthenticationMethod == MfaClaimTypes.WebAuthn);
-    }
-
     // ---- 基建 ----
 
     private static ServiceProvider Host(bool loginMfaEnabled)
@@ -317,10 +252,6 @@ public class LoginMfaChallengeTests
         return new LoginMfaChallengeController(
             provider.GetRequiredService<UserService>(),
             MfaService(provider),
-            new WebAuthnCeremonyService(
-                new Fido2(WebAuthnRelyingParty.Create("https://auth.example.test")),
-                db,
-                new MfaChallengeStore(db, TimeProvider.System)),
             provider.GetRequiredService<LoginSessionService>(),
             provider.GetRequiredService<LoginMfaChallengeService>(),
             provider.GetRequiredService<LoginRateLimiter>(),

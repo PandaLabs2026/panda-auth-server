@@ -3,22 +3,26 @@
     ViewData["Title"] = "安全验证";
 }
 
-<div id="login-mfa-challenge" data-return-url="@Model.ReturnUrl" data-assertion-options-url="/account/mfa/challenge/passkey/options" data-assertion-url="/account/mfa/challenge/passkey/complete">
-    <form asp-action="AssertTotp" asp-controller="LoginMfaChallenge" method="post">
-        <input type="hidden" asp-for="ReturnUrl" />
-        <div asp-validation-summary="All" class="error"></div>
-        @if (Model.HasTotp)
-        {
+<div id="login-mfa-challenge">
+    @if (Model.HasTotp)
+    {
+        <form asp-action="AssertTotp" asp-controller="LoginMfaChallenge" method="post">
+            <input type="hidden" asp-for="ReturnUrl" />
+            <div asp-validation-summary="All" class="error"></div>
             <label for="challenge-totp-code">输入认证器验证码</label>
             <input id="challenge-totp-code" name="Code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" autofocus />
             <button type="submit">验证并登录</button>
-        }
-    </form>
-    <div id="login-mfa-message" class="notice" hidden></div>
-    @if (Model.HasPasskey)
+        </form>
+    }
+    @if (Model.HasRecoveryCodes)
     {
-        <button type="button" id="challenge-passkey">使用 Passkey 验证</button>
+        <form asp-action="AssertRecoveryCode" asp-controller="LoginMfaChallenge" method="post">
+            <input type="hidden" asp-for="ReturnUrl" />
+            <label for="challenge-recovery-code">使用恢复码</label>
+            <input id="challenge-recovery-code" name="Code" type="text" autocomplete="off" />
+            <button type="submit">使用恢复码登录</button>
+        </form>
+        <p class="footnote">恢复码单次有效；验证成功后请尽快在账户中心重新绑定验证方式。</p>
     }
     <p class="footnote"><a href="/account/login">返回登录</a></p>
 </div>
-<script src="/account/login-mfa-challenge.js" defer></script>

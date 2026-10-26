@@ -7,21 +7,20 @@ namespace PandaAuth.Server.Infrastructure.Security.Mfa;
 
 public sealed record TotpEnrollment(Guid FactorId, string Secret, string ProvisioningUri);
 
-/// <summary>Creates and confirms the encrypted TOTP fallback factor after a Passkey already exists.</summary>
+/// <summary>Creates and confirms the encrypted TOTP factor（AUTH-DELIVERY-002 起 TOTP 为唯一可验证因子，可作首因子绑定）。</summary>
 public sealed class TotpFactorService(PandaAuthDbContext db, TotpSecretProtector protector, TimeProvider clock)
 {
     public async Task<TotpEnrollment> BeginEnrollmentAsync(
-        string userId, CancellationToken cancellationToken, bool requirePasskey = true)
+        string userId, CancellationToken cancellationToken)
     {
-        var hasPasskey = await db.WebAuthnCredentials.AnyAsync(item => item.UserId == userId && item.RevokedAt == null, cancellationToken);
-        if (requirePasskey && !hasPasskey) throw new InvalidOperationException("启用 TOTP 前必须已有有效 Passkey。");
         var pending = await db.TotpFactors
             .Where(item => item.UserId == userId && item.RevokedAt == null && item.ConfirmedAt == null)
             .ToListAsync(cancellationToken);
         foreach (var pendingFactor in pending)
             pendingFactor.RevokedAt = clock.GetUtcNow();
-        if (await db.TotpFactors.AnyAsync(item => item.UserId == userId && item.RevokedAt == null && item.ConfirmedAt != null, cancellationToken))
-            throw new InvalidOperationException("此账号已有未撤销的 TOTP 因子。");
+        // 轮换注册（AUTH-DELIVERY-002）：允许已有确认因子时再开一个 pending——旧因子在
+        // 新因子确认成功时由 MfaService.ConfirmEnrollmentAsync 原子撤销。先撤后建会在
+        // 「撤了旧的、新的未确认」间留下无因子窗口（确认失败即锁死），故必须并存过渡。
 
         var factor = new MfaTotpFactor { Id = Guid.NewGuid(), UserId = userId, CreatedAt = clock.GetUtcNow() };
         var secret = RandomNumberGenerator.GetBytes(20);
