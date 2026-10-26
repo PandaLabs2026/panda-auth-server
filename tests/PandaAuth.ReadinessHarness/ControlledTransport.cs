@@ -45,9 +45,10 @@ public static class ControlledTransport
 
     public static string Canonical(ControlledTransportSpec spec) { Validate(spec); return JsonSerializer.Serialize(spec, Json); }
     public static ControlledTransportInput Parse(string value) => Decode<ControlledTransportInput>(value);
-    public static T Decode<T>(string value)
+    public static T Decode<T>(string value) => DecodeBounded<T>(value, 65536);
+    internal static T DecodeBounded<T>(string value, int limit)
     {
-        if (value.Length > 65536) throw new JsonException();
+        if (value.Length > limit) throw new JsonException();
         using var document = JsonDocument.Parse(value, new JsonDocumentOptions { MaxDepth = 16 });
         static void Unique(JsonElement element)
         {
