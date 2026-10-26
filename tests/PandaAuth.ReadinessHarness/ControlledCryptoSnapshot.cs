@@ -15,8 +15,12 @@ public static class ControlledCryptoSnapshot
 {
     public static string Hash(params string[] fields) => Convert.ToHexStringLower(
         SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(fields)));
-    public static string Fingerprint(string database, string oid) => Convert.ToHexStringLower(
-        SHA256.HashData(Encoding.UTF8.GetBytes("127.0.0.1\0"+"55432\0"+database+"\0"+oid)));
+    public static string Fingerprint(string database, string oid,string owner)
+    {
+        Require(System.Text.RegularExpressions.Regex.IsMatch(owner,"\\A[a-f0-9]{64}\\z") &&
+            database is "panda_auth_fleet" or "panda_auth_t0000" && System.Text.RegularExpressions.Regex.IsMatch(oid,"\\A[1-9][0-9]*\\z"));
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("panda-auth-controlled-db-v1\0"+owner+"\0"+"127.0.0.1\0"+"55432\0"+database+"\0"+oid)));
+    }
     private static void Require(bool value)
     { if (!value) throw new CryptographicException("controlled_crypto_failed"); }
 
@@ -36,7 +40,8 @@ public static class ControlledCryptoSnapshot
             await using(var command=new NpgsqlCommand("SET TRANSACTION READ ONLY",connection,transaction))
                 await command.ExecuteNonQueryAsync();
             await using(var command=new NpgsqlCommand("SELECT oid::text FROM pg_database WHERE datname=current_database()",connection,transaction))
-                Require(Fingerprint(settings.Database!, (string)(await command.ExecuteScalarAsync() ?? "")) == input.RestoredDatabaseFingerprint);
+                Require(Fingerprint(settings.Database!, (string)(await command.ExecuteScalarAsync() ?? ""),
+                    Environment.GetEnvironmentVariable("PANDA_AUTH_CONTROLLED_DATABASE_OWNER") ?? "") == input.RestoredDatabaseFingerprint);
             var keys=new Dictionary<string,string>(StringComparer.Ordinal);
             // Historical columns only: valid both before and after the online key-ring migration.
             await using(var command=new NpgsqlCommand("SELECT \"KeyId\",\"Use\",\"Algorithm\",\"PrivateKey\",\"NotBefore\",\"NotAfter\" FROM signing_keys ORDER BY \"KeyId\" LIMIT 513",connection,transaction))

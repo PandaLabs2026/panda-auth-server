@@ -10,8 +10,10 @@ public sealed class ControlledCryptoSnapshotTests
     [Fact]
     public void FingerprintMatchesControllerNullDelimitedBinding()
     {
-        var expected=Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("127.0.0.1\055432\0panda_auth_fleet\042")));
-        Assert.Equal(expected,ControlledCryptoSnapshot.Fingerprint("panda_auth_fleet","42"));
+        var owner=new string('a',64);
+        var expected=Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("panda-auth-controlled-db-v1\0"+owner+"\0"+"127.0.0.1\055432\0panda_auth_fleet\042")));
+        Assert.Equal(expected,ControlledCryptoSnapshot.Fingerprint("panda_auth_fleet","42",owner));
+        Assert.NotEqual(expected,ControlledCryptoSnapshot.Fingerprint("panda_auth_fleet","42",new string('b',64)));
     }
     [Fact]
     public void StableIdentityIncludesEveryImmutableFieldAndIsUnambiguous()
