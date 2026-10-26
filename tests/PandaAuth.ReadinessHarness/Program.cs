@@ -24,6 +24,8 @@ public static class HarnessProgram
     {
         try
         {
+            if (args is ["--controlled-proxy-stdin" or "--controlled-probe-stdin" or "--controlled-transport-smoke-stdin"])
+                return await ControlledTransport.Dispatch(args[0], await Console.In.ReadLineAsync() ?? "");
             if (args is not ["--load-stdin" or "--seed-stdin" or "--proxy-stdin" or "--create-tls-stdin" or "--probe-stdin" or "--verify-ip-limit-stdin" or "--verify-account-limit-stdin" or "--create-recovery-crypto-stdin" or "--verify-recovery-crypto-stdin" or "--snapshot-session-stdin" or "--snapshot-revoked-session-stdin" or "--verify-valid-snapshot-stdin" or "--verify-rejected-snapshot-stdin" or "--verify-bff-login-stdin" or "--snapshot-bff-login-stdin" or "--verify-bff-snapshot-stdin" or "--verify-legacy-bff-snapshot-stdin"]) throw new InvalidOperationException();
             var line = await Console.In.ReadLineAsync();
             if (args[0] is "--create-recovery-crypto-stdin" or "--verify-recovery-crypto-stdin")
