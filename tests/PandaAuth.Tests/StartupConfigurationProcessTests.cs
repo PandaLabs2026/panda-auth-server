@@ -215,6 +215,37 @@ public sealed class StartupConfigurationProcessTests
         Assert.DoesNotContain("Npgsql", result.Output + result.Error);
     }
 
+    [PostgresFact]
+    public async Task ResourceMigration_FailureAfterDdlKeepsUpgradedSchemaButRollsBackResourceWrites()
+    {
+        await using var database = await AuthQualityPostgresFixture.CreateAsync();
+        using var scope = database.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        await scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>().CreateAsync(new OpenIddictApplicationDescriptor
+        {
+            ClientId = FirstPartyClients.AdminWeb, ClientType = OpenIddictConstants.ClientTypes.Confidential,
+            ClientSecret = "synthetic-original-secret",
+        });
+        var migrations = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
+        await db.GetService<IMigrator>().MigrateAsync(migrations[^2]);
+        await db.Database.ExecuteSqlRawAsync("""
+            CREATE FUNCTION public.panda_r1_resource_failure() RETURNS trigger LANGUAGE plpgsql AS
+            $$ BEGIN RAISE EXCEPTION 'synthetic-resource-write-fault'; END $$;
+            CREATE TRIGGER panda_r1_resource_failure BEFORE UPDATE ON "OpenIddictApplications"
+              FOR EACH ROW EXECUTE FUNCTION public.panda_r1_resource_failure();
+            """);
+        await using var process = new ProcessFixture();
+        process.Environment["ConnectionStrings__Migration"] = db.Database.GetConnectionString()!;
+        var result = await process.RunAsync(["--migrate-admin-resource-only"]);
+        Assert.Equal(2, result.Code);
+        Assert.Contains(OperationalCommand.SigningMigration, await db.Database.GetAppliedMigrationsAsync());
+        Assert.Equal(0, await db.Set<OpenIddictEntityFrameworkCoreScope>().CountAsync());
+        var app = await db.Set<OpenIddictEntityFrameworkCoreApplication>().AsNoTracking().SingleAsync();
+        Assert.DoesNotContain(OpenIddictConstants.Permissions.Prefixes.Scope + PandaAuthAdminApi.Scope, app.Permissions ?? "");
+        Assert.DoesNotContain("synthetic-resource-write-fault", result.Output + result.Error);
+        Assert.Empty(Directory.GetFiles(process.Root, "*.xml", SearchOption.AllDirectories));
+    }
+
     private sealed class ProcessFixture : IAsyncDisposable
     {
         internal string Root { get; } = Path.Combine(Path.GetTempPath(), "panda-r1-config-" + Guid.NewGuid().ToString("N"));
