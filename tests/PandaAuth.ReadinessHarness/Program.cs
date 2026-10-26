@@ -24,6 +24,8 @@ public static class HarnessProgram
     {
         try
         {
+            if (args is ["--controlled-actors-stdin"])
+                return await ControlledActors.Dispatch(await Console.In.ReadLineAsync() ?? "");
             if (args is ["--controlled-crypto-baseline-stdin" or "--controlled-crypto-verify-stdin"])
                 return await ControlledCryptoCommand.Dispatch(args[0], await Console.In.ReadLineAsync() ?? "");
             if (args is ["--controlled-proxy-stdin" or "--controlled-probe-stdin" or "--controlled-transport-smoke-stdin"])

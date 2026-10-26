@@ -17,6 +17,22 @@ public static class ControlledCryptoCommand
     private static string Binding(ControlledTransportSpec spec)=>Hash(ControlledTransport.Canonical(spec));
     private static byte[] Canary(ControlledTransportSpec spec)=>SHA256.HashData(Encoding.UTF8.GetBytes("controlled-totp\0"+Binding(spec)))[..20];
 
+    internal static void VerifyBaseline(string root,ControlledCryptoInput input,ControlledCryptoState current,TotpSecretProtector protector)
+    {
+        if(!OperatingSystem.IsLinux()) throw new InvalidOperationException("controlled_crypto_failed");
+        var path=Path.Combine(root,"crypto-baseline.json");
+        var file=new FileInfo(path);
+        Require(file.Exists && file.LinkTarget is null && file.Length is >0 and <=4*1024*1024 &&
+            File.GetUnixFileMode(path)==(UnixFileMode.UserRead|UnixFileMode.UserWrite));
+        var baseline=ControlledTransport.DecodeBounded<ControlledCryptoBaseline>(File.ReadAllText(path),4*1024*1024);
+        Require(baseline.Schema==1 && baseline.SpecSha256==Binding(input.Spec) && baseline.DatabaseFingerprint==input.RestoredDatabaseFingerprint);
+        ControlledCryptography.RequireOriginals(baseline.Original.Keys,current.Keys);
+        ControlledCryptography.RequireOriginals(baseline.Original.Factors,current.Factors);
+        ControlledCryptography.VerifyDp(Path.Combine(root,"dp"),input.Spec,baseline.Dp);
+        Require(ControlledCryptography.InspectTotp(protector,"controlled-"+Binding(input.Spec),baseline.FactorId,baseline.Totp)==
+            Convert.ToHexStringLower(SHA256.HashData(Canary(input.Spec))));
+    }
+
     public static async Task<int> Dispatch(string command,string line)
     {
         try
@@ -48,17 +64,7 @@ public static class ControlledCryptoCommand
                 }
                 else
                 {
-                    var file=new FileInfo(path);
-                    Require(file.Exists && file.LinkTarget is null && file.Length is >0 and <=4*1024*1024 &&
-                        File.GetUnixFileMode(path)==(UnixFileMode.UserRead|UnixFileMode.UserWrite));
-                    var baseline=ControlledTransport.DecodeBounded<ControlledCryptoBaseline>(File.ReadAllText(path),4*1024*1024);
-                    Require(baseline.Schema==1 && baseline.SpecSha256==Binding(input.Spec) &&
-                        baseline.DatabaseFingerprint==input.RestoredDatabaseFingerprint);
-                    ControlledCryptography.RequireOriginals(baseline.Original.Keys,current.Keys);
-                    ControlledCryptography.RequireOriginals(baseline.Original.Factors,current.Factors);
-                    ControlledCryptography.VerifyDp(Path.Combine(root,"dp"),input.Spec,baseline.Dp);
-                    Require(ControlledCryptography.InspectTotp(protector,"controlled-"+Binding(input.Spec),baseline.FactorId,baseline.Totp)==
-                        Convert.ToHexStringLower(SHA256.HashData(Canary(input.Spec))));
+                    VerifyBaseline(root,input,current,protector);
                 }
             }
             finally { CryptographicOperations.ZeroMemory(key); }
