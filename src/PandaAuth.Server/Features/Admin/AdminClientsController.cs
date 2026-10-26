@@ -351,7 +351,7 @@ public sealed class AdminClientsController(
             User.FindFirst("sub")?.Value,
             "client",
             clientId,
-            "admin_webauthn",
+            MfaClaimTypes.Totp,
             metadata,
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             Request.Headers.UserAgent.ToString(),

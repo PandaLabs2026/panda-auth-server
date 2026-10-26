@@ -307,7 +307,7 @@ public class AdminUsersControllerTests
             new Claim(Claims.Subject, user.Id),
             new Claim(Claims.Name, "self-freeze"),
             new Claim(Claims.Role, PandaAuthRoles.Admin),
-            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.WebAuthn),
+            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Totp),
             new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
         ], "TestBearer", Claims.Name, Claims.Role));
         await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminSetStatus, user.Id,
@@ -336,7 +336,7 @@ public class AdminUsersControllerTests
             new Claim(Claims.Subject, user.Id),
             new Claim(Claims.Name, "self-reset"),
             new Claim(Claims.Role, PandaAuthRoles.Admin),
-            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.WebAuthn),
+            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Totp),
             new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
         ], "TestBearer", Claims.Name, Claims.Role));
 
@@ -390,7 +390,7 @@ public class AdminUsersControllerTests
             new Claim(Claims.Subject, userId),
             new Claim(Claims.Name, userName),
             new Claim(Claims.Role, PandaAuthRoles.Admin),
-            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.WebAuthn),
+            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Totp),
             new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
         ], "TestBearer", Claims.Name, Claims.Role));
 
@@ -687,7 +687,7 @@ public class AdminUsersControllerTests
             new Claim(Claims.Subject, user.Id),
             new Claim(Claims.Name, "self-kick"),
             new Claim(Claims.Role, PandaAuthRoles.Admin),
-            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.WebAuthn),
+            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Totp),
             new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
         ], "TestBearer", Claims.Name, Claims.Role));
 

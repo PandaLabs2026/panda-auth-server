@@ -114,16 +114,17 @@ public sealed class MfaServiceTests
         Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
         var db = provider.GetRequiredService<PandaAuthDbContext>();
         // 两个已确认 TOTP：可验证因子口径下撤销其一不触发「最后一个因子」护栏。
-        db.TotpFactors.Add(new MfaTotpFactor { UserId = user.Id, Id = Guid.NewGuid(), ConfirmedAt = DateTimeOffset.UtcNow });
-        db.TotpFactors.Add(new MfaTotpFactor { UserId = user.Id, Id = Guid.NewGuid(), ConfirmedAt = DateTimeOffset.UtcNow });
-        var passkey = new MfaWebAuthnCredential { UserId = user.Id, Id = Guid.NewGuid(), CredentialId = [1], PublicKeyCose = [2] };
-        db.WebAuthnCredentials.Add(passkey);
+        var first = new MfaTotpFactor { UserId = user.Id, Id = Guid.NewGuid(), ConfirmedAt = DateTimeOffset.UtcNow };
+        var second = new MfaTotpFactor { UserId = user.Id, Id = Guid.NewGuid(), ConfirmedAt = DateTimeOffset.UtcNow };
+        db.TotpFactors.Add(first);
+        db.TotpFactors.Add(second);
         await db.SaveChangesAsync();
         var service = CreateService(provider);
 
-        await service.RevokeFactorAsync(user.Id, passkey.Id, Principal(user.Id, recentMethod: MfaClaimTypes.Totp), CancellationToken.None);
+        await service.RevokeFactorAsync(user.Id, first.Id, Principal(user.Id, recentMethod: MfaClaimTypes.Totp), CancellationToken.None);
 
-        Assert.NotNull((await db.WebAuthnCredentials.SingleAsync(x => x.Id == passkey.Id)).RevokedAt);
+        Assert.NotNull((await db.TotpFactors.SingleAsync(x => x.Id == first.Id)).RevokedAt);
+        Assert.Null((await db.TotpFactors.SingleAsync(x => x.Id == second.Id)).RevokedAt);
     }
 
     [Fact]
@@ -213,7 +214,7 @@ public sealed class MfaServiceTests
             ActorUserId = "admin",
             TargetUserId = user.Id,
             Reason = MfaRecoveryEvent.AdminResetReason,
-            AuthenticationMethod = MfaClaimTypes.WebAuthn,
+            AuthenticationMethod = MfaClaimTypes.Totp,
             CreatedAt = DateTimeOffset.UtcNow,
         });
         await db.SaveChangesAsync();
@@ -239,7 +240,7 @@ public sealed class MfaServiceTests
             ActorUserId = "admin",
             TargetUserId = user.Id,
             Reason = MfaRecoveryEvent.AdminResetReason,
-            AuthenticationMethod = MfaClaimTypes.WebAuthn,
+            AuthenticationMethod = MfaClaimTypes.Totp,
             CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-1),
         });
         await db.SaveChangesAsync();
@@ -259,24 +260,17 @@ public sealed class MfaServiceTests
         var user = new PandaUser { UserName = "revoke-codes", Email = "revoke-codes@example.com", EmailConfirmed = true };
         Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
         var db = provider.GetRequiredService<PandaAuthDbContext>();
-        // 两个已确认 TOTP：可验证因子口径下撤销其一不触发「最后一个因子」护栏。
+        // 两个已确认 TOTP：撤销其一不触发「最后一个因子」护栏。
         db.TotpFactors.Add(new MfaTotpFactor { UserId = user.Id, Id = Guid.NewGuid(), ConfirmedAt = DateTimeOffset.UtcNow });
         db.TotpFactors.Add(new MfaTotpFactor { UserId = user.Id, Id = Guid.NewGuid(), ConfirmedAt = DateTimeOffset.UtcNow });
-        var passkey = new MfaWebAuthnCredential { UserId = user.Id, Id = Guid.NewGuid(), CredentialId = [1], PublicKeyCose = [2] };
-        db.WebAuthnCredentials.Add(passkey);
         db.MfaRecoveryCodes.Add(new MfaRecoveryCode { UserId = user.Id, CodeHash = "00", Salt = "00" });
         await db.SaveChangesAsync();
         var service = CreateService(provider);
 
-        // 撤销 TOTP（可验证因子）作废恢复码；撤销退役 passkey 行（迁移动作）保留恢复码。
+        // 撤销 TOTP（可验证因子）作废恢复码。
         var totpId = await db.TotpFactors.Where(x => x.UserId == user.Id && x.ConfirmedAt != null).Select(x => x.Id).FirstAsync();
         await service.RevokeFactorAsync(user.Id, totpId, Principal(user.Id, recentMethod: MfaClaimTypes.Totp), CancellationToken.None);
         Assert.Empty(await db.MfaRecoveryCodes.Where(code => code.UserId == user.Id).ToListAsync());
-
-        db.MfaRecoveryCodes.Add(new MfaRecoveryCode { UserId = user.Id, CodeHash = "01", Salt = "01" });
-        await db.SaveChangesAsync();
-        await service.RevokeFactorAsync(user.Id, passkey.Id, Principal(user.Id, recentMethod: MfaClaimTypes.RecoveryCode), CancellationToken.None);
-        Assert.Single(await db.MfaRecoveryCodes.Where(code => code.UserId == user.Id).ToListAsync());
     }
 
     [Fact]

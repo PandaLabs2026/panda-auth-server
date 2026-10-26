@@ -53,7 +53,7 @@ internal static class AdminTestHost
             new Claim(Claims.Subject, "actor-1"),
             new Claim(Claims.Name, "admin"),
             new Claim(Claims.Role, PandaAuthRoles.Admin),
-            new Claim(MfaClaimTypes.Method, MfaClaimTypes.WebAuthn),
+            new Claim(MfaClaimTypes.Method, MfaClaimTypes.Totp),
             new Claim(MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
         ], "TestBearer", Claims.Name, Claims.Role));
 

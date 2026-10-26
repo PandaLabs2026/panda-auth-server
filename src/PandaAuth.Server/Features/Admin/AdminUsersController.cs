@@ -703,7 +703,6 @@ public sealed class AdminUsersController(
             ? await db.Database.BeginTransactionAsync(cancellationToken)
             : null;
         user.TwoFactorEnabled = false;
-        foreach (var credential in await db.WebAuthnCredentials.Where(item => item.UserId == user.Id && item.RevokedAt == null).ToListAsync(cancellationToken)) credential.RevokedAt = credential.UpdatedAt = now;
         foreach (var factor in await db.TotpFactors.Where(item => item.UserId == user.Id && item.RevokedAt == null).ToListAsync(cancellationToken)) factor.RevokedAt = now;
 
         // 恢复码是独立的 step-up 凭据：因子撤销后必须整体作废，不能留下“旧码仍可过 8 小时门禁”的尾巴。
@@ -725,7 +724,7 @@ public sealed class AdminUsersController(
             ActorUserId = actorId,
             TargetUserId = user.Id,
             Reason = MfaRecoveryEvent.AdminResetReason,
-            AuthenticationMethod = MfaClaimTypes.WebAuthn,
+            AuthenticationMethod = MfaClaimTypes.Totp,
             CreatedAt = now,
         });
         await db.SaveChangesAsync(cancellationToken);

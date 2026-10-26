@@ -67,7 +67,7 @@ public sealed class AdminSecurityAtomicityTests
                 RequestServices = request.ServiceProvider,
                 User = new ClaimsPrincipal(new ClaimsIdentity([
                     new Claim("sub", fixture.UserId), new Claim("role", "admin"),
-                    new Claim(MfaClaimTypes.Method, MfaClaimTypes.WebAuthn),
+                    new Claim(MfaClaimTypes.Method, MfaClaimTypes.Totp),
                     new Claim(MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
                 ], "verified")),
             }};

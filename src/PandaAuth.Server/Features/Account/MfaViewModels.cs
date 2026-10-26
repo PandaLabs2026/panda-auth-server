@@ -1,7 +1,7 @@
 namespace PandaAuth.Server.Features.Account;
 
 /// <summary>管理员安全验证页模型（Passkey 退役后 TOTP-first，AUTH-DELIVERY-002）。</summary>
-public sealed class MfaViewModel { public bool HasTotp { get; init; } public int RetiredPasskeyCount { get; init; } public string ReturnUrl { get; init; } = "/admin/"; }
+public sealed class MfaViewModel { public bool HasTotp { get; init; } public string ReturnUrl { get; init; } = "/admin/"; }
 public sealed record ConfirmTotpRequest { public Guid FactorId { get; init; } public string Code { get; init; } = string.Empty; }
 public sealed record ConsumeRecoveryCodeRequest { public string Code { get; init; } = string.Empty; }
 public sealed record RevokeMfaFactorRequest { public Guid FactorId { get; init; } }

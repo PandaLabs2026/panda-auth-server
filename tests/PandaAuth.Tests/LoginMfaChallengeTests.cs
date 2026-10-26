@@ -54,9 +54,9 @@ public class LoginMfaChallengeTests
         if (seedFactor)
         {
             var db = provider.GetRequiredService<PandaAuthDbContext>();
-            db.WebAuthnCredentials.Add(new MfaWebAuthnCredential
+            db.TotpFactors.Add(new MfaTotpFactor
             {
-                UserId = user.Id, CredentialId = [1, 2, 3], PublicKeyCose = [4, 5, 6],
+                UserId = user.Id, Id = Guid.NewGuid(), ConfirmedAt = DateTimeOffset.UtcNow, CreatedAt = DateTimeOffset.UtcNow,
             });
             await db.SaveChangesAsync();
         }

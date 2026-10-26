@@ -6,7 +6,7 @@ using PandaAuth.Server.Features.Management;
 
 namespace PandaAuth.Server.Infrastructure.Security;
 
-/// <summary>Only owned business actions; protocol and WebAuthn payloads keep their own limits.</summary>
+/// <summary>Only owned business actions; protocol payloads keep their own limits.</summary>
 public sealed class BusinessInputLimitFilter : IActionFilter
 {
     public void OnActionExecuting(ActionExecutingContext context)

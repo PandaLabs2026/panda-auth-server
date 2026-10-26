@@ -162,7 +162,7 @@ public sealed class AdminClaimsController(
             User.FindFirst("sub")?.Value,
             targetType,
             targetId,
-            "admin_webauthn",
+            MfaClaimTypes.Totp,
             detail,
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             Request.Headers.UserAgent.ToString(),

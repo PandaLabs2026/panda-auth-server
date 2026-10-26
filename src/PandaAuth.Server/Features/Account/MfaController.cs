@@ -262,8 +262,7 @@ public sealed class MfaController(
         var user = await AdminAsync();
         if (user is null) return Forbid();
         var hasTotp = await db.TotpFactors.AnyAsync(item => item.UserId == user.Id && item.RevokedAt == null && item.ConfirmedAt != null, cancellationToken);
-        var retiredPasskeys = await db.WebAuthnCredentials.CountAsync(item => item.UserId == user.Id && item.RevokedAt == null, cancellationToken);
-        return View(new MfaViewModel { HasTotp = hasTotp, RetiredPasskeyCount = retiredPasskeys, ReturnUrl = Url.IsLocalUrl(returnUrl) ? returnUrl! : "/admin/" });
+        return View(new MfaViewModel { HasTotp = hasTotp, ReturnUrl = Url.IsLocalUrl(returnUrl) ? returnUrl! : "/admin/" });
     }
 
     [HttpPost("totp/options")]
