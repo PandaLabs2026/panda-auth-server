@@ -35,6 +35,9 @@ internal sealed class ProtocolUser : IProtocolActor
     }
 
     internal static HttpClient CreateBrowser(LoadRequest settings, X509Certificate2 root, CookieContainer? cookies = null)
+        => CreateBrowser(new Uri(settings.BaseUri),root,cookies);
+
+    internal static HttpClient CreateBrowser(Uri owner, X509Certificate2 root, CookieContainer? cookies = null)
     {
         var handler = new HttpClientHandler { AllowAutoRedirect = false, CookieContainer = cookies ?? new CookieContainer(), UseProxy = false };
         handler.ServerCertificateCustomValidationCallback = (_, certificate, _, errors) =>
@@ -47,7 +50,7 @@ internal sealed class ProtocolUser : IProtocolActor
             chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
             return chain.Build(certificate);
         };
-        return new HttpClient(handler) { BaseAddress = new Uri(settings.BaseUri), Timeout = TimeSpan.FromSeconds(15) };
+        return new HttpClient(handler) { BaseAddress = owner, Timeout = TimeSpan.FromSeconds(15) };
     }
 
     public async Task InitializeAsync(CancellationToken cancellation) => await LoginAsync(cancellation);

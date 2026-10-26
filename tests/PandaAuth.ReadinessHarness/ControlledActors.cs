@@ -32,7 +32,12 @@ public static class ControlledActors
         return ["r1-controlled-admin-"+spec.Attempt+"@example.invalid","r1-controlled-"+spec.Attempt+"-0",
             "r1-controlled-"+spec.Attempt+"-1","r1-controlled-client-"+spec.Attempt];
     }
-    private static void Write(string path,byte[] bytes)
+    public static string Subject(ControlledTransportSpec spec,int index)
+    {
+        ControlledTransport.Validate(spec);Require(index is >=0 and <3);
+        return new Guid(SHA256.HashData(Encoding.UTF8.GetBytes("r1-controlled\0"+spec.Attempt+"\0"+index))[..16]).ToString("D");
+    }
+    internal static void Write(string path,byte[] bytes)
     {
         if(!OperatingSystem.IsLinux())throw new InvalidOperationException("controlled_actors_failed");
         using var output=new FileStream(path,new FileStreamOptions{Mode=FileMode.CreateNew,Access=FileAccess.Write,Share=FileShare.None,
@@ -66,16 +71,17 @@ public static class ControlledActors
                 var db=scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
                 await using var transaction=await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
                 var names=Names(crypto.Spec);var users=scope.ServiceProvider.GetRequiredService<UserService>();
+                var subjects=Enumerable.Range(0,3).Select(index=>Subject(crypto.Spec,index)).ToArray();
                 var apps=scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
                 Require(await db.Roles.AnyAsync(role=>role.NormalizedName==PandaAuthRoles.Admin.ToUpperInvariant()));
-                Require(!await db.Users.AnyAsync(user=>names.Take(3).Contains(user.UserName!) || user.Id.StartsWith("r1-controlled-"+crypto.Spec.Attempt)) &&
+                Require(!await db.Users.AnyAsync(user=>names.Take(3).Contains(user.UserName!) || subjects.Contains(user.Id)) &&
                     await apps.FindByClientIdAsync(names[3]) is null);
                 var password="R1!a"+Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
                 var clientSecret=Convert.ToBase64String(RandomNumberGenerator.GetBytes(48));
                 var totpSecret=RandomNumberGenerator.GetBytes(20);
                 for(var index=0;index<3;index++)
                 {
-                    var user=new PandaUser{Id="r1-controlled-"+crypto.Spec.Attempt+"-"+index,UserName=names[index],
+                    var user=new PandaUser{Id=subjects[index],UserName=names[index],
                         Email=index==0?names[index]:names[index]+"@example.invalid",EmailConfirmed=true};
                     Require((await users.CreateAsync(user,password)).Succeeded);
                     if(index==0)

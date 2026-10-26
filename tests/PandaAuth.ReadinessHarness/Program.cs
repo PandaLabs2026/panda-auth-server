@@ -24,6 +24,8 @@ public static class HarnessProgram
     {
         try
         {
+            if (args is ["--controlled-bff-login-stdin"])
+                return await ControlledBffProtocol.Dispatch(await Console.In.ReadLineAsync() ?? "");
             if (args is ["--controlled-actors-stdin"])
                 return await ControlledActors.Dispatch(await Console.In.ReadLineAsync() ?? "");
             if (args is ["--controlled-crypto-baseline-stdin" or "--controlled-crypto-verify-stdin"])

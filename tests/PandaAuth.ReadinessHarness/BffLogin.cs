@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Runtime.CompilerServices;
 using Microsoft.AspNetCore.WebUtilities;
 using PandaAuth.Shared;
 
@@ -17,7 +18,13 @@ public static class BffLogin
         settings.Validate();
         if (!settings.RecoveryScenario || browser.BaseAddress?.AbsoluteUri != settings.BaseUri)
             throw new InvalidOperationException("readiness_bff_login_binding_invalid");
-        var owner = browser.BaseAddress;
+        var result=await VerifyCoreAsync(browser,settings.AdminUserName,settings.Password,RecoveryCrypto.SyntheticTotpSecret(settings.RunId));
+        return result with{Scope="synthetic_bff_password_totp_sso"};
+    }
+
+    internal static async Task<BffLoginReport> VerifyCoreAsync(HttpClient browser,string adminName,string userPassword,byte[] totpSecret)
+    {
+        var owner = browser.BaseAddress ?? throw new InvalidOperationException("readiness_bff_login_binding_invalid");
         var login = await FollowAsync(browser, new Uri(owner, "/admin/challenge?returnUrl=/admin/"), "/account/login");
         var query = QueryHelpers.ParseQuery(login.Query);
         Require(query.TryGetValue("returnUrl", out var returnUrl) && returnUrl.Count == 1);
@@ -28,7 +35,7 @@ public static class BffLogin
         using var credentials = new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["__RequestVerificationToken"] = Csrf(await page.Content.ReadAsStringAsync()),
-            ["UserName"] = settings.AdminUserName, ["Password"] = settings.Password,
+            ["UserName"] = adminName, ["Password"] = userPassword,
             ["ReturnUrl"] = authorization.PathAndQuery
         });
         using var password = await browser.PostAsync("/account/login", credentials);
@@ -43,7 +50,7 @@ public static class BffLogin
         using var factor = new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["__RequestVerificationToken"] = Csrf(await mfaPage.Content.ReadAsStringAsync()),
-            ["Code"] = BffSnapshot.TotpCode(RecoveryCrypto.SyntheticTotpSecret(settings.RunId), DateTimeOffset.UtcNow),
+            ["Code"] = BffSnapshot.TotpCode(totpSecret, DateTimeOffset.UtcNow),
             ["ReturnUrl"] = authorization.PathAndQuery
         });
         using var mfa = await browser.PostAsync("/account/mfa/challenge/totp", factor);
@@ -55,7 +62,7 @@ public static class BffLogin
         await FollowAsync(browser, new Uri(owner, "/me/login?returnUrl=/me/"), "/me/");
         var me = await SessionAsync(browser, "/me/api/session", requireAdmin: false);
         Require(admin == me);
-        return new(1, true, "synthetic_bff_password_totp_sso", true, true,
+        return new(1, true, "bff_password_totp_sso", true, true,
             Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(admin))));
     }
 
@@ -83,9 +90,13 @@ public static class BffLogin
         throw new InvalidOperationException("readiness_bff_redirect_budget_exceeded");
     }
 
-    private static Uri Redirect(Uri owner, HttpResponseMessage response)
+    private static Uri Redirect(Uri owner, HttpResponseMessage response,[CallerLineNumber]int line=0)
     {
-        Require(response.StatusCode == HttpStatusCode.Redirect && response.Headers.Location is not null);
+        if(response.StatusCode != HttpStatusCode.Redirect || response.Headers.Location is null)
+        {
+            var error=new InvalidOperationException("readiness_bff_login_protocol_failed");
+            error.Data["bffLine"]=line;error.Data["bffStatus"]=(int)response.StatusCode;throw error;
+        }
         return BffSnapshot.ResolveOwnedRedirect(owner, response.Headers.Location!);
     }
 
@@ -97,8 +108,11 @@ public static class BffLogin
         return WebUtility.HtmlDecode(match.Groups[1].Value);
     }
 
-    private static void Require(bool condition)
+    private static void Require(bool condition,[CallerLineNumber]int line=0)
     {
-        if (!condition) throw new InvalidOperationException("readiness_bff_login_protocol_failed");
+        if (!condition)
+        {
+            var error=new InvalidOperationException("readiness_bff_login_protocol_failed");error.Data["bffLine"]=line;throw error;
+        }
     }
 }
