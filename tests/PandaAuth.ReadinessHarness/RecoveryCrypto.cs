@@ -12,10 +12,10 @@ public sealed class RecoveryKeyringMissingException() : InvalidOperationExceptio
 
 public static class RecoveryCrypto
 {
-    private static readonly Dictionary<string, string> Applications = new()
+    internal static readonly System.Collections.ObjectModel.ReadOnlyDictionary<string, string> Applications = new(new Dictionary<string, string>()
     {
         ["server"] = "PandaAuth", ["admin"] = "PandaAuth.Admin", ["me"] = "PandaAuth.Me"
-    };
+    });
     private sealed record Canary(string RunId, Dictionary<string, string> Dp, Guid FactorId, ProtectedTotpSecret Totp);
 
     public static void Create(string root, string runId, byte[] totpKey, bool useExistingKeyrings = false)

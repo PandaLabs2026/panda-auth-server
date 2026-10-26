@@ -44,7 +44,8 @@ public static class ControlledTransport
     }
 
     public static string Canonical(ControlledTransportSpec spec) { Validate(spec); return JsonSerializer.Serialize(spec, Json); }
-    public static ControlledTransportInput Parse(string value)
+    public static ControlledTransportInput Parse(string value) => Decode<ControlledTransportInput>(value);
+    public static T Decode<T>(string value)
     {
         if (value.Length > 65536) throw new JsonException();
         using var document = JsonDocument.Parse(value, new JsonDocumentOptions { MaxDepth = 16 });
@@ -58,7 +59,7 @@ public static class ControlledTransport
             else if (element.ValueKind == JsonValueKind.Array) foreach (var item in element.EnumerateArray()) Unique(item);
         }
         Unique(document.RootElement);
-        return JsonSerializer.Deserialize<ControlledTransportInput>(value, Json) ?? throw new JsonException();
+        return JsonSerializer.Deserialize<T>(value, Json) ?? throw new JsonException();
     }
 
     public static string Guard(ControlledTransportSpec spec)
