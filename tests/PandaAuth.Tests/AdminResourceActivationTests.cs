@@ -34,7 +34,10 @@ public sealed class AdminResourceActivationTests
         var hash = admin.ClientSecret;
         var before = await db.Users.AsNoTracking().SingleAsync();
         var otherToken = other.ConcurrencyToken;
+        var connection = db.Database.GetConnectionString()!;
+        var protectedState = await ActivationPreservation.CaptureAsync(connection);
         await ApplyAsync(services);
+        ActivationPreservation.RequireUnchanged(protectedState, await ActivationPreservation.CaptureAsync(connection, protectedState));
         Assert.Equal(hash, admin.ClientSecret);
         Assert.Contains(Permissions.Prefixes.Scope + PandaAuthAdminApi.Scope, await apps.GetPermissionsAsync(admin));
         Assert.Equal(new[] { "https://fixture.invalid/old-callback" }, (await apps.GetRedirectUrisAsync(admin)).ToArray());
@@ -54,6 +57,21 @@ public sealed class AdminResourceActivationTests
         await ApplyAsync(services);
         Assert.Equal(appVersion, admin.ConcurrencyToken);
         Assert.Equal(scopeVersion, (await db.Set<OpenIddictEntityFrameworkCoreScope>().AsNoTracking().SingleAsync()).ConcurrencyToken);
+        ActivationPreservation.RequireUnchanged(protectedState, await ActivationPreservation.CaptureAsync(connection, protectedState));
+
+        // Real SQL mutations must fail preservation, including fields on the
+        // one client whose new resource permission is explicitly allowed.
+        await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE \"OpenIddictApplications\" SET \"ClientSecret\"={"changed-fixture-hash"} WHERE \"ClientId\"={FirstPartyClients.AdminWeb}");
+        var changedSecret = await ActivationPreservation.CaptureAsync(connection, protectedState);
+        Assert.Throws<InvalidOperationException>(() => ActivationPreservation.RequireUnchanged(protectedState, changedSecret));
+        await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE \"OpenIddictApplications\" SET \"ClientSecret\"={hash} WHERE \"ClientId\"={FirstPartyClients.AdminWeb}");
+        await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE \"OpenIddictApplications\" SET \"RedirectUris\"={"[\"https://changed.invalid/callback\"]"} WHERE \"ClientId\"={FirstPartyClients.AdminWeb}");
+        var changedCallback = await ActivationPreservation.CaptureAsync(connection, protectedState);
+        Assert.Throws<InvalidOperationException>(() => ActivationPreservation.RequireUnchanged(protectedState, changedCallback));
+        await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE \"OpenIddictApplications\" SET \"RedirectUris\"={admin.RedirectUris} WHERE \"ClientId\"={FirstPartyClients.AdminWeb}");
+        await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE panda_users SET \"SecurityStamp\"={"changed-fixture-stamp"} WHERE \"Id\"={before.Id}");
+        var changedHuman = await ActivationPreservation.CaptureAsync(connection, protectedState);
+        Assert.Throws<InvalidOperationException>(() => ActivationPreservation.RequireUnchanged(protectedState, changedHuman));
     }
 
     [PostgresTheory]
