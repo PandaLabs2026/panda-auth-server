@@ -24,6 +24,8 @@ public static class HarnessProgram
     {
         try
         {
+            if (args is ["--activation-human-stdin"])
+                return await ActivationHumanProtocol.Dispatch(await Console.In.ReadLineAsync() ?? "");
             if (args is ["--controlled-legacy-tokens-create-stdin" or "--controlled-legacy-tokens-verify-stdin"])
                 return await ControlledLegacyTokenProtocol.Dispatch(args[0],await Console.In.ReadLineAsync() ?? "");
             if (args is ["--controlled-legacy-cookies-create-stdin" or "--controlled-legacy-cookies-verify-stdin"])

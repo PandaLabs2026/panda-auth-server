@@ -55,7 +55,8 @@ internal sealed class ProtocolUser : IProtocolActor
     internal static HttpClient CreateBrowser(LoadRequest settings, X509Certificate2 root, CookieContainer? cookies = null)
         => CreateBrowser(new Uri(settings.BaseUri),root,cookies);
 
-    internal static HttpClient CreateBrowser(Uri owner, X509Certificate2? root, CookieContainer? cookies = null)
+    internal static HttpClient CreateBrowser(Uri owner, X509Certificate2? root, CookieContainer? cookies = null,
+        Action<HttpRequestMessage>? checkpoint = null)
     {
         var handler = new HttpClientHandler { AllowAutoRedirect = false, CookieContainer = cookies ?? new CookieContainer(), UseProxy = false };
         if (root is not null) handler.ServerCertificateCustomValidationCallback = (_, certificate, _, errors) =>
@@ -68,7 +69,21 @@ internal sealed class ProtocolUser : IProtocolActor
             chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
             return chain.Build(certificate);
         };
-        return new HttpClient(handler) { BaseAddress = owner, Timeout = TimeSpan.FromSeconds(15) };
+        HttpMessageHandler transport = checkpoint is null ? handler : new CheckpointHandler(checkpoint, handler);
+        var browser = new HttpClient(transport) { BaseAddress = owner, Timeout = TimeSpan.FromSeconds(15) };
+        if (checkpoint is not null) browser.MaxResponseContentBufferSize = 2 * 1024 * 1024;
+        return browser;
+    }
+
+    private sealed class CheckpointHandler(Action<HttpRequestMessage> checkpoint, HttpMessageHandler inner) : DelegatingHandler(inner)
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            checkpoint(request);
+            var response = await base.SendAsync(request, cancellationToken);
+            try { checkpoint(request); return response; }
+            catch { response.Dispose(); throw; }
+        }
     }
 
     public async Task InitializeAsync(CancellationToken cancellation) => await LoginAsync(cancellation);
