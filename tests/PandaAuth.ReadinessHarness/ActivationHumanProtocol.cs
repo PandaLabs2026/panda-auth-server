@@ -67,7 +67,8 @@ public static class ActivationHumanProtocol
 
     private static void Identity(ActivationHumanIdentity value)
     {
-        Require(value is not null && value.UserName is { Length: > 0 and <= 256 } && !value.UserName.Any(char.IsControl)
+        Require(value is not null && value.UserName is { Length: > 0 and <= 256 } && value.UserName == value.UserName.Trim()
+            && !value.UserName.Any(char.IsControl)
             && value.Password is { Length: > 0 and <= 1024 } && Hex(value.SubjectSha256, 64)
             && Hex(value.UsernameSha256, 64) && Sha(value.UserName) == value.UsernameSha256 && value.TotpSecret is { Length: 28 });
         var seed = Convert.FromBase64String(value.TotpSecret);

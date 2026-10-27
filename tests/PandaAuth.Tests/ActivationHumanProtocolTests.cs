@@ -49,6 +49,7 @@ public sealed class ActivationHumanProtocolTests
         Assert.Equal(input, ActivationHumanProtocol.Parse(line, key => env.GetValueOrDefault(key), DateTimeOffset.UtcNow));
         foreach (var changed in new[] { input with { ClientId = FirstPartyClients.MeWeb },
             input with { SourceSha256 = input.SourceSha256 + "\n" },
+            input with { Identity = Actor(" approved-admin ", 'e') },
             input with { ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(-1) },
             input with { RedirectUri = "https://foreign.invalid/callback" },
             input with { Restricted = input.Identity } })
