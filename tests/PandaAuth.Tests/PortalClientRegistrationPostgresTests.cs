@@ -21,6 +21,36 @@ namespace PandaAuth.Tests;
 public class PortalClientRegistrationPostgresTests
 {
     [PostgresFact]
+    public async Task ReadOnlyProof_RequiresExistingClientAndNeverCreatesClientOrAudit()
+    {
+        await using var fixture = await RegistrationDatabase.CreateAsync();
+        await Assert.ThrowsAsync<PortalClientClosedException>(() => fixture.Service.VerifyAsync(Request()));
+        await Assert.ThrowsAsync<PortalClientClosedException>(() => fixture.Service.VerifyAsync(Request("proof-missing")));
+        Assert.Equal((0, 0), await fixture.CountsAsync());
+        var descriptor = PortalClientRequest.Descriptor("proof-existing");
+        descriptor.Permissions.Add(OpenIddictConstants.Permissions.Scopes.Roles);
+        await using (var scope = fixture.Provider.CreateAsyncScope())
+            await scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>().CreateAsync(descriptor);
+        var proof = await fixture.Service.VerifyAsync(Request("proof-existing"));
+        using var json = JsonDocument.Parse(proof);
+        Assert.Equal("verified-existing", json.RootElement.GetProperty("result").GetString());
+        Assert.Equal(PortalClientRequest.RegistrationDigest(descriptor), json.RootElement.GetProperty("registrationDigest").GetString());
+        Assert.Equal((1, 0), await fixture.CountsAsync());
+    }
+
+    [PostgresFact]
+    public async Task ReadOnlyProof_RejectsDriftWithoutAnyAudit()
+    {
+        await using var fixture = await RegistrationDatabase.CreateAsync();
+        var descriptor = PortalClientRequest.Descriptor("proof-drift");
+        descriptor.RedirectUris.Add(new Uri("https://foreign.invalid/callback"));
+        await using (var scope = fixture.Provider.CreateAsyncScope())
+            await scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>().CreateAsync(descriptor);
+        await Assert.ThrowsAsync<PortalClientClosedException>(() => fixture.Service.VerifyAsync(Request("proof-drift")));
+        Assert.Equal((1, 0), await fixture.CountsAsync());
+    }
+
+    [PostgresFact]
     public async Task ExistingRolesClient_ProducesIdempotentReceiptWithoutChangingRegistration()
     {
         await using var fixture = await RegistrationDatabase.CreateAsync();

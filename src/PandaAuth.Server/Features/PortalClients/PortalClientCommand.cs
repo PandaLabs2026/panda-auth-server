@@ -22,6 +22,7 @@ internal static class PortalClientCommand
             if (args[0] == "--migrate") return 0;
             if (args[0] == "--register-portal-client") return 1;
             if (args[0] == "--unregister-portal-client") return 2;
+            if (args[0] == "--verify-portal-client") return 3;
         }
         // DeferredHostBuilder passes standard host settings to the normal entry point.
         // Dedicated commands remain single-argument; arbitrary configuration/URL pairs are closed.
@@ -38,23 +39,28 @@ internal static class PortalClientCommand
         return 0;
     }
 
-    internal static async Task<int> RunAsync(bool unregister, IConfiguration configuration, TextWriter output, TextWriter error)
+    internal static async Task<int> RunAsync(bool unregister, IConfiguration configuration, TextWriter output, TextWriter error, bool verify = false)
     {
         string? operation = null;
         try
         {
             Require(OperatingSystem.IsLinux() && Native.geteuid() == 1003 && Native.getegid() == 1003, "wrong-command-principal");
-            var raw = ReadProtectedFile(InputRoot + (unregister ? "/registration-rollback.json" : "/registration-request.json"), 1003, true);
+            var raw = verify ? await ReadProofInputAsync(Console.OpenStandardInput()) :
+                ReadProtectedFile(InputRoot + (unregister ? "/registration-rollback.json" : "/registration-request.json"), 1003, true);
             operation = Parse(raw, unregister, DateTimeOffset.UtcNow).OperationId;
-            var machine = ClosedJson(ReadProtectedFile(InputRoot + "/machine.json", 1003, false));
-            Require(machine.TryGetProperty("machine_id", out var id) && id.GetString() == "tcloud-sh-01", "wrong-command-machine");
+            if (!verify)
+            {
+                var machine = ClosedJson(ReadProtectedFile(InputRoot + "/machine.json", 1003, false));
+                Require(machine.TryGetProperty("machine_id", out var id) && id.GetString() == "tcloud-sh-01", "wrong-command-machine");
+            }
             Require(configuration["Auth:Issuer"] == Issuer, "wrong-runtime-issuer");
             var connection = configuration.GetConnectionString("Default") ?? throw new PortalClientClosedException("missing-runtime-provider");
             var parsed = new NpgsqlConnectionStringBuilder(connection);
             Require(!string.IsNullOrWhiteSpace(parsed.Host) && !string.IsNullOrWhiteSpace(parsed.Database) && !string.IsNullOrWhiteSpace(parsed.Username), "invalid-runtime-provider");
+            if (verify) Require(IsRegisteredProofProvider(parsed), "unregistered-read-only-provider");
             using var services = Services(connection);
             var service = new PortalClientRegistrationService(services.GetRequiredService<IServiceScopeFactory>(), TimeProvider.System);
-            await output.WriteAsync(await service.ExecuteAsync(raw, unregister));
+            await output.WriteAsync(verify ? await service.VerifyAsync(raw) : await service.ExecuteAsync(raw, unregister));
             return 0;
         }
         catch (Exception failure)
@@ -65,6 +71,29 @@ internal static class PortalClientCommand
             return retryable ? 2 : 1;
         }
     }
+    // The target controller supplies this observation request over stdin and
+    // verifies the host, live container and image independently. The output is
+    // untrusted until that controller binds it to the observed process.
+    internal static async Task<byte[]> ReadProofInputAsync(Stream input)
+    {
+        using var buffer = new MemoryStream();
+        var chunk = new byte[4096];
+        int count;
+        while ((count = await input.ReadAsync(chunk)) > 0)
+        {
+            Require(buffer.Length + count <= 32768, "oversize-proof-input");
+            buffer.Write(chunk, 0, count);
+        }
+        Require(buffer.Length > 0, "empty-proof-input");
+        return buffer.ToArray();
+    }
+
+    // t0000 is the only registered target of this command. Never print the
+    // connection string, credentials or other provider values.
+    internal static bool IsRegisteredProofProvider(NpgsqlConnectionStringBuilder connection) =>
+        connection.Host == "pandalabs-postgres" && connection.Port == 5432 &&
+        connection.Database == "panda_auth_t0000" && connection.Username == "panda_auth_t0000_runtime";
+
     internal static ServiceProvider Services(string connection)
     {
         var services = new ServiceCollection();
