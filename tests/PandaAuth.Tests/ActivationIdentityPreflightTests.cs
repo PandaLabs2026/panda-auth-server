@@ -10,6 +10,8 @@ using Xunit;
 using OpenIddict.EntityFrameworkCore.Models;
 using static OpenIddict.Abstractions.OpenIddictConstants;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using OpenIddict.Abstractions;
 
 namespace PandaAuth.Tests;
 
@@ -83,5 +85,23 @@ public sealed class ActivationIdentityPreflightTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => ActivationIdentityPreflight.CheckClientAsync(db, "me", "https://auth.appliket.com/", meCallback));
         app.Permissions = "[invalid"; await db.SaveChangesAsync();
         await Assert.ThrowsAsync<InvalidOperationException>(() => ActivationIdentityPreflight.CheckClientAsync(db, "me", "https://auth.appliket.com/", meCallback));
+    }
+
+    [Fact]
+    public async Task ClientSecretUsesTheActualOpenIddictVerifierBeforeAnyHumanLogin()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDbContext<PandaAuthDbContext>(options => options.UseInMemoryDatabase(Guid.NewGuid().ToString()).UseOpenIddict());
+        services.AddOpenIddict().AddCore(options => options.UseEntityFrameworkCore().UseDbContext<PandaAuthDbContext>());
+        await using var provider = services.BuildServiceProvider();
+        await using var scope = provider.CreateAsyncScope();
+        var manager = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+        await manager.CreateAsync(new OpenIddictApplicationDescriptor { ClientId = "admin-web", ClientType = ClientTypes.Confidential, ClientSecret = "fixture-only" });
+        var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        Assert.True(await ActivationIdentityPreflight.CheckClientSecretAsync(db, "admin-web", "fixture-only"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ActivationIdentityPreflight.CheckClientSecretAsync(db, "admin-web", "wrong-fixture"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ActivationIdentityPreflight.CheckClientSecretAsync(db, "unapproved-client", "fixture-only"));
+        Assert.False(db.ChangeTracker.HasChanges());
     }
 }

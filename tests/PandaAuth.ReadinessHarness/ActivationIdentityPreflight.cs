@@ -1,7 +1,12 @@
 using System.Security.Cryptography;
+using System.Data;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
+using OpenIddict.Abstractions;
 using OpenIddict.EntityFrameworkCore.Models;
 using PandaAuth.Server.Infrastructure.Persistence;
 using static OpenIddict.Abstractions.OpenIddictConstants;
@@ -15,6 +20,58 @@ internal static class ActivationIdentityPreflight
 {
     private static string Hash(string value) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
     private static void Require(bool value) { if (!value) throw new InvalidOperationException("activation_identity_preflight_failed"); }
+
+    internal static NpgsqlConnectionStringBuilder Connection(ActivationHumanInput input)
+    {
+        Require(input.Instance is "fleet" or "t0000" && !string.IsNullOrEmpty(input.RuntimeConnection));
+        var result = new NpgsqlConnectionStringBuilder(input.RuntimeConnection);
+        var database = "panda_auth_" + input.Instance;
+        var host = input.Instance == "fleet" ? "127.0.0.1" : "pandalabs-postgres";
+        Require(result.Host == host && result.Port == 5432 && result.Database == database
+            && result.Username == database + "_runtime" && !string.IsNullOrEmpty(result.Password)
+            && string.IsNullOrEmpty(result.Options));
+        result.Pooling = false;
+        result.Timeout = 10;
+        result.CommandTimeout = 30;
+        result.SearchPath = "pg_catalog, public";
+        return result;
+    }
+
+    internal static async Task CheckDatabaseAsync(ActivationHumanInput input, Action checkpoint, CancellationToken cancellation = default)
+    {
+        var settings = Connection(input);
+        checkpoint();
+        await using var connection = new NpgsqlConnection(settings.ConnectionString);
+        await connection.OpenAsync(cancellation);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellation);
+        await using (var readOnly = new NpgsqlCommand("SET TRANSACTION READ ONLY", connection, transaction))
+            await readOnly.ExecuteNonQueryAsync(cancellation);
+        await using (var command = new NpgsqlCommand("SELECT current_user, session_user, current_database(), (SELECT oid::text FROM pg_catalog.pg_database WHERE datname=current_database())", connection, transaction))
+        await using (var reader = await command.ExecuteReaderAsync(cancellation))
+        {
+            Require(await reader.ReadAsync(cancellation));
+            var user = reader.GetString(0); var sessionUser = reader.GetString(1); var database = reader.GetString(2); var oid = reader.GetString(3);
+            var fingerprint = Hash(string.Join('\0', settings.Host!.ToLowerInvariant(), settings.Port.ToString(CultureInfo.InvariantCulture), database, oid));
+            Require(user == settings.Username && sessionUser == settings.Username && database == settings.Database && fingerprint == input.DatabaseFingerprint
+                && !await reader.ReadAsync(cancellation));
+        }
+        await using var db = new PandaAuthDbContext(new DbContextOptionsBuilder<PandaAuthDbContext>()
+            .UseNpgsql(connection).UseOpenIddict().Options);
+        await db.Database.UseTransactionAsync(transaction, cancellation);
+        checkpoint();
+        await CheckClientAsync(db, input.Component, input.Issuer, input.RedirectUri, cancellation);
+        await CheckClientSecretAsync(db, input.ClientId, input.ClientSecret, cancellation);
+        await CheckAsync(db, input.Identity.UserName, input.Identity.UsernameSha256, input.Identity.SubjectSha256,
+            input.Component == "admin", DateTimeOffset.UtcNow, cancellation);
+        if (input.Component == "admin")
+        {
+            Require(input.Restricted is not null);
+            await CheckAsync(db, input.Restricted!.UserName, input.Restricted.UsernameSha256, input.Restricted.SubjectSha256,
+                false, DateTimeOffset.UtcNow, cancellation);
+        }
+        checkpoint();
+        await transaction.CommitAsync(cancellation);
+    }
 
     internal static async Task<bool> CheckClientAsync(PandaAuthDbContext db, string component, string issuer,
         string redirectUri, CancellationToken cancellation = default)
@@ -41,6 +98,25 @@ internal static class ActivationIdentityPreflight
         Require(required.All(permissions.Contains) && redirects.Contains(redirectUri));
         var adminScope = Permissions.Prefixes.Scope + PandaAuthAdminApi.Scope;
         Require(component == "admin" ? permissions.Contains(adminScope) : !permissions.Contains(adminScope));
+        return true;
+    }
+
+    internal static async Task<bool> CheckClientSecretAsync(PandaAuthDbContext db, string clientId,
+        string clientSecret, CancellationToken cancellation = default)
+    {
+        Require(clientId is FirstPartyClients.AdminWeb or FirstPartyClients.MeWeb && !string.IsNullOrEmpty(clientSecret));
+        // Use the same OpenIddict secret verifier as the Server. The stored
+        // verifier may be loaded in this private process; it is never returned
+        // or logged, and the verified read-only transaction remains in force.
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(db);
+        services.AddOpenIddict().AddCore(options => options.UseEntityFrameworkCore().UseDbContext<PandaAuthDbContext>());
+        await using var provider = services.BuildServiceProvider();
+        await using var scope = provider.CreateAsyncScope();
+        var manager = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+        var application = await manager.FindByClientIdAsync(clientId, cancellation);
+        Require(application is not null && await manager.ValidateClientSecretAsync(application, clientSecret, cancellation));
         return true;
     }
 

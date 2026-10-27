@@ -7,6 +7,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Npgsql;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Shared;
 
@@ -16,7 +17,11 @@ internal sealed record ActivationHumanIdentity(string UserName, string Password,
 internal sealed record ActivationHumanInput(int Schema, string Instance, string Component, string Attempt, string SourceSha256,
     string PolicySha256, string RuntimesSha256, DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt, string Issuer,
     string ClientId, string ClientSecret, string RedirectUri, ActivationHumanIdentity Identity, ActivationHumanIdentity? Restricted,
-    string? RootCertificateSha256 = null);
+    string? RootCertificateSha256 = null)
+{
+    public string? RuntimeConnection { get; init; }
+    public string? DatabaseFingerprint { get; init; }
+}
 
 /// <summary>Component protocol evidence only. The verified receiver owns approval,
 /// current account/client preflight, helper provenance and authoritative receipts.</summary>
@@ -37,6 +42,7 @@ public static class ActivationHumanProtocol
             && environment("PANDA_AUTH_ACTIVATION_POLICY_SHA256") == input.PolicySha256
             && environment("PANDA_AUTH_ACTIVATION_SOURCE_SHA256") == input.SourceSha256
             && environment("PANDA_AUTH_ACTIVATION_RUNTIMES_SHA256") == input.RuntimesSha256
+            && environment("PANDA_AUTH_ACTIVATION_DATABASE_FINGERPRINT") == input.DatabaseFingerprint
             && environment("PANDA_AUTH_ACTIVATION_ATTEMPT") == input.Attempt);
         return input;
     }
@@ -63,6 +69,8 @@ public static class ActivationHumanProtocol
         }
         else Require(input.Restricted is null);
         Require(input.RootCertificateSha256 is null || Hex(input.RootCertificateSha256, 64));
+        Require(Hex(input.DatabaseFingerprint, 64));
+        _ = ActivationIdentityPreflight.Connection(input);
     }
 
     private static void Identity(ActivationHumanIdentity value)
@@ -84,6 +92,7 @@ public static class ActivationHumanProtocol
             var input = Parse(line, Environment.GetEnvironmentVariable, DateTimeOffset.UtcNow);
             using var root = Root(input);
             void Check() => Parse(line, Environment.GetEnvironmentVariable, DateTimeOffset.UtcNow);
+            await ActivationIdentityPreflight.CheckDatabaseAsync(input, Check);
             HttpClient Browser(CookieContainer cookies)
             {
                 var browser = ProtocolUser.CreateBrowser(new Uri(input.Issuer), root, cookies, request =>
@@ -133,7 +142,8 @@ public static class ActivationHumanProtocol
             ["refreshVerified"] = true, ["logoutVerified"] = true, ["revocationVerified"] = true };
         if (input.Component == "admin") assertions["roleIsolation"] = true;
         return new { schema = 1, valid = true, scope = "activation-human-component", input.Instance, input.Component, input.Attempt,
-            input.SourceSha256, input.PolicySha256, input.RuntimesSha256, subjectSha256 = input.Identity.SubjectSha256, assertions };
+            input.SourceSha256, input.PolicySha256, input.RuntimesSha256, input.DatabaseFingerprint,
+            subjectSha256 = input.Identity.SubjectSha256, assertions };
 
         async Task Actor(ActivationHumanIdentity identity, bool bff, HttpStatusCode? resourceStatus)
         {

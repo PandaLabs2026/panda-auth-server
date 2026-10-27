@@ -15,7 +15,9 @@ public sealed class ActivationHumanProtocolTests
     private static ActivationHumanInput Input() => new(1, "fleet", "admin", new string('a', 32), new string('b', 64),
         new string('c', 64), new string('d', 64), DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1),
         "https://auth.appliket.com/", FirstPartyClients.AdminWeb, "fixture-client-secret",
-        "https://auth.appliket.com/admin/callback/login/pandaauth", Actor("approved-admin", 'e'), Actor("approved-nonadmin", 'f'));
+        "https://auth.appliket.com/admin/callback/login/pandaauth", Actor("approved-admin", 'e'), Actor("approved-nonadmin", 'f'))
+        { RuntimeConnection = "Host=127.0.0.1;Port=5432;Database=panda_auth_fleet;Username=panda_auth_fleet_runtime;Password=fixture-only",
+          DatabaseFingerprint = new string('9', 64) };
     private static ActivationHumanIdentity Actor(string name, char subject) => new(name, "fixture-password",
         Convert.ToBase64String(new byte[20]), new string(subject, 64), Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(name))));
     private static Dictionary<string, string> EnvironmentFor(ActivationHumanInput input, string line) => new()
@@ -24,6 +26,7 @@ public sealed class ActivationHumanProtocolTests
         ["PANDA_AUTH_ACTIVATION_SOURCE_SHA256"] = input.SourceSha256,
         ["PANDA_AUTH_ACTIVATION_RUNTIMES_SHA256"] = input.RuntimesSha256,
         ["PANDA_AUTH_ACTIVATION_ATTEMPT"] = input.Attempt,
+        ["PANDA_AUTH_ACTIVATION_DATABASE_FINGERPRINT"] = input.DatabaseFingerprint!,
         ["PANDA_AUTH_ACTIVATION_INPUT_SHA256"] = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(line)))
     };
 
@@ -49,6 +52,8 @@ public sealed class ActivationHumanProtocolTests
         Assert.Equal(input, ActivationHumanProtocol.Parse(line, key => env.GetValueOrDefault(key), DateTimeOffset.UtcNow));
         foreach (var changed in new[] { input with { ClientId = FirstPartyClients.MeWeb },
             input with { SourceSha256 = input.SourceSha256 + "\n" },
+            input with { RuntimeConnection = "Host=foreign.invalid;Database=panda_auth_fleet;Username=panda_auth_fleet_runtime;Password=fixture-only" },
+            input with { RuntimeConnection = input.RuntimeConnection + ";Options=-c role=postgres" },
             input with { Identity = Actor(" approved-admin ", 'e') },
             input with { ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(-1) },
             input with { RedirectUri = "https://foreign.invalid/callback" },
@@ -59,6 +64,9 @@ public sealed class ActivationHumanProtocolTests
             Assert.Throws<InvalidOperationException>(() => ActivationHumanProtocol.Parse(payload, key => pins.GetValueOrDefault(key), DateTimeOffset.UtcNow));
         }
         env["PANDA_AUTH_ACTIVATION_INPUT_SHA256"] = new string('0', 64);
+        Assert.Throws<InvalidOperationException>(() => ActivationHumanProtocol.Parse(line, key => env.GetValueOrDefault(key), DateTimeOffset.UtcNow));
+        env = EnvironmentFor(input, line);
+        env["PANDA_AUTH_ACTIVATION_DATABASE_FINGERPRINT"] = new string('0', 64);
         Assert.Throws<InvalidOperationException>(() => ActivationHumanProtocol.Parse(line, key => env.GetValueOrDefault(key), DateTimeOffset.UtcNow));
     }
 
@@ -102,6 +110,8 @@ public sealed class ActivationHumanProtocolTests
             () => { }, _ => Task.CompletedTask), Json));
         Assert.True(report.RootElement.GetProperty("valid").GetBoolean());
         Assert.Equal("activation-human-component", report.RootElement.GetProperty("scope").GetString());
+        Assert.Equal(input.DatabaseFingerprint, report.RootElement.GetProperty("databaseFingerprint").GetString());
+        Assert.DoesNotContain("fixture-password", report.RootElement.GetRawText());
         Assert.Equal(component == "admin" ? 2 : 1, state.Logins);
         Assert.All(state.Sessions.Values, session => Assert.True(session.Revoked));
         Assert.Equal(component == "admin" ? 8 : 4, state.Revocations);
