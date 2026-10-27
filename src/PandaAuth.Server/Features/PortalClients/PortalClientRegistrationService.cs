@@ -32,6 +32,25 @@ internal sealed class PortalClientRegistrationService(IServiceScopeFactory scope
     internal const string CreationProperty = "pandalabs.t0000-portal.creation";
     private readonly PortalClientTransactionBoundary _boundary = boundary ?? new();
 
+    // This is a fresh observation, not a registration receipt: no row lock,
+    // creation, SaveChanges or audit write is allowed on this path.
+    internal async Task<string> VerifyAsync(byte[] raw)
+    {
+        var request = Parse(raw, false, clock.GetUtcNow());
+        Require(request.ClientId is not null && request.InWindow(clock.GetUtcNow()), "invalid-read-only-request");
+        await using var scope = scopes.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        var manager = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead);
+        await db.Database.ExecuteSqlRawAsync("SET TRANSACTION READ ONLY");
+        var application = await manager.FindByClientIdAsync(request.ClientId!);
+        Require(application is OpenIddictEntityFrameworkCoreApplication, "registered-client-missing");
+        var descriptor = await ReadMatchingAsync(manager, (OpenIddictEntityFrameworkCoreApplication)application!);
+        var proof = Receipt(request, descriptor, "verified-existing", clock.GetUtcNow());
+        await transaction.CommitAsync();
+        return proof;
+    }
+
     internal async Task<string> ExecuteAsync(byte[] raw, bool unregister = false)
     {
         var request = Parse(raw, unregister, clock.GetUtcNow());
