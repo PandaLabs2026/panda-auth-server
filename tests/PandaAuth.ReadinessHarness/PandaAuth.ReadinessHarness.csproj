@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType><IsPackable>false</IsPackable></PropertyGroup>
   <ItemGroup><ProjectReference Include="../../src/PandaAuth.Server/PandaAuth.Server.csproj" /></ItemGroup>
+  <ItemGroup><InternalsVisibleTo Include="PandaAuth.Tests" /></ItemGroup>
   <ItemGroup>
     <PackageReference Include="System.Security.Cryptography.Pkcs" />
     <PackageReference Include="System.Security.Cryptography.Xml" />

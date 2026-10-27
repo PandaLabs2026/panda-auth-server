@@ -18,13 +18,16 @@ internal interface IProtocolActor : IDisposable
 }
 
 internal sealed record ProtocolActorSettings(string RunId,string BaseUri,string Password,string ClientId,string ClientSecret,
-    string RedirectUri,string UserName,string Workload);
+    string RedirectUri,string UserName,string Workload,string Scopes="openid profile offline_access");
 
 internal sealed class ProtocolUser : IProtocolActor
 {
     private readonly ProtocolActorSettings settings;
     private readonly int index;
-    private readonly X509Certificate2 root;
+    private readonly X509Certificate2? root;
+    private readonly bool ownsBrowser = true;
+    private readonly byte[]? totpSecret;
+    private readonly Func<CancellationToken, Task>? waitForMfaStep;
     private CookieContainer cookies = new();
     private HttpClient browser;
     private string accessToken = "";
@@ -41,13 +44,21 @@ internal sealed class ProtocolUser : IProtocolActor
         browser = CreateBrowser(new Uri(settings.BaseUri), root, cookies);
     }
 
+    internal ProtocolUser(ProtocolActorSettings settings, int index, HttpClient browser, CookieContainer cookies,
+        byte[]? totpSecret = null, Func<CancellationToken, Task>? waitForMfaStep = null)
+    {
+        Require(browser.BaseAddress?.AbsoluteUri == settings.BaseUri);
+        this.settings = settings; this.index = index; this.browser = browser; this.cookies = cookies;
+        this.totpSecret = totpSecret; this.waitForMfaStep = waitForMfaStep; ownsBrowser = false;
+    }
+
     internal static HttpClient CreateBrowser(LoadRequest settings, X509Certificate2 root, CookieContainer? cookies = null)
         => CreateBrowser(new Uri(settings.BaseUri),root,cookies);
 
-    internal static HttpClient CreateBrowser(Uri owner, X509Certificate2 root, CookieContainer? cookies = null)
+    internal static HttpClient CreateBrowser(Uri owner, X509Certificate2? root, CookieContainer? cookies = null)
     {
         var handler = new HttpClientHandler { AllowAutoRedirect = false, CookieContainer = cookies ?? new CookieContainer(), UseProxy = false };
-        handler.ServerCertificateCustomValidationCallback = (_, certificate, _, errors) =>
+        if (root is not null) handler.ServerCertificateCustomValidationCallback = (_, certificate, _, errors) =>
         {
             if (certificate is null || (errors & (SslPolicyErrors.RemoteCertificateNameMismatch | SslPolicyErrors.RemoteCertificateNotAvailable)) != 0)
                 return false;
@@ -75,6 +86,7 @@ internal sealed class ProtocolUser : IProtocolActor
         }
         if (settings.Workload == "login")
         {
+            Require(ownsBrowser);
             browser.Dispose();
             cookies = new CookieContainer();
             browser = CreateBrowser(new Uri(settings.BaseUri), root, cookies);
@@ -95,38 +107,63 @@ internal sealed class ProtocolUser : IProtocolActor
         return response.StatusCode;
     }
 
-    private async Task LoginAsync(CancellationToken cancellation)
+    private Task LoginAsync(CancellationToken cancellation) => AuthorizeAsync(cancellation, freshLogin: true);
+
+    internal Task AuthorizeSsoAsync(CancellationToken cancellation) => AuthorizeAsync(cancellation, freshLogin: false);
+
+    private async Task AuthorizeAsync(CancellationToken cancellation, bool freshLogin)
     {
         var verifier = Microsoft.IdentityModel.Tokens.Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
+        var state = Guid.NewGuid().ToString("N");
         var authorize = QueryHelpers.AddQueryString(PandaAuthEndpoints.Authorization, new Dictionary<string, string?>
         {
             ["client_id"] = settings.ClientId, ["redirect_uri"] = settings.RedirectUri, ["response_type"] = "code",
-            ["scope"] = "openid profile offline_access", ["state"] = Guid.NewGuid().ToString("N"), ["nonce"] = Guid.NewGuid().ToString("N"),
+            ["scope"] = settings.Scopes, ["state"] = state, ["nonce"] = Guid.NewGuid().ToString("N"),
             ["code_challenge_method"] = "S256", ["code_challenge"] = Microsoft.IdentityModel.Tokens.Base64UrlEncoder.Encode(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)))
         });
         using var challenge = await browser.GetAsync(authorize, cancellation);
         Require(challenge.StatusCode == HttpStatusCode.Redirect && challenge.Headers.Location is not null);
+        if (!freshLogin)
+        {
+            await CompleteAuthorizationAsync(challenge, verifier, state, cancellation);
+            return;
+        }
         var location = challenge.Headers.Location!;
         if (location.IsAbsoluteUri) Require(location.GetLeftPart(UriPartial.Authority) == browser.BaseAddress!.GetLeftPart(UriPartial.Authority));
         var loginPath = location.IsAbsoluteUri ? location.PathAndQuery : location.OriginalString;
-        Require(loginPath.StartsWith("/account/login", StringComparison.Ordinal));
-        using var page = await browser.GetAsync(loginPath, cancellation);
-        Require(page.IsSuccessStatusCode);
-        var csrf = Regex.Match(await page.Content.ReadAsStringAsync(cancellation), "name=\"__RequestVerificationToken\"[^>]*value=\"([^\"]+)\"");
-        Require(csrf.Success);
-        using var form = new FormUrlEncodedContent(new Dictionary<string, string>
+        Require(new Uri(browser.BaseAddress!, loginPath).AbsolutePath == "/account/login");
+        if (totpSecret is not null)
         {
-            ["__RequestVerificationToken"] = WebUtility.HtmlDecode(csrf.Groups[1].Value), ["UserName"] = settings.UserName,
-            ["Password"] = settings.Password, ["ReturnUrl"] = authorize
-        });
-        using var login = await browser.PostAsync("/account/login", form, cancellation);
-        Require(login.StatusCode == HttpStatusCode.Redirect);
+            await BffLogin.AuthenticateMfaAsync(browser, new Uri(browser.BaseAddress!, loginPath), new Uri(browser.BaseAddress!, authorize),
+                settings.UserName, settings.Password, totpSecret, waitForMfaStep, cancellation);
+        }
+        else
+        {
+            using var page = await browser.GetAsync(loginPath, cancellation);
+            Require(page.IsSuccessStatusCode);
+            var csrf = Regex.Match(await page.Content.ReadAsStringAsync(cancellation), "name=\"__RequestVerificationToken\"[^>]*value=\"([^\"]+)\"");
+            Require(csrf.Success);
+            using var form = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["__RequestVerificationToken"] = WebUtility.HtmlDecode(csrf.Groups[1].Value), ["UserName"] = settings.UserName,
+                ["Password"] = settings.Password, ["ReturnUrl"] = authorize
+            });
+            using var login = await browser.PostAsync("/account/login", form, cancellation);
+            Require(login.StatusCode == HttpStatusCode.Redirect);
+        }
         using var authorization = await browser.GetAsync(authorize, cancellation);
+        await CompleteAuthorizationAsync(authorization, verifier, state, cancellation);
+    }
+
+    private async Task CompleteAuthorizationAsync(HttpResponseMessage authorization, string verifier, string state, CancellationToken cancellation)
+    {
         Require(authorization.StatusCode == HttpStatusCode.Redirect && authorization.Headers.Location is not null);
-        var callback = authorization.Headers.Location!;
+        var callback = BffSnapshot.ResolveOwnedRedirect(browser.BaseAddress!, authorization.Headers.Location!);
         Require(callback.IsAbsoluteUri && callback.GetLeftPart(UriPartial.Path) == settings.RedirectUri);
         var query = QueryHelpers.ParseQuery(callback.Query);
-        Require(query.TryGetValue("code", out var code) && code.Count == 1);
+        Require(query.TryGetValue("code", out var code) && code.Count == 1 && !string.IsNullOrEmpty(code.ToString())
+            && query.TryGetValue("state", out var returnedState) && returnedState.Count == 1 && returnedState.ToString() == state
+            && !query.ContainsKey("error") && string.IsNullOrEmpty(callback.Fragment));
         Require(await ExchangeAsync(new()
         {
             ["client_id"] = settings.ClientId, ["client_secret"] = settings.ClientSecret, ["grant_type"] = "authorization_code",
@@ -166,7 +203,7 @@ internal sealed class ProtocolUser : IProtocolActor
         using var response = await browser.PostAsync("/account/logout", form);
         Require(response.StatusCode == HttpStatusCode.Redirect);
     }
-    public void Dispose() => browser.Dispose();
+    public void Dispose() { if (ownsBrowser) browser.Dispose(); }
 }
 
 internal sealed class MixedProtocolUser : IProtocolActor
