@@ -1,0 +1,29 @@
+# Private R1 receiver image. Build only from the clean, pinned Server and Share
+# source trees using the matching Dockerfile.r1-helper.dockerignore.
+# Context is the verified workspace root: docker build -f panda-auth-server/Dockerfile.r1-helper .
+# The registered builder supplies and attests both source revisions in its
+# artifact manifest; Docker labels alone do not prove source provenance.
+FROM mcr.microsoft.com/dotnet/sdk@sha256:0eeb52c76e35a5431ca707ad2bc75e38006a05393045d8532ae44c15d9474523 AS build
+WORKDIR /src
+
+# Restore the actual harness -> Server -> Share project graph without host
+# bin/obj state. The formal builder must independently verify these source SHAs.
+COPY panda-auth-server/global.json panda-auth-server/Directory.Build.props panda-auth-server/Directory.Packages.props panda-auth-server/
+COPY panda-auth-server/src/PandaAuth.Server/PandaAuth.Server.csproj panda-auth-server/src/PandaAuth.Server/
+COPY panda-auth-server/tests/PandaAuth.ReadinessHarness/PandaAuth.ReadinessHarness.csproj panda-auth-server/tests/PandaAuth.ReadinessHarness/
+COPY panda-auth-share/Directory.Build.props panda-auth-share/
+COPY panda-auth-share/src/PandaAuth.Shared/PandaAuth.Shared.csproj panda-auth-share/src/PandaAuth.Shared/
+RUN dotnet restore panda-auth-server/tests/PandaAuth.ReadinessHarness/PandaAuth.ReadinessHarness.csproj
+
+COPY panda-auth-share/ panda-auth-share/
+COPY panda-auth-server/ panda-auth-server/
+RUN dotnet publish panda-auth-server/tests/PandaAuth.ReadinessHarness/PandaAuth.ReadinessHarness.csproj \
+    -c Release -o /app --no-restore --nologo
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.13@sha256:d5633778c754e89a386882eddf8dbee6942447a8a4b8267c19cf1e1158d0b0ac
+LABEL cc.pandalabs.auth.readiness-helper.protocol="r1-v1"
+WORKDIR /app
+COPY --chown=1654:1654 --from=build /app/ .
+ENV DOTNET_EnableDiagnostics=0
+USER 1654:1654
+ENTRYPOINT ["dotnet", "PandaAuth.ReadinessHarness.dll"]
