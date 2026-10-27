@@ -7,6 +7,9 @@ using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
 using PandaAuth.Shared;
 using Xunit;
+using OpenIddict.EntityFrameworkCore.Models;
+using static OpenIddict.Abstractions.OpenIddictConstants;
+using System.Text.Json;
 
 namespace PandaAuth.Tests;
 
@@ -32,6 +35,10 @@ public sealed class ActivationIdentityPreflightTests
         var alias = "cafe\u0301-user";
         Assert.Equal(user.Id, (await service.FindByNameAsync(alias))!.Id);
         await Assert.ThrowsAsync<InvalidOperationException>(() => ActivationIdentityPreflight.CheckAsync(db, alias, Hash(alias), expected, true, DateTimeOffset.UtcNow));
+        var duplicate = new PandaUser { Id = "other-id", UserName = "other", NormalizedUserName = user.NormalizedUserName };
+        db.Users.Add(duplicate); await db.SaveChangesAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ActivationIdentityPreflight.CheckAsync(db, name, Hash(name), expected, true, DateTimeOffset.UtcNow));
+        db.Users.Remove(duplicate); await db.SaveChangesAsync();
         await Assert.ThrowsAsync<InvalidOperationException>(() => ActivationIdentityPreflight.CheckAsync(db, name, Hash(name), Hash("other"), true, DateTimeOffset.UtcNow));
         await Assert.ThrowsAsync<InvalidOperationException>(() => ActivationIdentityPreflight.CheckAsync(db, name, Hash(name), expected, false, DateTimeOffset.UtcNow));
         role.Name = "different"; await db.SaveChangesAsync();
@@ -47,4 +54,34 @@ public sealed class ActivationIdentityPreflightTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => ActivationIdentityPreflight.CheckAsync(db, name, Hash(name), expected, true, DateTimeOffset.UtcNow));
     }
     private static string Hash(string value) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+
+    [Fact]
+    public async Task ClientPreflightRequiresTheActualConfidentialClientCallbackAndProtocolPermissions()
+    {
+        await using var db = new PandaAuthDbContext(new DbContextOptionsBuilder<PandaAuthDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString()).UseOpenIddict().Options);
+        var callback = "https://auth.appliket.com/admin/callback/login/pandaauth";
+        string[] permissions = [Permissions.Endpoints.Authorization, Permissions.Endpoints.Token, Permissions.Endpoints.EndSession,
+            Permissions.Endpoints.Revocation, Permissions.GrantTypes.AuthorizationCode, Permissions.GrantTypes.RefreshToken,
+            Permissions.ResponseTypes.Code, Permissions.Scopes.Email, Permissions.Scopes.Profile, Permissions.Scopes.Roles,
+            Permissions.Prefixes.Scope + PandaAuthAdminApi.Scope];
+        var app = new OpenIddictEntityFrameworkCoreApplication { Id = "fixture", ClientId = "admin-web", ClientType = "confidential",
+            ClientSecret = "synthetic-only", RedirectUris = JsonSerializer.Serialize(new[] { callback }), Permissions = JsonSerializer.Serialize(permissions) };
+        db.Set<OpenIddictEntityFrameworkCoreApplication>().Add(app); await db.SaveChangesAsync();
+        Assert.True(await ActivationIdentityPreflight.CheckClientAsync(db, "admin", "https://auth.appliket.com/", callback));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ActivationIdentityPreflight.CheckClientAsync(db, "admin", "https://auth.appliket.com/", "https://foreign.invalid/callback"));
+        app.Permissions = JsonSerializer.Serialize(permissions.Where(value => value != Permissions.Endpoints.Revocation)); await db.SaveChangesAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ActivationIdentityPreflight.CheckClientAsync(db, "admin", "https://auth.appliket.com/", callback));
+        app.Permissions = JsonSerializer.Serialize(permissions); app.ClientType = "public"; await db.SaveChangesAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ActivationIdentityPreflight.CheckClientAsync(db, "admin", "https://auth.appliket.com/", callback));
+        var meCallback = "https://auth.appliket.com/me/callback/login/pandaauth";
+        app.ClientId = "me-web"; app.ClientType = "confidential"; app.RedirectUris = JsonSerializer.Serialize(new[] { meCallback });
+        app.Permissions = JsonSerializer.Serialize(permissions.Where(value => value != Permissions.Prefixes.Scope + PandaAuthAdminApi.Scope));
+        await db.SaveChangesAsync();
+        Assert.True(await ActivationIdentityPreflight.CheckClientAsync(db, "me", "https://auth.appliket.com/", meCallback));
+        app.Permissions = JsonSerializer.Serialize(permissions); await db.SaveChangesAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ActivationIdentityPreflight.CheckClientAsync(db, "me", "https://auth.appliket.com/", meCallback));
+        app.Permissions = "[invalid"; await db.SaveChangesAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ActivationIdentityPreflight.CheckClientAsync(db, "me", "https://auth.appliket.com/", meCallback));
+    }
 }
