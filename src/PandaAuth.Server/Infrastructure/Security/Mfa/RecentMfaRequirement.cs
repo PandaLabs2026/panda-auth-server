@@ -5,11 +5,9 @@ namespace PandaAuth.Server.Infrastructure.Security.Mfa;
 
 public static class RecentMfaRequirement
 {
+    // 删表批（2026-10-26）：webauthn amr 从方法清单移除——旧令牌窗口早已自然过期，历史事件仍保留。
     public static bool HasValidMfa(ClaimsPrincipal principal, DateTimeOffset now, TimeSpan maximumAge)
-        => HasMethod(principal, MfaClaimTypes.WebAuthn, MfaClaimTypes.Totp, MfaClaimTypes.RecoveryCode) && IsWithinAge(principal, now, maximumAge);
-
-    public static bool HasRecentWebAuthn(ClaimsPrincipal principal, DateTimeOffset now, TimeSpan maximumAge)
-        => HasMethod(principal, MfaClaimTypes.WebAuthn) && IsWithinAge(principal, now, maximumAge);
+        => HasMethod(principal, MfaClaimTypes.Totp, MfaClaimTypes.RecoveryCode) && IsWithinAge(principal, now, maximumAge);
 
     private static bool HasMethod(ClaimsPrincipal principal, params string[] requiredMethods)
         => principal.FindAll(MfaClaimTypes.Method)

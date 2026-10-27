@@ -145,7 +145,7 @@ public class LoginCookieTests
     }
 
     [Fact]
-    public async Task MarkMfaAsync_ReissuesTicketWithWebAuthnMethodAndTimestamp()
+    public async Task MarkMfaAsync_ReissuesTicketWithTotpMethodAndTimestamp()
     {
         var clock = new AuthenticationClock();
         using var provider = TestUserStoreHost.Create(clock: clock);
@@ -163,13 +163,13 @@ public class LoginCookieTests
         Assert.True(initial.Succeeded);
         var originalSid = initial.Principal!.FindFirst(PandaAuthClaims.SsoSessionId)!.Value;
         await scope.ServiceProvider.GetRequiredService<LoginSessionService>()
-            .MarkMfaAsync(context, MfaClaimTypes.WebAuthn);
+            .MarkMfaAsync(context, MfaClaimTypes.Totp);
         var renewedCookie = context.Response.Headers.SetCookie.Single()!.Split(';')[0];
 
         using var verificationScope = provider.CreateScope();
         var verification = await Context(verificationScope.ServiceProvider, renewedCookie)
             .AuthenticateAsync(LoginSessionService.Scheme);
-        Assert.Equal(MfaClaimTypes.WebAuthn, verification.Principal!.FindFirst(MfaClaimTypes.Method)!.Value);
+        Assert.Equal(MfaClaimTypes.Totp, verification.Principal!.FindFirst(MfaClaimTypes.Method)!.Value);
         Assert.Equal(originalSid, verification.Principal.FindFirst(PandaAuthClaims.SsoSessionId)!.Value);
         Assert.True(long.TryParse(verification.Principal.FindFirst(MfaClaimTypes.VerifiedAt)!.Value, out _));
         Assert.Equal(authenticatedAt.ToString(System.Globalization.CultureInfo.InvariantCulture),

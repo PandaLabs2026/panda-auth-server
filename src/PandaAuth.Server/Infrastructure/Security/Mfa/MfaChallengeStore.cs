@@ -7,7 +7,7 @@ namespace PandaAuth.Server.Infrastructure.Security.Mfa;
 public sealed record ConsumedMfaChallenge(byte[] Value, DateTimeOffset ExpiresAt);
 
 /// <summary>
-/// WebAuthn ceremony 的服务端一次性状态存储，落在 <c>panda_mfa_challenges</c>。
+/// MFA 一次性状态存储（ceremony 遗产 + 操作授权行），落在 <c>panda_mfa_challenges</c>。
 /// 消费用条件 UPDATE 原子完成：进程内锁无法跨实例，条件更新天然多实例安全，
 /// 也是容器重建后 ceremony 仍可继续的基础。过期行由 LoginLogRetentionService 回收。
 /// </summary>

@@ -7,6 +7,7 @@ using OpenIddict.Validation.AspNetCore;
 using PandaAuth.Server.Features.Tokens;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Shared;
 using static OpenIddict.Abstractions.OpenIddictConstants;
 
@@ -25,6 +26,7 @@ public sealed class AdminClientsController(
     IOpenIddictApplicationManager applications,
     AdminAuditWriter audit,
     SecurityEventWriter securityEvents,
+    MfaOperationGrantService grants,
     ILogger<AdminClientsController> logger,
     ITokenRevoker? tokenRevoker = null) : Controller
 {
@@ -91,7 +93,22 @@ public sealed class AdminClientsController(
         [FromBody] AdminRedirectUrisRequest? request,
         CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
+        if (await MfaOperationGrantGate.ConsumeAsync(this, grants, securityEvents,
+                User.FindFirst(Claims.Subject)?.Value ?? string.Empty, MfaOperations.AdminUpdateRedirectUris, clientId,
+                new Dictionary<string, string?>
+                {
+                    // 授权绑定白名单集合内容（排序后拼接），与请求顺序无关。
+                    ["redirectUris"] = request?.RedirectUris is null
+                        ? null
+                        : string.Join('\n', request.RedirectUris.Order(StringComparer.Ordinal)),
+                    ["postLogoutUris"] = request?.PostLogoutRedirectUris is null
+                        ? null
+                        : string.Join('\n', request.PostLogoutRedirectUris.Order(StringComparer.Ordinal)),
+                }, cancellationToken)
+            is { } grantDenied)
+        {
+            return grantDenied;
+        }
         var application = await applications.FindByClientIdAsync(clientId);
         if (application is null)
         {
@@ -166,7 +183,18 @@ public sealed class AdminClientsController(
         [FromBody] AdminPermissionsRequest? request,
         CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
+        if (await MfaOperationGrantGate.ConsumeAsync(this, grants, securityEvents,
+                User.FindFirst(Claims.Subject)?.Value ?? string.Empty, MfaOperations.AdminUpdatePermissions, clientId,
+                new Dictionary<string, string?>
+                {
+                    ["permissions"] = request?.Permissions is null
+                        ? null
+                        : string.Join('\n', request.Permissions.Order(StringComparer.Ordinal)),
+                }, cancellationToken)
+            is { } grantDenied)
+        {
+            return grantDenied;
+        }
         var application = await applications.FindByClientIdAsync(clientId);
         if (application is null)
         {
@@ -238,7 +266,13 @@ public sealed class AdminClientsController(
     [HttpPost("{clientId}/rotate-secret")]
     public async Task<IActionResult> RotateSecret(string clientId, CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
+        if (await MfaOperationGrantGate.ConsumeAsync(this, grants, securityEvents,
+                User.FindFirst(Claims.Subject)?.Value ?? string.Empty, MfaOperations.AdminRotateSecret, clientId,
+                null, cancellationToken)
+            is { } grantDenied)
+        {
+            return grantDenied;
+        }
         var application = await applications.FindByClientIdAsync(clientId);
         if (application is null)
         {
@@ -317,7 +351,7 @@ public sealed class AdminClientsController(
             User.FindFirst("sub")?.Value,
             "client",
             clientId,
-            "admin_webauthn",
+            MfaClaimTypes.Totp,
             metadata,
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             Request.Headers.UserAgent.ToString(),

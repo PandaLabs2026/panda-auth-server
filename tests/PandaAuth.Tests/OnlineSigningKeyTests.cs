@@ -45,6 +45,7 @@ public sealed class OnlineSigningKeyTests
         var publicKeys = ring.VerificationKeys().Select(key => key.KeyId).ToArray();
         Assert.Equal(2, publicKeys.Length);
         await fixture.RegisterClientAsync(PandaAuthAdminApi.ClientId, PandaAuthAdminApi.Scope, PandaAuthAdminApi.Audience);
+        await fixture.EnableTotpAsync();
         using var browser = fixture.Browser();
         var before = await fixture.IssueAsync(browser, PandaAuthAdminApi.ClientId, "openid roles offline_access " + PandaAuthAdminApi.Scope);
         using var jwks = JsonDocument.Parse(await browser.GetStringAsync(PandaAuthEndpoints.JsonWebKeySet));

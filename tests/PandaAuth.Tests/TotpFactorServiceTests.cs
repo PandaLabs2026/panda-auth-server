@@ -9,20 +9,23 @@ namespace PandaAuth.Tests;
 public class TotpFactorServiceTests
 {
     [Fact]
-    public async Task BeginEnrollment_RequiresExistingActivePasskey()
+    public async Task BeginEnrollment_NoPriorFactorRequired_AfterPasskeyRetirement()
     {
+        // Passkey 退役（AUTH-DELIVERY-002）：TOTP 是唯一可验证因子，可直接作首因子绑定；
+        // 旧的「先有 Passkey 才能启用 TOTP」约束已随 retire 一并移除。
         await using var db = Database();
         var service = Service(db);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.BeginEnrollmentAsync("admin-1", CancellationToken.None));
+        var enrollment = await service.BeginEnrollmentAsync("admin-1", CancellationToken.None);
+
+        Assert.False(string.IsNullOrWhiteSpace(enrollment.Secret));
+        Assert.Single(db.TotpFactors);
     }
 
     [Fact]
     public async Task BeginEnrollment_PersistsOnlyProtectedSecret()
     {
         await using var db = Database();
-        db.WebAuthnCredentials.Add(new MfaWebAuthnCredential { UserId = "admin-1", CredentialId = [1], PublicKeyCose = [2] });
-        await db.SaveChangesAsync();
         var service = Service(db);
 
         var enrollment = await service.BeginEnrollmentAsync("admin-1", CancellationToken.None);
@@ -42,7 +45,7 @@ public class TotpFactorServiceTests
         await db.SaveChangesAsync();
         var service = Service(db);
 
-        var enrollment = await service.BeginEnrollmentAsync("member-1", CancellationToken.None, requirePasskey: false);
+        var enrollment = await service.BeginEnrollmentAsync("member-1", CancellationToken.None);
 
         var factors = await db.TotpFactors.Where(x => x.UserId == "member-1").ToListAsync();
         Assert.Equal(2, factors.Count);

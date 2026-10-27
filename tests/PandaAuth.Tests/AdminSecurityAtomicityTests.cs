@@ -67,10 +67,29 @@ public sealed class AdminSecurityAtomicityTests
                 RequestServices = request.ServiceProvider,
                 User = new ClaimsPrincipal(new ClaimsIdentity([
                     new Claim("sub", fixture.UserId), new Claim("role", "admin"),
-                    new Claim(MfaClaimTypes.Method, MfaClaimTypes.WebAuthn),
+                    new Claim(MfaClaimTypes.Method, MfaClaimTypes.Totp),
                     new Claim(MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
                 ], "verified")),
             }};
+            // 高风险操作改走操作授权门禁（AUTH-DELIVERY-002）：授权与主体同属 fixture 管理员，
+            // 失败注入（吊销器/审计触发器）仍落在业务路径上，回滚语义不变。
+            var grantOperation = operation switch
+            {
+                "status" => MfaOperations.AdminSetStatus,
+                "roles" => MfaOperations.AdminUpdateRoles,
+                "mfa" => MfaOperations.AdminResetTwoFactor,
+                "deactivate" => MfaOperations.AdminDeactivate,
+                _ => null,
+            };
+            if (grantOperation is not null)
+            {
+                await TestGrants.AuthorizeAsync(request.ServiceProvider, controller, grantOperation, targetId,
+                    grantOperation == MfaOperations.AdminSetStatus ? TestGrants.Status(UserStatus.Frozen)
+                        : grantOperation == MfaOperations.AdminUpdateRoles ? TestGrants.Roles(PandaAuthRoles.Admin)
+                        : grantOperation == MfaOperations.AdminDeactivate ? TestGrants.ConfirmUserName("atomic-target")
+                        : null,
+                    actorId: fixture.UserId, replacePrincipal: false, password: fixture.AdminPassword);
+            }
             await Assert.ThrowsAnyAsync<Exception>(() => operation switch
             {
                 "status" => controller.SetStatus(targetId, new AdminUserStatusRequest(UserStatus.Frozen), default),
@@ -89,7 +108,10 @@ public sealed class AdminSecurityAtomicityTests
         Assert.Empty(await verify.UserRoles.Where(role => role.UserId == targetId).ToArrayAsync());
         Assert.Equal("valid", (await verify.Set<OpenIddictEntityFrameworkCoreToken>().SingleAsync(token => token.Subject == targetId)).Status);
         Assert.Empty(await verify.AdminAuditLogs.ToArrayAsync());
-        Assert.Empty(await verify.SecurityEvents.ToArrayAsync());
+        // mfa.grant_* 是门禁自身的审计（失败注入前已完成），不计入业务副作用。
+        var persistedEvents = await verify.SecurityEvents.ToListAsync();
+        Assert.DoesNotContain(persistedEvents, securityEvent =>
+            !securityEvent.EventType.StartsWith("mfa.grant_", StringComparison.Ordinal));
     }
 
     private sealed class FailingRevoker : ITokenRevoker

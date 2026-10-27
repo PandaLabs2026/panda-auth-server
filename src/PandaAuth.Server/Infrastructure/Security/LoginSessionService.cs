@@ -42,7 +42,10 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock, I
     /// </summary>
     public async Task SignInWithMfaAsync(HttpContext context, PandaUser user, string method)
     {
-        if (method is not (MfaClaimTypes.WebAuthn or MfaClaimTypes.Totp))
+        // RecoveryCode 自 AUTH-DELIVERY-002 起可作为登录挑战的完成方式（Passkey 退役后的
+        // 存量账号自救通道）：签入的 amr=recovery_code 只满足普通写操作窗，高风险操作
+        // 仍需 TOTP 操作授权，不构成提权。
+        if (method is not (MfaClaimTypes.Totp or MfaClaimTypes.RecoveryCode))
         {
             throw new ArgumentOutOfRangeException(nameof(method));
         }
@@ -117,7 +120,7 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock, I
     /// <summary>Rotates the current IDP cookie after a verified MFA ceremony without altering its subject or lifetime.</summary>
     public async Task MarkMfaAsync(HttpContext context, string method)
     {
-        if (method is not (MfaClaimTypes.WebAuthn or MfaClaimTypes.Totp or MfaClaimTypes.RecoveryCode))
+        if (method is not (MfaClaimTypes.Totp or MfaClaimTypes.RecoveryCode))
         {
             throw new ArgumentOutOfRangeException(nameof(method));
         }

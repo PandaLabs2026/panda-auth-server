@@ -5,7 +5,9 @@ using OpenIddict.Validation.AspNetCore;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Shared;
+using static OpenIddict.Abstractions.OpenIddictConstants;
 
 namespace PandaAuth.Server.Features.Admin;
 
@@ -20,7 +22,8 @@ public sealed class AdminClaimsController(
     PandaAuthDbContext db,
     ClaimsPolicyService claims,
     AdminAuditWriter audit,
-    SecurityEventWriter securityEvents) : Controller
+    SecurityEventWriter securityEvents,
+    MfaOperationGrantService grants) : Controller
 {
     [HttpGet("users/{userId}")]
     public async Task<IActionResult> ListUser(string userId)
@@ -36,7 +39,18 @@ public sealed class AdminClaimsController(
     [HttpPost("users/{userId}")]
     public async Task<IActionResult> AddUser(string userId, [FromBody] AdminClaimRequest? request, CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
+        if (await MfaOperationGrantGate.ConsumeAsync(this, grants, securityEvents,
+                User.FindFirst(Claims.Subject)?.Value ?? string.Empty, MfaOperations.AdminAddUserClaim, userId,
+                new Dictionary<string, string?>
+                {
+                    ["claimType"] = request?.ClaimType,
+                    ["claimValue"] = request?.ClaimValue,
+                    ["scope"] = request?.Scope,
+                }, cancellationToken)
+            is { } grantDenied)
+        {
+            return grantDenied;
+        }
         if (request is null) return Problem(statusCode: StatusCodes.Status400BadRequest, title: "请求体缺失");
 
         var result = await claims.AddUserClaimAsync(userId, request.ClaimType, request.ClaimValue, request.Scope);
@@ -54,7 +68,13 @@ public sealed class AdminClaimsController(
     [HttpDelete("users/{userId}/{claimId:long}")]
     public async Task<IActionResult> RemoveUser(string userId, long claimId, CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
+        if (await MfaOperationGrantGate.ConsumeAsync(this, grants, securityEvents,
+                User.FindFirst(Claims.Subject)?.Value ?? string.Empty, MfaOperations.AdminRemoveUserClaim, userId,
+                new Dictionary<string, string?> { ["claimId"] = claimId.ToString() }, cancellationToken)
+            is { } grantDenied)
+        {
+            return grantDenied;
+        }
         var claim = await db.UserClaims.SingleOrDefaultAsync(item => item.Id == claimId && item.UserId == userId, cancellationToken);
         if (claim is null) return NotFound();
         var detail = new { claim.ClaimType, claim.ClaimValue, claim.Scope };
@@ -79,7 +99,18 @@ public sealed class AdminClaimsController(
     [HttpPost("roles/{roleId}")]
     public async Task<IActionResult> AddRole(string roleId, [FromBody] AdminClaimRequest? request, CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
+        if (await MfaOperationGrantGate.ConsumeAsync(this, grants, securityEvents,
+                User.FindFirst(Claims.Subject)?.Value ?? string.Empty, MfaOperations.AdminAddRoleClaim, roleId,
+                new Dictionary<string, string?>
+                {
+                    ["claimType"] = request?.ClaimType,
+                    ["claimValue"] = request?.ClaimValue,
+                    ["scope"] = request?.Scope,
+                }, cancellationToken)
+            is { } grantDenied)
+        {
+            return grantDenied;
+        }
         if (request is null) return Problem(statusCode: StatusCodes.Status400BadRequest, title: "请求体缺失");
 
         var result = await claims.AddRoleClaimAsync(roleId, request.ClaimType, request.ClaimValue, request.Scope);
@@ -97,7 +128,13 @@ public sealed class AdminClaimsController(
     [HttpDelete("roles/{roleId}/{claimId:long}")]
     public async Task<IActionResult> RemoveRole(string roleId, long claimId, CancellationToken cancellationToken)
     {
-        if (!AdminApiAuthorization.HasRecentWebAuthn(User)) return AdminApiAuthorization.MfaRequired();
+        if (await MfaOperationGrantGate.ConsumeAsync(this, grants, securityEvents,
+                User.FindFirst(Claims.Subject)?.Value ?? string.Empty, MfaOperations.AdminRemoveRoleClaim, roleId,
+                new Dictionary<string, string?> { ["claimId"] = claimId.ToString() }, cancellationToken)
+            is { } grantDenied)
+        {
+            return grantDenied;
+        }
         var claim = await db.RoleClaims.SingleOrDefaultAsync(item => item.Id == claimId && item.RoleId == roleId, cancellationToken);
         if (claim is null) return NotFound();
         var detail = new { claim.ClaimType, claim.ClaimValue, claim.Scope };
@@ -125,7 +162,7 @@ public sealed class AdminClaimsController(
             User.FindFirst("sub")?.Value,
             targetType,
             targetId,
-            "admin_webauthn",
+            MfaClaimTypes.Totp,
             detail,
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             Request.Headers.UserAgent.ToString(),

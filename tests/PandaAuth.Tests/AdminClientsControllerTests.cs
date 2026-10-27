@@ -6,6 +6,7 @@ using OpenIddict.Abstractions;
 using PandaAuth.Server.Features.Admin;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Shared;
 using Xunit;
 using static OpenIddict.Abstractions.OpenIddictConstants;
@@ -22,6 +23,7 @@ public class AdminClientsControllerTests
             provider.GetRequiredService<IOpenIddictApplicationManager>(),
             provider.GetRequiredService<AdminAuditWriter>(),
             provider.GetRequiredService<SecurityEventWriter>(),
+            TestGrants.Create(provider),
             provider.GetRequiredService<ILoggerFactory>().CreateLogger<AdminClientsController>())
         {
             ControllerContext = new() { HttpContext = AdminTestHost.HttpContext(provider) },
@@ -123,6 +125,8 @@ public class AdminClientsControllerTests
         var request = new AdminRedirectUrisRequest(
             ["https://new.example/callback", "http://localhost:5201/callback"],
             ["https://new.example/"]);
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminUpdateRedirectUris, "delta",
+            TestGrants.Uris(["https://new.example/callback", "http://localhost:5201/callback"], ["https://new.example/"]));
         var ok = Assert.IsType<OkObjectResult>(await controller.UpdateRedirectUris("delta", request, CancellationToken.None));
         var detail = Assert.IsType<AdminClientDetail>(ok.Value);
         Assert.Equal(
@@ -134,7 +138,8 @@ public class AdminClientsControllerTests
         Assert.Equal(AdminAuditAction.ClientUpdateUris, entry.Action);
         Assert.Contains("https://old.example/callback", entry.Detail); // 审计记录旧值
 
-        var securityEvent = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents.AsEnumerable());
+        var securityEvent = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents.AsEnumerable(),
+            item => item.EventType == "admin.client_redirect_uris_updated");
         Assert.Equal("admin.client_redirect_uris_updated", securityEvent.EventType);
         Assert.Equal("client", securityEvent.TargetType);
         Assert.Equal("delta", securityEvent.TargetId);
@@ -147,10 +152,12 @@ public class AdminClientsControllerTests
         var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
         await SeedConfidentialClientAsync(applications, "epsilon", redirectUris: ["https://old.example/callback"]);
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminUpdateRedirectUris, "epsilon", TestGrants.Uris([], []));
         var empty = Assert.IsType<ObjectResult>(await controller.UpdateRedirectUris(
             "epsilon", new AdminRedirectUrisRequest([], []), CancellationToken.None));
         Assert.Equal(StatusCodes.Status400BadRequest, empty.StatusCode);
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminUpdateRedirectUris, "epsilon", TestGrants.Uris(["not-a-url"], []));
         var relative = Assert.IsType<ObjectResult>(await controller.UpdateRedirectUris(
             "epsilon", new AdminRedirectUrisRequest(["not-a-url"], []), CancellationToken.None));
         Assert.Equal(StatusCodes.Status400BadRequest, relative.StatusCode);
@@ -168,6 +175,16 @@ public class AdminClientsControllerTests
         var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
         await SeedConfidentialClientAsync(applications, "zeta");
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminUpdatePermissions, "zeta", TestGrants.Permissions(
+        [
+            Permissions.Endpoints.Authorization,
+            Permissions.Endpoints.Token,
+            Permissions.GrantTypes.AuthorizationCode,
+            Permissions.GrantTypes.RefreshToken,
+            Permissions.ResponseTypes.Code,
+            Permissions.Prefixes.Scope + "api",
+            Requirements.Features.ProofKeyForCodeExchange,
+        ]));
         var ok = Assert.IsType<OkObjectResult>(await controller.UpdatePermissions(
             "zeta",
             new AdminPermissionsRequest(
@@ -185,6 +202,7 @@ public class AdminClientsControllerTests
         Assert.Equal(7, detail.Permissions.Count);
 
         // 未知权限串被拒：OpenIddict 权限串拼错不会报错、只会静默失效，allowlist 是唯一防线。
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminUpdatePermissions, "zeta", TestGrants.Permissions(["gt:password"]));
         var rejected = Assert.IsType<ObjectResult>(await controller.UpdatePermissions(
             "zeta", new AdminPermissionsRequest(["gt:password"]), CancellationToken.None));
         Assert.Equal(StatusCodes.Status400BadRequest, rejected.StatusCode);
@@ -192,7 +210,8 @@ public class AdminClientsControllerTests
         var app = await applications.FindByClientIdAsync("zeta");
         Assert.DoesNotContain("gt:password", (await applications.GetPermissionsAsync(app!)).ToArray());
         Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable()); // 只有成功那次落审计
-        var securityEvent = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents.AsEnumerable());
+        var securityEvent = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents.AsEnumerable(),
+            item => item.EventType == "admin.client_permissions_updated");
         Assert.Equal("admin.client_permissions_updated", securityEvent.EventType);
         Assert.Equal("zeta", securityEvent.TargetId);
     }
@@ -204,6 +223,7 @@ public class AdminClientsControllerTests
         var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
         await SeedConfidentialClientAsync(applications, "eta", secret: "original-secret");
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminRotateSecret, "eta", null);
         var ok = Assert.IsType<OkObjectResult>(await controller.RotateSecret("eta", CancellationToken.None));
         var response = Assert.IsType<AdminRotateSecretResponse>(ok.Value);
         Assert.NotEqual("original-secret", response.ClientSecret);
@@ -218,7 +238,8 @@ public class AdminClientsControllerTests
         Assert.NotEqual(response.ClientSecret, stored);
         Assert.Equal(AdminAuditAction.ClientRotateSecret,
             Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable()).Action);
-        var securityEvent = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents.AsEnumerable());
+        var securityEvent = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents.AsEnumerable(),
+            item => item.EventType == "admin.client_secret_rotated");
         Assert.Equal("admin.client_secret_rotated", securityEvent.EventType);
         Assert.Equal("eta", securityEvent.TargetId);
     }
@@ -235,6 +256,7 @@ public class AdminClientsControllerTests
             Permissions = { Permissions.GrantTypes.AuthorizationCode, Permissions.ResponseTypes.Code, Requirements.Features.ProofKeyForCodeExchange },
         });
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminRotateSecret, "theta", null);
         var problem = Assert.IsType<ObjectResult>(await controller.RotateSecret("theta", CancellationToken.None));
         Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
     }
@@ -259,18 +281,23 @@ public class AdminClientsControllerTests
         Assert.True(list.Items.Single(item => item.ClientId == FirstPartyClients.AdminWeb).IsFirstParty);
         Assert.False(list.Items.Single(item => item.ClientId == "ordinary-client").IsFirstParty);
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminUpdateRedirectUris, FirstPartyClients.AdminWeb,
+            TestGrants.Uris(["https://auth.example/admin/callback/login/pandaauth"], []));
         var uriProblem = Assert.IsType<ObjectResult>(await controller.UpdateRedirectUris(
             FirstPartyClients.AdminWeb,
             new AdminRedirectUrisRequest(["https://auth.example/admin/callback/login/pandaauth"], []),
             CancellationToken.None));
         Assert.Equal(StatusCodes.Status400BadRequest, uriProblem.StatusCode);
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminUpdatePermissions, FirstPartyClients.AdminWeb,
+            TestGrants.Permissions([Permissions.GrantTypes.AuthorizationCode]));
         var permissionProblem = Assert.IsType<ObjectResult>(await controller.UpdatePermissions(
             FirstPartyClients.AdminWeb,
             new AdminPermissionsRequest([Permissions.GrantTypes.AuthorizationCode]),
             CancellationToken.None));
         Assert.Equal(StatusCodes.Status400BadRequest, permissionProblem.StatusCode);
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminRotateSecret, FirstPartyClients.AdminWeb, null);
         var rotateProblem = Assert.IsType<ObjectResult>(await controller.RotateSecret(
             FirstPartyClients.AdminWeb, CancellationToken.None));
         Assert.Equal(StatusCodes.Status400BadRequest, rotateProblem.StatusCode);
@@ -289,6 +316,8 @@ public class AdminClientsControllerTests
                 Permissions.Scopes.Roles,
             ]);
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminUpdatePermissions, "downgrade",
+            TestGrants.Permissions([Permissions.GrantTypes.AuthorizationCode, Permissions.ResponseTypes.Code]));
         Assert.IsType<OkObjectResult>(await controller.UpdatePermissions(
             "downgrade",
             new AdminPermissionsRequest([Permissions.GrantTypes.AuthorizationCode, Permissions.ResponseTypes.Code]),
@@ -305,6 +334,8 @@ public class AdminClientsControllerTests
         await SeedConfidentialClientAsync(applications, "upgrade",
             permissions: [Permissions.GrantTypes.AuthorizationCode, Permissions.ResponseTypes.Code]);
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminUpdatePermissions, "upgrade",
+            TestGrants.Permissions([Permissions.GrantTypes.AuthorizationCode, Permissions.ResponseTypes.Code, Permissions.Scopes.Roles]));
         Assert.IsType<OkObjectResult>(await controller.UpdatePermissions(
             "upgrade",
             new AdminPermissionsRequest(
@@ -325,8 +356,11 @@ public class AdminClientsControllerTests
         var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
         await SeedConfidentialClientAsync(applications, "rotate-me", secret: "seed-secret");
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminUpdateRedirectUris, "rotate-me",
+            TestGrants.Uris(["https://new.example/callback"], []));
         Assert.IsType<OkObjectResult>(await controller.UpdateRedirectUris(
             "rotate-me", new AdminRedirectUrisRequest(["https://new.example/callback"], []), CancellationToken.None));
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminRotateSecret, "rotate-me", null);
         Assert.IsType<OkObjectResult>(await controller.RotateSecret("rotate-me", CancellationToken.None));
 
         Assert.Equal(["rotate-me", "rotate-me"], revoker.RevokedClients);
@@ -340,6 +374,7 @@ public class AdminClientsControllerTests
             provider.GetRequiredService<IOpenIddictApplicationManager>(),
             provider.GetRequiredService<AdminAuditWriter>(),
             provider.GetRequiredService<SecurityEventWriter>(),
+            TestGrants.Create(provider),
             provider.GetRequiredService<ILoggerFactory>().CreateLogger<AdminClientsController>(),
             revoker)
         {

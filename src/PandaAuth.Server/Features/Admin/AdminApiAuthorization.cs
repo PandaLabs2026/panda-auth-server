@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.EntityFrameworkCore;
 using OpenIddict.Abstractions;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Security;
@@ -26,18 +27,27 @@ internal static class AdminApiAuthorization
     /// <summary>Bearer（OpenIddict Validation 方案）+ admin 角色（按 claim 短名断言，见 Program.cs 注册处注释）。</summary>
     public const string PolicyName = "admin-api";
 
+    /// <summary>
+    /// 会话探针专用轻量策略：仅要求已认证（admin-api 主策略额外要求 TOTP 绑定，
+    /// 未绑定者需经 /admin-api/session 拿到引导信号，不能被主策略一并挡死）。
+    /// </summary>
+    public const string SessionPolicyName = "admin-api-session";
+
     /// <summary>普通写操作必须有八小时内完成的任一 MFA；只读 GET 不使用此门禁。</summary>
     public static bool HasValidMfa(System.Security.Claims.ClaimsPrincipal principal)
         => Infrastructure.Security.Mfa.RecentMfaRequirement.HasValidMfa(principal, DateTimeOffset.UtcNow, TimeSpan.FromHours(8));
-
-    /// <summary>不可逆或权限扩大操作必须由五分钟内的 Passkey 验证确认，TOTP 不能替代。</summary>
-    public static bool HasRecentWebAuthn(System.Security.Claims.ClaimsPrincipal principal)
-        => Infrastructure.Security.Mfa.RecentMfaRequirement.HasRecentWebAuthn(principal, DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5));
 }
 
 internal sealed class AdminResourceRequirement : IAuthorizationRequirement;
 
-internal sealed class AdminResourceHandler(UserService users) : AuthorizationHandler<AdminResourceRequirement>
+/// <summary>
+/// admin-api 主策略：身份/角色/状态之外，还要求操作者已绑定已确认 TOTP——
+/// Passkey 退役后（AUTH-DELIVERY-002），未完成 TOTP 绑定的管理员不得取得任何管理能力；
+/// 绑定引导信号由不走本策略的 /admin-api/session 提供。
+/// </summary>
+internal sealed class AdminResourceHandler(
+    UserService users,
+    Infrastructure.Persistence.PandaAuthDbContext db) : AuthorizationHandler<AdminResourceRequirement>
 {
     protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, AdminResourceRequirement requirement)
     {
@@ -45,6 +55,10 @@ internal sealed class AdminResourceHandler(UserService users) : AuthorizationHan
         var subject = context.User.GetClaim(OpenIddictConstants.Claims.Subject);
         if (string.IsNullOrEmpty(subject)) return;
         var user = await users.FindByIdAsync(subject);
-        if (user?.Status == UserStatus.Active) context.Succeed(requirement);
+        if (user?.Status != UserStatus.Active) return;
+        var totpBound = await db.TotpFactors.AnyAsync(factor =>
+            factor.UserId == subject && factor.RevokedAt == null && factor.ConfirmedAt != null,
+            CancellationToken.None);
+        if (totpBound) context.Succeed(requirement);
     }
 }

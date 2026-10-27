@@ -8,16 +8,17 @@ using PandaAuth.Shared;
 namespace PandaAuth.Server.Features.Account;
 
 /// <summary>
-/// 登录路径 MFA 挑战入口（2026-09-30 拍板）。用户身份只取自 pending 挑战 cookie——
-/// 它在密码验证通过后、有任何活跃因子时签发，且绑定签发时的安全戳；绝不接受请求体指定 subject。
-/// 断言成功才签发携带 amr/panda_mfa_at 的 IDP 登录 cookie（SignInWithMfaAsync）。
+/// 登录路径 MFA 挑战入口（2026-09-30 拍板；AUTH-DELIVERY-002 起挑战因子=TOTP/恢复码）。
+/// 用户身份只取自 pending 挑战 cookie——它在密码验证通过后、已有可验证因子时签发，
+/// 且绑定签发时的安全戳；绝不接受请求体指定 subject。断言成功才签发携带
+/// amr/panda_mfa_at 的 IDP 登录 cookie（SignInWithMfaAsync）。
+/// Passkey 退役后，仅剩退役 passkey 且无恢复码的账号在此页明确阻塞（不静默降级为仅密码）。
 /// </summary>
 [AllowAnonymous]
 [Route("~/account/mfa/challenge")]
 public sealed class LoginMfaChallengeController(
     UserService users,
     MfaService mfa,
-    WebAuthnCeremonyService ceremonies,
     LoginSessionService sessions,
     LoginMfaChallengeService challenges,
     LoginRateLimiter loginRateLimiter,
@@ -32,19 +33,18 @@ public sealed class LoginMfaChallengeController(
             return Redirect("/account/login");
         }
         var factors = await mfa.ListFactorsAsync(user.Id, cancellationToken);
-        if (factors.Count == 0)
+        if (!factors.Any(factor => factor.Type == "totp"))
         {
-            // 签发挑战后因子被全部撤销：无法完成挑战，回登录页重新走密码路径（无因子即不再要求挑战）。
-            challenges.Clear(HttpContext);
-            return Redirect("/account/login");
+            // 无可验证因子：退役 passkey 不构成挑战依据。有恢复码则保留自救通道；
+            // 两者皆无则明确阻塞（静默放行等于把 MFA 账号降级为仅密码）。
+            var hasRecoveryCodes = await HasRecoveryCodesAsync(user.Id, cancellationToken);
+            if (!hasRecoveryCodes)
+            {
+                challenges.Clear(HttpContext);
+                return View("Blocked", new LoginMfaChallengeViewModel { ReturnUrl = SafeReturnUrl(returnUrl) });
+            }
         }
-        return View(new LoginMfaChallengeViewModel
-        {
-            // 兜底与断言端 SafeReturnUrl 一致：挑战完成后的默认落点是账户中心 /me/，不是死胡同 /。
-            ReturnUrl = Url.IsLocalUrl(returnUrl) ? returnUrl! : "/me/",
-            HasTotp = factors.Any(factor => factor.Type == "totp"),
-            HasPasskey = factors.Any(factor => factor.Type == "passkey"),
-        });
+        return await ChallengeViewAsync(user.Id, returnUrl);
     }
 
     [HttpPost("totp")]
@@ -74,55 +74,32 @@ public sealed class LoginMfaChallengeController(
         return LocalRedirect(SafeReturnUrl(request.ReturnUrl));
     }
 
-    [HttpPost("passkey/options")]
+    /// <summary>恢复码挑战：单次消费，成功即签入（amr=recovery_code）；Passkey 退役后的存量账号自救通道。</summary>
+    [HttpPost("recovery")]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> BeginPasskeyAssertion(CancellationToken cancellationToken)
+    public async Task<IActionResult> AssertRecoveryCode(
+        LoginMfaChallengeRecoveryRequest request, CancellationToken cancellationToken)
     {
         var user = await ResolveChallengeUserAsync(cancellationToken);
         if (user is null)
         {
-            return BadRequest(new { error = "验证会话已过期，请重新登录。" });
+            return Redirect("/account/login");
         }
-        try
+        if (!ModelState.IsValid || string.IsNullOrWhiteSpace(request.Code))
         {
-            var ceremony = await ceremonies.BeginAssertionAsync(user, cancellationToken);
-            return Json(new { ceremonyId = ceremony.Id, publicKey = ceremony.Options });
-        }
-        catch (InvalidOperationException)
-        {
-            return BadRequest(new { error = "此账号尚未配置可用的 Passkey。" });
-        }
-    }
-
-    [HttpPost("passkey/complete")]
-    [ValidateAntiForgeryToken]
-    public async Task<IActionResult> CompletePasskeyAssertion(
-        [FromBody] CompletePasskeyAssertionRequest? request, CancellationToken cancellationToken)
-    {
-        var user = await ResolveChallengeUserAsync(cancellationToken);
-        if (user is null)
-        {
-            return BadRequest(new { error = "验证会话已过期，请重新登录。" });
-        }
-        if (request is null || request.Response is null)
-        {
-            return BadRequest(new { error = "缺少 Passkey 响应。" });
+            return await ChallengeViewAsync(user.Id, request.ReturnUrl, "请输入恢复码。");
         }
         if (!TryAcquireRateLimit(user.Id, out var error))
         {
-            return StatusCode(StatusCodes.Status429TooManyRequests, new { error });
+            return await ChallengeViewAsync(user.Id, request.ReturnUrl, error);
         }
-        try
+        if (!await mfa.ConsumeRecoveryCodeAsync(user.Id, request.Code.Trim(), cancellationToken))
         {
-            await ceremonies.CompleteAssertionAsync(user, request.CeremonyId, request.Response, cancellationToken);
+            await RecordSecurityEventAsync("login.mfa_challenge_failed", user.Id, MfaClaimTypes.RecoveryCode, cancellationToken);
+            return await ChallengeViewAsync(user.Id, request.ReturnUrl, "恢复码无效或已使用。");
         }
-        catch (Exception exception) when (exception is InvalidOperationException or Fido2NetLib.Fido2VerificationException)
-        {
-            await RecordSecurityEventAsync("login.mfa_challenge_failed", user.Id, MfaClaimTypes.WebAuthn, cancellationToken);
-            return BadRequest(new { error = "Passkey 验证未完成，请重试。" });
-        }
-        await CompleteChallengeAsync(user, MfaClaimTypes.WebAuthn, cancellationToken);
-        return Ok(new { status = "ok" });
+        await CompleteChallengeAsync(user, MfaClaimTypes.RecoveryCode, cancellationToken);
+        return LocalRedirect(SafeReturnUrl(request.ReturnUrl));
     }
 
     /// <summary>从 pending 挑战 cookie 解析用户：cookie 无效/过期、用户不存在、非活跃或安全戳已变都视为挑战失效。</summary>
@@ -143,6 +120,9 @@ public sealed class LoginMfaChallengeController(
         }
         return user;
     }
+
+    private async Task<bool> HasRecoveryCodesAsync(string userId, CancellationToken cancellationToken)
+        => await mfa.HasRecoveryCodesAsync(userId, cancellationToken);
 
     private bool TryAcquireRateLimit(string userId, out string error)
     {
@@ -166,15 +146,15 @@ public sealed class LoginMfaChallengeController(
     }
 
     /// <summary>断言失败后重绘挑战页；因子可用性按当前实际状态重查，避免把不存在的因子入口展示给用户。</summary>
-    private async Task<IActionResult> ChallengeViewAsync(string userId, string? returnUrl, string message)
+    private async Task<IActionResult> ChallengeViewAsync(string userId, string? returnUrl, string? message = null)
     {
         var factors = await mfa.ListFactorsAsync(userId, CancellationToken.None);
-        ModelState.AddModelError(string.Empty, message);
+        if (message is not null) ModelState.AddModelError(string.Empty, message);
         return View("Index", new LoginMfaChallengeViewModel
         {
             ReturnUrl = SafeReturnUrl(returnUrl),
             HasTotp = factors.Any(factor => factor.Type == "totp"),
-            HasPasskey = factors.Any(factor => factor.Type == "passkey"),
+            HasRecoveryCodes = await HasRecoveryCodesAsync(userId, CancellationToken.None),
         });
     }
 

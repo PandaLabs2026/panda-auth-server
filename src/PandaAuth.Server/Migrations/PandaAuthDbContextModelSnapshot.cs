@@ -602,66 +602,6 @@ namespace PandaAuth.Server.Migrations
                     b.ToTable("panda_totp_factors", (string)null);
                 });
 
-            modelBuilder.Entity("PandaAuth.Server.Domain.MfaWebAuthnCredential", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Aaguid")
-                        .HasMaxLength(36)
-                        .HasColumnType("character varying(36)");
-
-                    b.Property<bool>("BackupEligible")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("BackupState")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<byte[]>("CredentialId")
-                        .IsRequired()
-                        .HasColumnType("bytea");
-
-                    b.Property<string>("FriendlyName")
-                        .HasMaxLength(80)
-                        .HasColumnType("character varying(80)");
-
-                    b.Property<DateTimeOffset?>("LastUsedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<byte[]>("PublicKeyCose")
-                        .IsRequired()
-                        .HasColumnType("bytea");
-
-                    b.Property<DateTimeOffset?>("RevokedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<long>("SignatureCounter")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("TransportsJson")
-                        .HasColumnType("text");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("UserId")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CredentialId")
-                        .IsUnique();
-
-                    b.HasIndex("UserId", "RevokedAt");
-
-                    b.ToTable("panda_webauthn_credentials", (string)null);
-                });
-
             modelBuilder.Entity("PandaAuth.Server.Domain.PandaRole", b =>
                 {
                     b.Property<string>("Id")
@@ -1092,15 +1032,6 @@ namespace PandaAuth.Server.Migrations
                 });
 
             modelBuilder.Entity("PandaAuth.Server.Domain.MfaTotpFactor", b =>
-                {
-                    b.HasOne("PandaAuth.Server.Domain.PandaUser", null)
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("PandaAuth.Server.Domain.MfaWebAuthnCredential", b =>
                 {
                     b.HasOne("PandaAuth.Server.Domain.PandaUser", null)
                         .WithMany()

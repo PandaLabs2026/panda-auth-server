@@ -49,10 +49,18 @@ public static class FixtureEntry
             {await root.OpenAsync();await Proof(root,p.RunId);database="auth_config_test_"+Guid.NewGuid().ToString("N");await using var create=new NpgsqlCommand("create database \""+database+"\"",root);await create.ExecuteNonQueryAsync();createdDatabase=true;await using var restrict=new NpgsqlCommand("revoke connect on database \""+database+"\" from public",root);await restrict.ExecuteNonQueryAsync();}
             connection.Database=database;stage="migration";
             await using(var db=new PandaAuthDbContext(new DbContextOptionsBuilder<PandaAuthDbContext>().UseNpgsql(connection.ConnectionString).UseOpenIddict().Options))await db.Database.MigrateAsync();
-            stage="seed";var services=new ServiceCollection();services.AddLogging();services.AddSingleton(Options.Create(new AuthOptions{Issuer=CloudConfigScopes.Issuer,Seed=new SeedOptions{Enabled=true,Admin=new(){Password=""},Me=new(){Enabled=false},AdminWeb=new(){Enabled=false},CloudConfig=new(){Enabled=true,ClientSecret=p.IntrospectionSecret},CloudConsoleWeb=new(){Enabled=true,ClientSecret=p.ConsoleSecret,RedirectUris=["https://localhost/callback"],PostLogoutRedirectUris=["https://localhost/logout"]}}}));
+            stage="seed";var services=new ServiceCollection();services.AddLogging();services.AddSingleton(Options.Create(new AuthOptions{Issuer=CloudConfigScopes.Issuer,Seed=new SeedOptions{Enabled=true,Admin=new(){Password=""},Me=new(){Enabled=false},AdminWeb=new(){Enabled=false},CloudConfig=new(){Enabled=true,ClientSecret=p.IntrospectionSecret},CloudConsoleWeb=new(){Enabled=true,ClientSecret=p.ConsoleSecret,RedirectUris=["https://localhost/callback","https://localhost/callback/pandaauth"],PostLogoutRedirectUris=["https://localhost/logout"]}}}));
             services.AddDbContext<PandaAuthDbContext>(options=>options.UseNpgsql(connection.ConnectionString).UseOpenIddict());services.AddUserStore();services.AddOpenIddict().AddCore(options=>options.UseEntityFrameworkCore().UseDbContext<PandaAuthDbContext>());
             await using(var provider=services.BuildServiceProvider())
-            {var created=await provider.GetRequiredService<UserService>().CreateAsync(new PandaUser{UserName="config-joint-user",Email="config-joint@example.test",EmailConfirmed=true},p.UserPassword);if(!created.Succeeded)throw new InvalidOperationException();await DbSeeder.SeedAsync(provider);}
+            {
+                var users=provider.GetRequiredService<UserService>();
+                var user=new PandaUser{UserName="config-joint-user",Email="config-joint@example.test",EmailConfirmed=true};
+                if(!(await users.CreateAsync(user,p.UserPassword)).Succeeded)throw new InvalidOperationException();
+                await DbSeeder.SeedAsync(provider);
+                var roles=provider.GetRequiredService<RoleService>();
+                if(!await roles.RoleExistsAsync("cloud-admin")&&!(await roles.CreateAsync(new PandaRole{Name="cloud-admin"})).Succeeded)throw new InvalidOperationException();
+                if(!(await users.AddToRoleAsync(user,"cloud-admin")).Succeeded)throw new InvalidOperationException();
+            }
             stage="content";content=Path.Combine(p.Root,"content");if(Directory.Exists(content))throw new InvalidOperationException();Directory.CreateDirectory(content);File.SetUnixFileMode(content,UnixFileMode.UserRead|UnixFileMode.UserWrite|UnixFileMode.UserExecute);Directory.CreateDirectory(Path.Combine(content,"wwwroot","brand"));
             var json=JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory,"fixture-defaults.json")))!.AsObject();
             foreach(var setting in new Dictionary<string,string>{{"ConnectionStrings:Default",connection.ConnectionString},{"Auth:Issuer",CloudConfigScopes.Issuer},{"Auth:HttpsRequired","true"},{"Auth:Seed:Enabled","false"},{"Auth:Seed:CloudConfig:Enabled","true"},{"Auth:Seed:CloudConfig:ClientSecret",p.IntrospectionSecret}})
@@ -65,7 +73,7 @@ public static class FixtureEntry
                 await JsonSerializer.SerializeAsync(manifest,new Dictionary<string,string>{{typeof(global::Program).Assembly.GetName().FullName,content}});
             previousDirectory=Environment.CurrentDirectory;Directory.SetCurrentDirectory(content);
             stage="host";await using(var factory=new Host(content))
-            {factory.UseKestrel(options=>options.ListenUnixSocket(Path.Combine(p.Root,"auth.sock"),listen=>listen.UseHttps(certificate)));factory.StartServer();stage="metadata";await using(var metadata=new FileStream(Path.Combine(p.Root,"client.json"),new FileStreamOptions{Mode=FileMode.CreateNew,Access=FileAccess.Write,Share=FileShare.None,UnixCreateMode=UnixFileMode.UserRead|UnixFileMode.UserWrite}))await JsonSerializer.SerializeAsync(metadata,new{ConsoleClientId=FirstPartyClients.CloudConsoleWeb});Console.WriteLine("AUTH_CONFIG_JOINT_READY");await Console.Out.FlushAsync();await Console.In.ReadLineAsync();}
+            {factory.UseKestrel(options=>options.ListenUnixSocket(Path.Combine(p.Root,"auth.sock"),listen=>listen.UseHttps(certificate)));factory.StartServer();stage="metadata";await using(var metadata=new FileStream(Path.Combine(p.Root,"client.json"),new FileStreamOptions{Mode=FileMode.CreateNew,Access=FileAccess.Write,Share=FileShare.None,UnixCreateMode=UnixFileMode.UserRead|UnixFileMode.UserWrite}))await JsonSerializer.SerializeAsync(metadata,new{ConsoleClientId=FirstPartyClients.CloudConsoleWeb,ConsoleCallback="https://localhost/callback/pandaauth",ConsoleRole="cloud-admin"});Console.WriteLine("AUTH_CONFIG_JOINT_READY");await Console.Out.FlushAsync();await Console.In.ReadLineAsync();}
         }
         catch(Exception failure)
         {

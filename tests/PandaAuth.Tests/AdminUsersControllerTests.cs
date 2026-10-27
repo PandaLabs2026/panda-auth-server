@@ -10,6 +10,7 @@ using PandaAuth.Server.Features.Admin;
 using PandaAuth.Server.Features.Tokens;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Shared;
 using Xunit;
 using static OpenIddict.Abstractions.OpenIddictConstants;
@@ -27,6 +28,7 @@ public class AdminUsersControllerTests
             provider.GetRequiredService<SessionSecurityService>(),
             provider.GetRequiredService<AdminAuditWriter>(),
             provider.GetRequiredService<SecurityEventWriter>(),
+            TestGrants.Create(provider),
             provider.GetRequiredService<PandaAuthDbContext>(),
             provider.GetRequiredService<ILoggerFactory>().CreateLogger<AdminUsersController>())
         {
@@ -112,6 +114,7 @@ public class AdminUsersControllerTests
         var (controller, provider, revoker) = Create();
         var user = await SeedUserAsync(provider, "eve");
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminSetStatus, user.Id, TestGrants.Status(UserStatus.Frozen));
         var ok = Assert.IsType<OkObjectResult>(
             await controller.SetStatus(user.Id, new AdminUserStatusRequest(UserStatus.Frozen), CancellationToken.None));
         Assert.Equal(UserStatus.Frozen, Assert.IsType<AdminUserSummary>(ok.Value).Status);
@@ -124,13 +127,15 @@ public class AdminUsersControllerTests
         // 审计：动作、操作者、目标、IP（来自测试HttpContext的连接层）
         var entry = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
         Assert.Equal(AdminAuditAction.UserFreeze, entry.Action);
-        Assert.Equal("actor-1", entry.ActorUserId);
-        Assert.Equal("admin", entry.ActorUserName);
+        // 操作授权演员是真实种子管理员（TestGrants.AuthorizeAsync 装配的主体），不再是桩 sub。
+        Assert.Equal(controller.HttpContext.User.FindFirst(Claims.Subject)!.Value, entry.ActorUserId);
+        Assert.Equal(controller.HttpContext.User.FindFirst(Claims.Name)!.Value, entry.ActorUserName);
         Assert.Equal(user.Id, entry.TargetId);
         Assert.Equal("203.0.113.10", entry.IpAddress);
         Assert.Contains("Active", entry.Detail);
         Assert.Contains("Frozen", entry.Detail);
-        var securityEvent = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents);
+        var securityEvent = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().SecurityEvents,
+            item => item.EventType == "user.status_changed");
         Assert.Equal("user.status_changed", securityEvent.EventType);
         Assert.Equal(user.Id, securityEvent.UserId);
     }
@@ -141,6 +146,7 @@ public class AdminUsersControllerTests
         var (controller, provider, _) = Create();
         var user = await SeedUserAsync(provider, "frank", status: UserStatus.Frozen);
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminSetStatus, user.Id, TestGrants.Status(UserStatus.Active));
         Assert.IsType<OkObjectResult>(
             await controller.SetStatus(user.Id, new AdminUserStatusRequest(UserStatus.Active), CancellationToken.None));
         var entry = Assert.Single(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
@@ -152,6 +158,7 @@ public class AdminUsersControllerTests
     {
         var (controller, provider, revoker) = Create();
         var user = await SeedUserAsync(provider, "grace"); // Active
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminSetStatus, user.Id, TestGrants.Status(UserStatus.Active));
 
         var ok = Assert.IsType<OkObjectResult>(
             await controller.SetStatus(user.Id, new AdminUserStatusRequest(UserStatus.Active), CancellationToken.None));
@@ -167,6 +174,8 @@ public class AdminUsersControllerTests
         var (controller, provider, _) = Create();
         var user = await SeedUserAsync(provider, "heidi");
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminSetStatus, user.Id, TestGrants.Status(status));
+
         var problem = Assert.IsType<ObjectResult>(
             await controller.SetStatus(user.Id, new AdminUserStatusRequest(status), CancellationToken.None));
         Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
@@ -178,6 +187,7 @@ public class AdminUsersControllerTests
         var (controller, provider, revoker) = Create();
         // 终态守卫：解冻/冻结请求不得「复活」已注销账号（绕过注销的逐字确认门禁）。
         var user = await SeedUserAsync(provider, "deleted-target", status: UserStatus.Deleted);
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminSetStatus, user.Id, TestGrants.Status(UserStatus.Active));
 
         var problem = Assert.IsType<ObjectResult>(
             await controller.SetStatus(user.Id, new AdminUserStatusRequest(UserStatus.Active), CancellationToken.None));
@@ -297,9 +307,11 @@ public class AdminUsersControllerTests
             new Claim(Claims.Subject, user.Id),
             new Claim(Claims.Name, "self-freeze"),
             new Claim(Claims.Role, PandaAuthRoles.Admin),
-            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.WebAuthn),
+            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Totp),
             new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
         ], "TestBearer", Claims.Name, Claims.Role));
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminSetStatus, user.Id,
+            TestGrants.Status(UserStatus.Frozen), actorId: user.Id, replacePrincipal: false, password: "Passw0rd!1234");
 
         var problem = Assert.IsType<ObjectResult>(
             await controller.SetStatus(user.Id, new AdminUserStatusRequest(UserStatus.Frozen), CancellationToken.None));
@@ -324,7 +336,7 @@ public class AdminUsersControllerTests
             new Claim(Claims.Subject, user.Id),
             new Claim(Claims.Name, "self-reset"),
             new Claim(Claims.Role, PandaAuthRoles.Admin),
-            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.WebAuthn),
+            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Totp),
             new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
         ], "TestBearer", Claims.Name, Claims.Role));
 
@@ -378,7 +390,7 @@ public class AdminUsersControllerTests
             new Claim(Claims.Subject, userId),
             new Claim(Claims.Name, userName),
             new Claim(Claims.Role, PandaAuthRoles.Admin),
-            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.WebAuthn),
+            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Totp),
             new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
         ], "TestBearer", Claims.Name, Claims.Role));
 
@@ -492,6 +504,7 @@ public class AdminUsersControllerTests
         var user = await SeedUserAsync(provider, "role-grant");
         var stampBefore = user.SecurityStamp;
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminUpdateRoles, user.Id, TestGrants.Roles(PandaAuthRoles.Admin));
         var detail = DetailOf(await controller.UpdateRoles(user.Id, new AdminUserRolesRequest([PandaAuthRoles.Admin]), CancellationToken.None));
 
         Assert.Equal([PandaAuthRoles.Admin], detail.Roles);
@@ -511,6 +524,7 @@ public class AdminUsersControllerTests
         var user = await SeedUserAsync(provider, "role-remove");
         await provider.GetRequiredService<UserService>().AddToRoleAsync(user, PandaUser.AdminRole);
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminUpdateRoles, user.Id, TestGrants.Roles());
         var detail = DetailOf(await controller.UpdateRoles(user.Id, new AdminUserRolesRequest([]), CancellationToken.None));
 
         Assert.Empty(detail.Roles);
@@ -526,6 +540,8 @@ public class AdminUsersControllerTests
         var user = await SeedUserAsync(provider, "self-demote");
         await provider.GetRequiredService<UserService>().AddToRoleAsync(user, PandaUser.AdminRole);
         ActAs(controller, user.Id, "self-demote");
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminUpdateRoles, user.Id,
+            TestGrants.Roles(), actorId: user.Id, replacePrincipal: false, password: "Passw0rd!1234");
 
         var problem = Assert.IsType<ObjectResult>(
             await controller.UpdateRoles(user.Id, new AdminUserRolesRequest([]), CancellationToken.None));
@@ -544,6 +560,8 @@ public class AdminUsersControllerTests
         var (controller, provider, revoker) = Create();
         var user = await SeedUserAsync(provider, "unknown-role");
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminUpdateRoles, user.Id, TestGrants.Roles("nope"));
+
         var problem = Assert.IsType<ObjectResult>(
             await controller.UpdateRoles(user.Id, new AdminUserRolesRequest(["nope"]), CancellationToken.None));
         Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
@@ -559,6 +577,7 @@ public class AdminUsersControllerTests
         var user = await SeedUserAsync(provider, "role-same");
         await provider.GetRequiredService<UserService>().AddToRoleAsync(user, PandaUser.AdminRole);
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminUpdateRoles, user.Id, TestGrants.Roles(PandaAuthRoles.Admin));
         var detail = DetailOf(await controller.UpdateRoles(user.Id, new AdminUserRolesRequest([PandaAuthRoles.Admin]), CancellationToken.None));
 
         Assert.Equal([PandaAuthRoles.Admin], detail.Roles);
@@ -575,6 +594,8 @@ public class AdminUsersControllerTests
         await provider.GetRequiredService<UserService>().AddToRoleAsync(user, PandaUser.AdminRole);
 
         // 角色名比较与 Identity 的规范化一致（大小写不敏感）：变体不得把幂等请求折进增删路径。
+        // 授权绑定请求原文（ADMIN 变体），与控制器的规范化口径一致。
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminUpdateRoles, user.Id, TestGrants.Roles("ADMIN"));
         var detail = DetailOf(await controller.UpdateRoles(user.Id, new AdminUserRolesRequest(["ADMIN"]), CancellationToken.None));
 
         Assert.Equal([PandaAuthRoles.Admin], detail.Roles);
@@ -589,12 +610,16 @@ public class AdminUsersControllerTests
         await EnsureAdminRoleAsync(provider);
         var user = await SeedUserAsync(provider, "deleted-roles", status: UserStatus.Deleted);
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminUpdateRoles, user.Id, TestGrants.Roles(PandaAuthRoles.Admin));
+
         var problem = Assert.IsType<ObjectResult>(
             await controller.UpdateRoles(user.Id, new AdminUserRolesRequest([PandaAuthRoles.Admin]), CancellationToken.None));
         Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
         Assert.Empty(revoker.RevokedUsers);
         Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
     }
+
+    // ---- 解锁（Unlock） ----
 
     // ---- 解锁（Unlock） ----
 
@@ -662,7 +687,7 @@ public class AdminUsersControllerTests
             new Claim(Claims.Subject, user.Id),
             new Claim(Claims.Name, "self-kick"),
             new Claim(Claims.Role, PandaAuthRoles.Admin),
-            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.WebAuthn),
+            new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Method, PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.Totp),
             new Claim(PandaAuth.Server.Infrastructure.Security.Mfa.MfaClaimTypes.VerifiedAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()),
         ], "TestBearer", Claims.Name, Claims.Role));
 
@@ -858,6 +883,7 @@ public class AdminUsersControllerTests
         await provider.GetRequiredService<UserService>().UpdateAsync(user);
         var stampBefore = user.SecurityStamp;
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminResetTwoFactor, user.Id, null);
         var detail = DetailOf(await controller.ResetTwoFactor(user.Id, CancellationToken.None));
 
         Assert.False(detail.TwoFactorEnabled);
@@ -881,6 +907,7 @@ public class AdminUsersControllerTests
         db.MfaRecoveryCodes.Add(new MfaRecoveryCode { UserId = other.Id, CodeHash = "cc", Salt = "33" });
         await db.SaveChangesAsync();
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminResetTwoFactor, user.Id, null);
         DetailOf(await controller.ResetTwoFactor(user.Id, CancellationToken.None));
 
         Assert.Empty(await db.MfaRecoveryCodes.Where(code => code.UserId == user.Id).ToListAsync());
@@ -895,6 +922,7 @@ public class AdminUsersControllerTests
         var (controller, provider, revoker) = Create();
         var user = await SeedUserAsync(provider, "no-two-fa");
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminResetTwoFactor, user.Id, null);
         DetailOf(await controller.ResetTwoFactor(user.Id, CancellationToken.None));
 
         Assert.Equal([user.Id], revoker.RevokedUsers);
@@ -911,6 +939,7 @@ public class AdminUsersControllerTests
         var user = await SeedUserAsync(provider, "deactivate-me");
         var stampBefore = user.SecurityStamp;
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminDeactivate, user.Id, TestGrants.ConfirmUserName("deactivate-me"));
         var detail = DetailOf(await controller.Deactivate(
             user.Id, new AdminDeactivateRequest("deactivate-me"), CancellationToken.None));
 
@@ -929,6 +958,8 @@ public class AdminUsersControllerTests
         var (controller, provider, revoker) = Create();
         var user = await SeedUserAsync(provider, "confirm-name");
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminDeactivate, user.Id, TestGrants.ConfirmUserName("wrong-name"));
+
         var problem = Assert.IsType<ObjectResult>(
             await controller.Deactivate(user.Id, new AdminDeactivateRequest("wrong-name"), CancellationToken.None));
         Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
@@ -945,6 +976,8 @@ public class AdminUsersControllerTests
         var (controller, provider, revoker) = Create();
         var user = await SeedUserAsync(provider, "self-deactivate");
         ActAs(controller, user.Id, "self-deactivate");
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminDeactivate, user.Id,
+            TestGrants.ConfirmUserName("self-deactivate"), actorId: user.Id, replacePrincipal: false, password: "Passw0rd!1234");
 
         var problem = Assert.IsType<ObjectResult>(
             await controller.Deactivate(user.Id, new AdminDeactivateRequest("self-deactivate"), CancellationToken.None));
@@ -962,6 +995,7 @@ public class AdminUsersControllerTests
         var (controller, provider, revoker) = Create();
         var user = await SeedUserAsync(provider, "already-deleted", status: UserStatus.Deleted);
 
+        await TestGrants.AuthorizeAsync(provider, controller, MfaOperations.AdminDeactivate, user.Id, TestGrants.ConfirmUserName("already-deleted"));
         var detail = DetailOf(await controller.Deactivate(
             user.Id, new AdminDeactivateRequest("already-deleted"), CancellationToken.None));
 

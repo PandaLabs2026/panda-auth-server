@@ -4,40 +4,44 @@ using Xunit;
 
 namespace PandaAuth.Tests;
 
+/// <summary>
+/// 8 小时窗的方法口径（Passkey 退役后，AUTH-DELIVERY-002）：TOTP 与恢复码满足普通写操作；
+/// 存量令牌上的历史 webauthn amr 在窗口内仍被承认（不再新产生），高风险操作已改走操作授权。
+/// </summary>
 public class RecentMfaRequirementTests
 {
     [Fact]
-    public void TotpFallback_DoesNotSatisfyRecentWebAuthnRequirement()
+    public void TotpFallback_SatisfiesValidMfaWindow()
     {
         var now = DateTimeOffset.Parse("2026-09-20T12:00:00Z");
         var principal = Principal("totp", now);
 
         Assert.True(RecentMfaRequirement.HasValidMfa(principal, now, TimeSpan.FromHours(8)));
-        Assert.False(RecentMfaRequirement.HasRecentWebAuthn(principal, now, TimeSpan.FromMinutes(5)));
+        Assert.False(RecentMfaRequirement.HasValidMfa(principal, now.AddHours(9), TimeSpan.FromHours(8)));
     }
 
     [Fact]
-    public void UnixTimestampWrittenByLoginSession_SatisfiesFreshMfaRequirement()
+    public void LegacyWebAuthnAmr_AfterDropBatch_IsNoLongerAnMfaMethod()
     {
+        // 删表批：webauthn amr 从方法清单移除（旧令牌 8h 窗早已自然过期）。
         var now = DateTimeOffset.Parse("2026-09-20T12:00:00Z");
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
         [
-            new Claim(MfaClaimTypes.Method, MfaClaimTypes.WebAuthn),
+            new Claim(MfaClaimTypes.Method, "webauthn"),
             new Claim(MfaClaimTypes.VerifiedAt, now.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture)),
         ], "test"));
 
-        Assert.True(RecentMfaRequirement.HasValidMfa(principal, now, TimeSpan.FromHours(8)));
-        Assert.True(RecentMfaRequirement.HasRecentWebAuthn(principal, now, TimeSpan.FromMinutes(5)));
+        Assert.False(RecentMfaRequirement.HasValidMfa(principal, now, TimeSpan.FromHours(8)));
     }
 
     [Fact]
-    public void RecoveryCode_IsAnMfaMethodButNotRecentWebAuthn()
+    public void RecoveryCode_IsAnMfaMethod()
     {
         var now = DateTimeOffset.Parse("2026-09-20T12:00:00Z");
         var principal = Principal(MfaClaimTypes.RecoveryCode, now);
 
         Assert.True(RecentMfaRequirement.HasValidMfa(principal, now, TimeSpan.FromMinutes(5)));
-        Assert.False(RecentMfaRequirement.HasRecentWebAuthn(principal, now, TimeSpan.FromMinutes(5)));
+        Assert.False(RecentMfaRequirement.HasValidMfa(principal, now.AddMinutes(6), TimeSpan.FromMinutes(5)));
     }
 
     [Fact]

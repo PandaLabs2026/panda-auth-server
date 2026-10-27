@@ -21,13 +21,13 @@ public sealed class MfaServiceTests
         var service = CreateService(provider);
 
         await Assert.ThrowsAsync<MfaPolicyException>(() => service.BeginEnrollmentAsync(
-            user.Id, Principal(user.Id), MfaFactorType.Totp, CancellationToken.None));
+            user.Id, Principal(user.Id), CancellationToken.None));
 
         user.EmailConfirmed = true;
         await users.UpdateAsync(user);
 
         await Assert.ThrowsAsync<MfaPolicyException>(() => service.BeginEnrollmentAsync(
-            user.Id, Principal(user.Id), MfaFactorType.Totp, CancellationToken.None));
+            user.Id, Principal(user.Id), CancellationToken.None));
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public sealed class MfaServiceTests
         var service = CreateService(provider);
 
         var enrollment = await service.BeginEnrollmentAsync(
-            user.Id, Principal(user.Id, recentMethod: MfaClaimTypes.Totp), MfaFactorType.Totp, CancellationToken.None);
+            user.Id, Principal(user.Id, recentMethod: MfaClaimTypes.Totp), CancellationToken.None);
 
         Assert.NotEqual(Guid.Empty, enrollment.FactorId);
         Assert.StartsWith("otpauth://totp/", enrollment.ProvisioningUri);
@@ -113,15 +113,65 @@ public sealed class MfaServiceTests
         var user = new PandaUser { UserName = "two-factors", Email = "two-factors@example.com", EmailConfirmed = true };
         Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
         var db = provider.GetRequiredService<PandaAuthDbContext>();
-        db.TotpFactors.Add(new MfaTotpFactor { UserId = user.Id, Id = Guid.NewGuid(), ConfirmedAt = DateTimeOffset.UtcNow });
-        var passkey = new MfaWebAuthnCredential { UserId = user.Id, Id = Guid.NewGuid(), CredentialId = [1], PublicKeyCose = [2] };
-        db.WebAuthnCredentials.Add(passkey);
+        // 两个已确认 TOTP：可验证因子口径下撤销其一不触发「最后一个因子」护栏。
+        var first = new MfaTotpFactor { UserId = user.Id, Id = Guid.NewGuid(), ConfirmedAt = DateTimeOffset.UtcNow };
+        var second = new MfaTotpFactor { UserId = user.Id, Id = Guid.NewGuid(), ConfirmedAt = DateTimeOffset.UtcNow };
+        db.TotpFactors.Add(first);
+        db.TotpFactors.Add(second);
         await db.SaveChangesAsync();
         var service = CreateService(provider);
 
-        await service.RevokeFactorAsync(user.Id, passkey.Id, Principal(user.Id, recentMethod: MfaClaimTypes.Totp), CancellationToken.None);
+        await service.RevokeFactorAsync(user.Id, first.Id, Principal(user.Id, recentMethod: MfaClaimTypes.Totp), CancellationToken.None);
 
-        Assert.NotNull((await db.WebAuthnCredentials.SingleAsync(x => x.Id == passkey.Id)).RevokedAt);
+        Assert.NotNull((await db.TotpFactors.SingleAsync(x => x.Id == first.Id)).RevokedAt);
+        Assert.Null((await db.TotpFactors.SingleAsync(x => x.Id == second.Id)).RevokedAt);
+    }
+
+    [Fact]
+    public async Task TotpRotation_NewConfirmRevokesSupersededFactorWithoutGap()
+    {
+        using var provider = TestUserStoreHost.Create();
+        var users = provider.GetRequiredService<UserService>();
+        var user = new PandaUser { UserName = "rotating", Email = "rotating@example.com", EmailConfirmed = true };
+        Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
+        var service = CreateService(provider);
+        var principal = Principal(user.Id, recentMethod: MfaClaimTypes.Totp);
+
+        var first = await service.BeginEnrollmentAsync(user.Id, principal, CancellationToken.None);
+        Assert.True(await service.ConfirmEnrollmentAsync(
+            user.Id, principal, first.FactorId, TestGrants.TotpCode(FromBase32(first.Secret)), CancellationToken.None));
+
+        // 轮换：已有确认因子时仍可再开 pending（旧因子保持可用，无无因子窗口）。
+        var second = await service.BeginEnrollmentAsync(user.Id, principal, CancellationToken.None);
+        var db = provider.GetRequiredService<PandaAuthDbContext>();
+        Assert.Equal(2, await db.TotpFactors.CountAsync(x => x.UserId == user.Id && x.RevokedAt == null));
+
+        // 确认新因子 = 换绑收口：旧确认因子被原子撤销，只剩新因子。
+        Assert.True(await service.ConfirmEnrollmentAsync(
+            user.Id, principal, second.FactorId, TestGrants.TotpCode(FromBase32(second.Secret)), CancellationToken.None));
+        var active = await db.TotpFactors
+            .Where(x => x.UserId == user.Id && x.RevokedAt == null && x.ConfirmedAt != null)
+            .ToListAsync();
+        Assert.Equal(second.FactorId, Assert.Single(active).Id);
+    }
+
+    private static byte[] FromBase32(string value)
+    {
+        const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+        var bits = 0;
+        var buffer = 0;
+        var output = new List<byte>();
+        foreach (var character in value)
+        {
+            buffer = (buffer << 5) | alphabet.IndexOf(character);
+            bits += 5;
+            if (bits >= 8)
+            {
+                output.Add((byte)((buffer >> (bits - 8)) & 0xff));
+                bits -= 8;
+            }
+        }
+        return [.. output];
     }
 
     [Fact]
@@ -146,7 +196,7 @@ public sealed class MfaServiceTests
         var service = CreateService(provider);
 
         var enrollment = await service.BeginEnrollmentAsync(
-            user.Id, Principal(user.Id, authenticatedAt: DateTimeOffset.UtcNow), MfaFactorType.Totp, CancellationToken.None);
+            user.Id, Principal(user.Id, authenticatedAt: DateTimeOffset.UtcNow), CancellationToken.None);
 
         Assert.NotEqual(Guid.Empty, enrollment.FactorId);
     }
@@ -164,7 +214,7 @@ public sealed class MfaServiceTests
             ActorUserId = "admin",
             TargetUserId = user.Id,
             Reason = MfaRecoveryEvent.AdminResetReason,
-            AuthenticationMethod = MfaClaimTypes.WebAuthn,
+            AuthenticationMethod = MfaClaimTypes.Totp,
             CreatedAt = DateTimeOffset.UtcNow,
         });
         await db.SaveChangesAsync();
@@ -174,7 +224,6 @@ public sealed class MfaServiceTests
         await Assert.ThrowsAsync<MfaPolicyException>(() => service.BeginEnrollmentAsync(
             user.Id,
             Principal(user.Id, authenticatedAt: DateTimeOffset.UtcNow.AddMinutes(-1)),
-            MfaFactorType.Totp,
             CancellationToken.None));
     }
 
@@ -191,14 +240,14 @@ public sealed class MfaServiceTests
             ActorUserId = "admin",
             TargetUserId = user.Id,
             Reason = MfaRecoveryEvent.AdminResetReason,
-            AuthenticationMethod = MfaClaimTypes.WebAuthn,
+            AuthenticationMethod = MfaClaimTypes.Totp,
             CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-1),
         });
         await db.SaveChangesAsync();
         var service = CreateService(provider);
 
         var enrollment = await service.BeginEnrollmentAsync(
-            user.Id, Principal(user.Id, authenticatedAt: DateTimeOffset.UtcNow), MfaFactorType.Totp, CancellationToken.None);
+            user.Id, Principal(user.Id, authenticatedAt: DateTimeOffset.UtcNow), CancellationToken.None);
 
         Assert.NotEqual(Guid.Empty, enrollment.FactorId);
     }
@@ -211,15 +260,16 @@ public sealed class MfaServiceTests
         var user = new PandaUser { UserName = "revoke-codes", Email = "revoke-codes@example.com", EmailConfirmed = true };
         Assert.True((await users.CreateAsync(user, "Strong!Pass123")).Succeeded);
         var db = provider.GetRequiredService<PandaAuthDbContext>();
+        // 两个已确认 TOTP：撤销其一不触发「最后一个因子」护栏。
         db.TotpFactors.Add(new MfaTotpFactor { UserId = user.Id, Id = Guid.NewGuid(), ConfirmedAt = DateTimeOffset.UtcNow });
-        var passkey = new MfaWebAuthnCredential { UserId = user.Id, Id = Guid.NewGuid(), CredentialId = [1], PublicKeyCose = [2] };
-        db.WebAuthnCredentials.Add(passkey);
+        db.TotpFactors.Add(new MfaTotpFactor { UserId = user.Id, Id = Guid.NewGuid(), ConfirmedAt = DateTimeOffset.UtcNow });
         db.MfaRecoveryCodes.Add(new MfaRecoveryCode { UserId = user.Id, CodeHash = "00", Salt = "00" });
         await db.SaveChangesAsync();
         var service = CreateService(provider);
 
-        await service.RevokeFactorAsync(user.Id, passkey.Id, Principal(user.Id, recentMethod: MfaClaimTypes.Totp), CancellationToken.None);
-
+        // 撤销 TOTP（可验证因子）作废恢复码。
+        var totpId = await db.TotpFactors.Where(x => x.UserId == user.Id && x.ConfirmedAt != null).Select(x => x.Id).FirstAsync();
+        await service.RevokeFactorAsync(user.Id, totpId, Principal(user.Id, recentMethod: MfaClaimTypes.Totp), CancellationToken.None);
         Assert.Empty(await db.MfaRecoveryCodes.Where(code => code.UserId == user.Id).ToListAsync());
     }
 
@@ -235,7 +285,6 @@ public sealed class MfaServiceTests
         await Assert.ThrowsAsync<MfaPolicyException>(() => service.BeginEnrollmentAsync(
             user.Id,
             Principal(user.Id, authenticatedAt: DateTimeOffset.UtcNow.AddMinutes(-10)),
-            MfaFactorType.Totp,
             CancellationToken.None));
     }
 
@@ -252,7 +301,7 @@ public sealed class MfaServiceTests
         var service = CreateService(provider);
 
         await Assert.ThrowsAsync<MfaPolicyException>(() => service.BeginEnrollmentAsync(
-            user.Id, Principal(user.Id, authenticatedAt: DateTimeOffset.UtcNow), MfaFactorType.Totp, CancellationToken.None));
+            user.Id, Principal(user.Id, authenticatedAt: DateTimeOffset.UtcNow), CancellationToken.None));
     }
 
     private static MfaService CreateService(ServiceProvider provider)
