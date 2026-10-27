@@ -42,32 +42,37 @@ public class PortalReadOnlyProcessTests
             await manager.CreateAsync(descriptor);
         await db.Database.ExecuteSqlRawAsync("GRANT SELECT ON ALL TABLES IN SCHEMA public TO panda_auth_t0000_runtime");
         var raw = PortalClientRegistrationPostgresTests.Request("isolated-proof-client");
-        var proof = await RunAsync(raw, "pandalabs-postgres");
-        Assert.True(proof.ExitCode == 0, "isolated proof process: " + proof.Error);
-        using var json = JsonDocument.Parse(proof.Output);
-        Assert.Equal("verified-existing", json.RootElement.GetProperty("result").GetString());
-        Assert.Equal(PortalClientRequest.Hash(raw), json.RootElement.GetProperty("requestDigest").GetString());
-        Assert.Equal(1, await db.Set<OpenIddictEntityFrameworkCoreApplication>().CountAsync());
-        Assert.Equal(0, await db.AdminAuditLogs.CountAsync());
-        var rejected = await RunAsync(raw, "wrong-host");
+        foreach (var issuer in new[] { PortalClientRequest.Issuer, PortalClientRequest.Issuer[..^1] })
+        {
+            var proof = await RunAsync(raw, "pandalabs-postgres", issuer);
+            Assert.True(proof.ExitCode == 0, "isolated proof process: " + proof.Error);
+            using var json = JsonDocument.Parse(proof.Output);
+            Assert.Equal("verified-existing", json.RootElement.GetProperty("result").GetString());
+            Assert.Equal(PortalClientRequest.Hash(raw), json.RootElement.GetProperty("requestDigest").GetString());
+            Assert.Equal(1, await db.Set<OpenIddictEntityFrameworkCoreApplication>().CountAsync());
+            Assert.Equal(0, await db.AdminAuditLogs.CountAsync());
+        }
+        var rejected = await RunAsync(raw, "wrong-host", PortalClientRequest.Issuer);
         Assert.NotEqual(0, rejected.ExitCode);
         Assert.Empty(rejected.Output);
         Assert.Equal(1, await db.Set<OpenIddictEntityFrameworkCoreApplication>().CountAsync());
         Assert.Equal(0, await db.AdminAuditLogs.CountAsync());
     }
 
-    private static async Task<(int ExitCode,string Output,string Error)> RunAsync(byte[] request,string host)
+    private static async Task<(int ExitCode,string Output,string Error)> RunAsync(byte[] request,string host,string issuer)
     {
         var root=Path.GetFullPath("../../../../../",AppContext.BaseDirectory);
         var binary=Environment.GetEnvironmentVariable("PANDA_AUTH_PROOF_TEST_BINARY") ?? Path.Combine(root,"src/PandaAuth.Server/bin/Debug/net10.0");
         var start=new ProcessStartInfo("docker") { RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true };
-        foreach(var arg in new[]{"run","--rm","-i","--label","cc.pandalabs.task=portal-auth-readonly-20261027",
-            "--network",Environment.GetEnvironmentVariable("PANDA_AUTH_PROOF_TEST_NETWORK")!,"--user","1003:1003",
-            "--read-only","--cap-drop","ALL","--security-opt","no-new-privileges",
-            "--mount","type=bind,src="+binary+",dst=/app,readonly","--workdir","/app",
-            "-e","ASPNETCORE_ENVIRONMENT=Production","-e","Auth__Issuer="+PortalClientRequest.Issuer,
+        var args=new List<string>{"run","--rm","-i","--label","cc.pandalabs.task=portal-auth-readonly-20261027",
+            "--network",Environment.GetEnvironmentVariable("PANDA_AUTH_PROOF_TEST_NETWORK")!,"--user","1654:1654",
+            "--read-only","--cap-drop","ALL","--security-opt","no-new-privileges"};
+        if(Environment.GetEnvironmentVariable("PANDA_AUTH_PROOF_TEST_USE_IMAGE") != "1")
+            args.AddRange(["--mount","type=bind,src="+binary+",dst=/app,readonly"]);
+        args.AddRange(["--workdir","/app","-e","ASPNETCORE_ENVIRONMENT=Production","-e","Auth__Issuer="+issuer,
             "-e","ConnectionStrings__Default=Host="+host+";Port=5432;Database=panda_auth_t0000;Username=panda_auth_t0000_runtime",
-            "--entrypoint","dotnet",Environment.GetEnvironmentVariable("PANDA_AUTH_PROOF_TEST_IMAGE")!,"PandaAuth.Server.dll","--verify-portal-client"}) start.ArgumentList.Add(arg);
+            "--entrypoint","dotnet",Environment.GetEnvironmentVariable("PANDA_AUTH_PROOF_TEST_IMAGE")!,"PandaAuth.Server.dll","--verify-portal-client"]);
+        foreach(var arg in args) start.ArgumentList.Add(arg);
         using var process=Process.Start(start)!;
         await process.StandardInput.BaseStream.WriteAsync(request);process.StandardInput.Close();
         var output=process.StandardOutput.ReadToEndAsync();var error=process.StandardError.ReadToEndAsync();

@@ -11,7 +11,7 @@
 
 ## 只读客户端核验（新增）
 
-`--verify-portal-client` 是排他的单参数命令，使用已有 Auth 服务进程的配置进行只读核验。它从标准输入读取最多 32 KiB 的受控请求，必须指定现有 `clientId`；缺失客户端或实际 descriptor 与已允许的 public/PKCE/回调/权限不符时关闭。数据库连接必须指向登记的 t0000 PostgreSQL、数据库和 runtime 角色；查询在 PostgreSQL 只读事务中执行，不创建或更新客户端、不写审计、不运行 seed、迁移或 listener。输出 `result=verified-existing` 的观察记录，不是登记回执。
+`--verify-portal-client` 是排他的单参数命令，使用已有 Auth 服务进程的配置及现有 app 用户 UID/GID1654:1654 进行只读核验。它从标准输入读取最多 32 KiB 的受控请求，必须指定现有 `clientId`；缺失客户端或实际 descriptor 与已允许的 public/PKCE/回调/权限不符时关闭。数据库连接必须指向登记的 t0000 PostgreSQL、数据库和 runtime 角色；查询在 PostgreSQL 只读事务中执行，不创建或更新客户端、不写审计、不运行 seed、迁移或 listener。输出 `result=verified-existing` 的观察记录，不是登记回执。
 
 此命令不自行证明宿主或镜像来源：消费方必须在受信目标检查 machine marker、运行容器 ID 与不可变镜像、请求摘要和返回 descriptor，执行前后复核容器/镜像一致；未经该绑定，标准输入和输出均不可单独作为发布授权或身份证据。当前生产镜像尚不支持此命令，必须按拥有方发布流程发布实际制品后才能使用。登记与撤销原有受保护文件和机器标记要求不变。
 

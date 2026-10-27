@@ -33,6 +33,23 @@ public class PortalClientCommandTests
         await Assert.ThrowsAsync<PortalClientClosedException>(()=>PortalClientCommand.ReadProofInputAsync(new MemoryStream(new byte[32769])));
     }
 
+    [Theory]
+    [InlineData(1654u,1654u,true,true)]
+    [InlineData(1003u,1003u,false,true)]
+    [InlineData(1003u,1003u,true,false)]
+    [InlineData(1654u,1654u,false,false)]
+    [InlineData(0u,0u,true,false)]
+    public void VerifyUsesExistingAppPrincipalWithoutChangingRegistrationPrincipal(uint uid,uint gid,bool verify,bool valid)
+        => Assert.Equal(valid,PortalClientCommand.IsAllowedPrincipal(uid,gid,verify));
+
+    [Theory]
+    [InlineData("https://t0000-auth.s001.pandalabs.cn/",true)]
+    [InlineData("https://t0000-auth.s001.pandalabs.cn",true)]
+    [InlineData("https://t0000-auth.s001.pandalabs.cn/other",false)]
+    [InlineData("https://other.invalid/",false)]
+    public void ReadOnlyProof_AcceptsOnlyTheTwoRegisteredIssuerForms(string issuer,bool valid)
+        => Assert.Equal(valid,PortalClientCommand.IsRegisteredProofIssuer(issuer));
+
     [Fact]
     public void NormalHostBootstrap_OnlyKnownActualHostingPairsAreAccepted()
     {

@@ -44,7 +44,7 @@ internal static class PortalClientCommand
         string? operation = null;
         try
         {
-            Require(OperatingSystem.IsLinux() && Native.geteuid() == 1003 && Native.getegid() == 1003, "wrong-command-principal");
+            Require(OperatingSystem.IsLinux() && IsAllowedPrincipal(Native.geteuid(), Native.getegid(), verify), "wrong-command-principal");
             var raw = verify ? await ReadProofInputAsync(Console.OpenStandardInput()) :
                 ReadProtectedFile(InputRoot + (unregister ? "/registration-rollback.json" : "/registration-request.json"), 1003, true);
             operation = Parse(raw, unregister, DateTimeOffset.UtcNow).OperationId;
@@ -53,7 +53,7 @@ internal static class PortalClientCommand
                 var machine = ClosedJson(ReadProtectedFile(InputRoot + "/machine.json", 1003, false));
                 Require(machine.TryGetProperty("machine_id", out var id) && id.GetString() == "tcloud-sh-01", "wrong-command-machine");
             }
-            Require(configuration["Auth:Issuer"] == Issuer, "wrong-runtime-issuer");
+            Require(verify ? IsRegisteredProofIssuer(configuration["Auth:Issuer"]) : configuration["Auth:Issuer"] == Issuer, "wrong-runtime-issuer");
             var connection = configuration.GetConnectionString("Default") ?? throw new PortalClientClosedException("missing-runtime-provider");
             var parsed = new NpgsqlConnectionStringBuilder(connection);
             Require(!string.IsNullOrWhiteSpace(parsed.Host) && !string.IsNullOrWhiteSpace(parsed.Database) && !string.IsNullOrWhiteSpace(parsed.Username), "invalid-runtime-provider");
@@ -71,6 +71,11 @@ internal static class PortalClientCommand
             return retryable ? 2 : 1;
         }
     }
+    internal static bool IsRegisteredProofIssuer(string? issuer) => issuer == Issuer || issuer == Issuer[..^1];
+
+    internal static bool IsAllowedPrincipal(uint uid, uint gid, bool verify) =>
+        verify ? uid == 1654 && gid == 1654 : uid == 1003 && gid == 1003;
+
     // The target controller supplies this observation request over stdin and
     // verifies the host, live container and image independently. The output is
     // untrusted until that controller binds it to the observed process.
