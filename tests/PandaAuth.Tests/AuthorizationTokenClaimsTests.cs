@@ -100,6 +100,11 @@ public class AuthorizationTokenClaimsTests
 
         Assert.Equal("t0042", principal.GetClaim(PandaAuthClaims.TenantId));
         Assert.Equal("t0042-auth.s001.pandalabs.cn", principal.GetClaim(PandaAuthClaims.TenantHost));
+        foreach (var type in new[] { PandaAuthClaims.TenantId, PandaAuthClaims.TenantHost })
+        {
+            Assert.Contains(Destinations.IdentityToken, principal.FindFirst(type)!.GetDestinations());
+            Assert.Contains(Destinations.AccessToken, principal.FindFirst(type)!.GetDestinations());
+        }
     }
 
     [Fact]

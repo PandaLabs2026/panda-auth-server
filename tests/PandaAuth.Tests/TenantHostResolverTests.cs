@@ -94,6 +94,11 @@ public sealed class TenantRedirectPolicyTests
             "t0042-auth.s001.pandalabs.cn", 1, TenantRouteState.Ready);
         var policy = new TenantRedirectPolicy();
 
+        Assert.True(policy.IsAllowed(tenant, new Uri("https://t0042.s001.pandalabs.cn/callback/pandaauth")));
+        Assert.False(policy.IsAllowed(tenant, new Uri("https://t0043.s001.pandalabs.cn/callback/pandaauth")));
+        Assert.False(policy.IsAllowed(tenant, new Uri("https://t0042.s002.pandalabs.cn/callback/pandaauth")));
+        Assert.False(policy.IsAllowed(tenant, new Uri("https://t0042.s001.pandalabs.cn.evil.test/callback/pandaauth")));
+
         // 0.55.1：自定义 scheme 回跳（panda://callback，asst-mobile RFC 8252 形态）放行
         Assert.True(policy.IsAllowed(tenant, new Uri("panda://callback")));
         // 非 panda scheme 或 host 不匹配仍拒绝

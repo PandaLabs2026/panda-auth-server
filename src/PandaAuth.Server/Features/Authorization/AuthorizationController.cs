@@ -350,6 +350,8 @@ public sealed class AuthorizationController(
         {
             // auth_time 与 subject_type 是控制面 introspection 契约面：必须随 AT 投影到内省结果。
             Claims.AuthenticationTime or PandaAuthClaims.SubjectType or PandaAuthClaims.SsoSessionId => [Destinations.AccessToken, Destinations.IdentityToken],
+            // OIDC clients validate the tenant host from their ID-token identity.
+            PandaAuthClaims.TenantId or PandaAuthClaims.TenantHost => [Destinations.AccessToken, Destinations.IdentityToken],
             Claims.Name when principal.HasScope(Scopes.Profile) => [Destinations.AccessToken, Destinations.IdentityToken],
             _ => [Destinations.AccessToken],
         });
