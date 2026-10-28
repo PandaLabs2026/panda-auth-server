@@ -9,6 +9,12 @@
 - 命令仅支持 Linux x64，实际 UID/GID 必须为 `1003:1003`（SH host operator jiayuhu）；常驻 Server 的 UID1654 不变。实际 EUID、输入 owner 与已登记 machine marker共同绑定固定 executor；请求 JSON 不构成授权。
 - 外部 controller 负责用户已授权计划、root-reviewed protected request、真实 merged source SHA、窗口、目标及 Default provider snapshot/digest/runtime role复核。程序不验证 git merge/审批事实，也不自行宣称生产授权。错误注入受控 provider会导致误连风险，故真实 one-shot 前必须完成这些门禁。
 
+## 只读客户端核验（新增）
+
+`--verify-portal-client` 是排他的单参数命令，使用已有 Auth 服务进程的配置及现有 app 用户 UID/GID1654:1654 进行只读核验。它从标准输入读取最多 32 KiB 的受控请求，必须指定现有 `clientId`；缺失客户端或实际 descriptor 与已允许的 public/PKCE/回调/权限不符时关闭。数据库连接必须指向登记的 t0000 PostgreSQL、数据库和 runtime 角色；查询在 PostgreSQL 只读事务中执行，不创建或更新客户端、不写审计、不运行 seed、迁移或 listener。输出 `result=verified-existing` 的观察记录，不是登记回执。
+
+此命令不自行证明宿主或镜像来源：消费方必须在受信目标检查 machine marker、运行容器 ID 与不可变镜像、请求摘要和返回 descriptor，执行前后复核容器/镜像一致；未经该绑定，标准输入和输出均不可单独作为发布授权或身份证据。当前生产镜像尚不支持此命令，必须按拥有方发布流程发布实际制品后才能使用。登记与撤销原有受保护文件和机器标记要求不变。
+
 ## 输入与文件
 
 固定 container 路径 `/etc/panda-auth/t0000-portal/registration-request.json` 和 `registration-rollback.json`。输入目录 owner1003/mode0700，请求文件 owner1003/mode0400，单 hardlink、regular file，禁止路径及 parent symlink、group/other可写 parent。读取时比较 path/FD inode、device、mode、owner，限制32KiB。程序不接受自选路径。

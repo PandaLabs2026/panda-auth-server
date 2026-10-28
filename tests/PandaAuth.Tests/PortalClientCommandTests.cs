@@ -7,6 +7,50 @@ namespace PandaAuth.Tests;
 public class PortalClientCommandTests
 {
     [Fact]
+    public void ReadOnlyProof_IsAnExclusiveCommand()
+    {
+        Assert.Equal(3, PortalClientCommand.Mode(["--verify-portal-client"]));
+        Assert.Equal(-1, PortalClientCommand.Mode(["--verify-portal-client", "--register-portal-client"]));
+    }
+
+    [Theory]
+    [InlineData("pandalabs-postgres", "panda_auth_t0000", "panda_auth_t0000_runtime", true)]
+    [InlineData("other-host", "panda_auth_t0000", "panda_auth_t0000_runtime", false)]
+    [InlineData("pandalabs-postgres", "other-db", "panda_auth_t0000_runtime", false)]
+    [InlineData("pandalabs-postgres", "panda_auth_t0000", "postgres", false)]
+    public void ReadOnlyProof_RejectsUnregisteredProvider(string host,string database,string user,bool valid)
+    {
+        var builder = new Npgsql.NpgsqlConnectionStringBuilder { Host=host, Database=database, Username=user };
+        Assert.Equal(valid, PortalClientCommand.IsRegisteredProofProvider(builder));
+    }
+
+    [Fact]
+    public async Task ReadOnlyProof_InputIsBoundedAndRejectsEmptyOrOversize()
+    {
+        var bytes=System.Text.Encoding.UTF8.GetBytes("{\"clientId\":\"example\"}");
+        Assert.Equal(bytes,await PortalClientCommand.ReadProofInputAsync(new MemoryStream(bytes)));
+        await Assert.ThrowsAsync<PortalClientClosedException>(()=>PortalClientCommand.ReadProofInputAsync(new MemoryStream()));
+        await Assert.ThrowsAsync<PortalClientClosedException>(()=>PortalClientCommand.ReadProofInputAsync(new MemoryStream(new byte[32769])));
+    }
+
+    [Theory]
+    [InlineData(1654u,1654u,true,true)]
+    [InlineData(1003u,1003u,false,true)]
+    [InlineData(1003u,1003u,true,false)]
+    [InlineData(1654u,1654u,false,false)]
+    [InlineData(0u,0u,true,false)]
+    public void VerifyUsesExistingAppPrincipalWithoutChangingRegistrationPrincipal(uint uid,uint gid,bool verify,bool valid)
+        => Assert.Equal(valid,PortalClientCommand.IsAllowedPrincipal(uid,gid,verify));
+
+    [Theory]
+    [InlineData("https://t0000-auth.s001.pandalabs.cn/",true)]
+    [InlineData("https://t0000-auth.s001.pandalabs.cn",true)]
+    [InlineData("https://t0000-auth.s001.pandalabs.cn/other",false)]
+    [InlineData("https://other.invalid/",false)]
+    public void ReadOnlyProof_AcceptsOnlyTheTwoRegisteredIssuerForms(string issuer,bool valid)
+        => Assert.Equal(valid,PortalClientCommand.IsRegisteredProofIssuer(issuer));
+
+    [Fact]
     public void NormalHostBootstrap_OnlyKnownActualHostingPairsAreAccepted()
     {
         Assert.Equal(0, PortalClientCommand.Mode(["--environment=Development", "--applicationName=PandaAuth.Server"]));

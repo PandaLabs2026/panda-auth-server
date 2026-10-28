@@ -78,6 +78,12 @@ public sealed class TenantRedirectPolicy
         if (!string.Equals(redirectUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
             return false;
 
+        // Portal uses the tenant host without a product label. OpenIddict still
+        // requires an exact registered redirect URI before this tenant check.
+        if (string.Equals(redirectUri.Host, $"{context.TenantId.Value}.{context.Zone}.pandalabs.cn",
+                StringComparison.OrdinalIgnoreCase))
+            return true;
+
         // 同租户同分区的任一产品规范主机上的回调均放行（跨产品单点登录面）。
         return Enum.GetValues<TenantProduct>().Any(product =>
             string.Equals(redirectUri.Host, TenantCanonicalHost.For(context.TenantId, product, context.Zone), StringComparison.OrdinalIgnoreCase));

@@ -70,7 +70,7 @@ if (commandMode < 0)
 var builder = WebApplication.CreateBuilder(commandMode > 0 ? [] : args);
 if (commandMode > 0)
 {
-    Environment.ExitCode = await PortalClientCommand.RunAsync(commandMode == 2, builder.Configuration, Console.Out, Console.Error);
+    Environment.ExitCode = await PortalClientCommand.RunAsync(commandMode == 2, builder.Configuration, Console.Out, Console.Error, verify: commandMode == 3);
     return;
 }
 
