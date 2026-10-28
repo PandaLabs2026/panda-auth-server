@@ -62,13 +62,13 @@ public sealed class AccountController(
         using var ipLease = loginRateLimiter.AttemptByIp(ipAddress);
         if (!ipLease.IsAcquired)
         {
-            return ViewWithError("尝试过于频繁，请稍后再试。");
+            return ViewWithError("尝试过于频繁，请稍后再试。", StatusCodes.Status429TooManyRequests);
         }
 
         using var accountLease = loginRateLimiter.AttemptByAccount(normalizedUserName);
         if (!accountLease.IsAcquired)
         {
-            return ViewWithError("尝试过于频繁，请稍后再试。");
+            return ViewWithError("尝试过于频繁，请稍后再试。", StatusCodes.Status429TooManyRequests);
         }
 
         var user = await userManager.FindByNameAsync(normalizedUserName);
@@ -152,10 +152,13 @@ public sealed class AccountController(
         string SafeReturnUrl(string? returnUrl)
             => Url.IsLocalUrl(returnUrl) ? returnUrl! : "/me/";
 
-        IActionResult ViewWithError(string message)
+        IActionResult ViewWithError(string message, int? statusCode = null)
         {
             ModelState.AddModelError(string.Empty, message);
-            return View(model);
+            if (statusCode == StatusCodes.Status429TooManyRequests) Response.Headers["Retry-After"] = "60";
+            var result = View(model);
+            result.StatusCode = statusCode;
+            return result;
         }
 
         LoginLog BuildLog() => new()

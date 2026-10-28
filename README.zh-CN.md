@@ -41,6 +41,7 @@ dotnet test tests/PandaAuth.Tests/PandaAuth.Tests.csproj
 | 命令 | 用途与副作用 |
 | --- | --- |
 | `dotnet run --project src/PandaAuth.Server -- --migrate` | 一次性迁移与种子入口；会修改数据库，失败不能推断数据库未改变。批量播种是 **upsert 对账**：会订正存量客户端（例如 me-web 的回调/登出白名单与缺省白名单不一致时会被整体替换），客户端密钥仅在库内现有哈希校验不通过时才重写 |
+| `dotnet run --project src/PandaAuth.Server -- --migrate-admin-resource-only` | 既有实例首次激活专用迁移：使用 Migration 连接及数据库租约，要求已有机密 `admin-web`，冲突授权或资源受众在 DDL 前拒绝。迁移结构后事务性补建缺失的管理 scope 并只增加其客户端权限，保留账号、密钥、回调、其他客户端和令牌；不执行完整播种，不初始化密钥管理或监听器。此写入命令仍须由拥有方冷停、备份、恢复证明和授权流程约束；DDL 后失败须前向恢复。 |
 | `dotnet run --project src/PandaAuth.Server` | 常驻服务，开发监听 http://localhost:9004；结构需先准备 |
 | `dotnet run --project samples/PandaAuth.DemoClient` | Web 示例，http://localhost:5201；需可用 IDP，通常在另一终端运行 |
 

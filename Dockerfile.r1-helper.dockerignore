@@ -1,0 +1,27 @@
+# Allowlist only the helper build graph; credentials, Git metadata and local
+# build outputs stay outside the context by default.
+**
+!panda-auth-server/
+!panda-auth-server/global.json
+!panda-auth-server/Directory.Build.props
+!panda-auth-server/Directory.Packages.props
+!panda-auth-server/src/
+!panda-auth-server/src/PandaAuth.Server/
+!panda-auth-server/src/PandaAuth.Server/**
+!panda-auth-server/tests/
+!panda-auth-server/tests/PandaAuth.ReadinessHarness/
+!panda-auth-server/tests/PandaAuth.ReadinessHarness/*.cs
+!panda-auth-server/tests/PandaAuth.ReadinessHarness/*.csproj
+!panda-auth-share/
+!panda-auth-share/README.md
+!panda-auth-share/LICENSE
+!panda-auth-share/Directory.Build.props
+!panda-auth-share/src/
+!panda-auth-share/src/PandaAuth.Shared/
+!panda-auth-share/src/PandaAuth.Shared/**
+**/bin
+**/bin/**
+**/obj
+**/obj/**
+**/.env
+**/.env.*

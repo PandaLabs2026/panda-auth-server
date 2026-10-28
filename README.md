@@ -41,6 +41,7 @@ The following existing entry points describe intent and side effects. The startu
 | Command | Purpose and side effects |
 | --- | --- |
 | `dotnet run --project src/PandaAuth.Server -- --migrate` | One-time migration/seed entry point; mutates the database. Failure does not mean the database was unchanged. Seeding is an **upsert reconciliation**: existing clients are corrected (for example me-web's redirect/post-logout whitelists are replaced wholesale when they differ from configuration), and a client secret is rewritten only when the stored hash no longer validates |
+| `dotnet run --project src/PandaAuth.Server -- --migrate-admin-resource-only` | Existing-instance activation migrator using the Migration connection and DB lease. Requires the existing confidential `admin-web`; rejects conflicting grants/resource audiences before DDL. Applies migrations, then transactionally creates the administration scope if absent and adds only its permission to `admin-web`. Preserves accounts, secrets, callbacks, other clients and tokens; does not run general seeding or initialize key management/listeners. This mutating command requires the owning cold-maintenance/backup/restore/authorization workflow; failure after DDL requires forward recovery. |
 | `dotnet run --project src/PandaAuth.Server` | Long-running server, development address http://localhost:9004; schema must already be prepared |
 | `dotnet run --project samples/PandaAuth.DemoClient` | Web sample at http://localhost:5201; requires a working IDP, normally run in another terminal |
 

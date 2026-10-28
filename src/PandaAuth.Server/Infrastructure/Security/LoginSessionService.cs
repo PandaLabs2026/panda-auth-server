@@ -97,6 +97,7 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock, I
         [
             new Claim(ClaimTypes.NameIdentifier, current.Id),
             new Claim(StampClaim, current.SecurityStamp ?? ""),
+            new Claim(PandaAuthClaims.SecurityVersion, AccountSecurityVersion.From(current)),
             new Claim(PandaAuthClaims.SsoSessionId, Guid.NewGuid().ToString("N")),
         ], ReconfigurationScheme));
         await context.SignInAsync(ReconfigurationScheme, principal,
@@ -109,7 +110,7 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock, I
         if (!ticket.Succeeded || ticket.Principal is null) return null;
         var user = await users.GetUserAsync(ticket.Principal);
         return user is not null && user.Status == UserStatus.Active && user.TwoFactorEnabled &&
-               user.SecurityStamp == ticket.Principal.FindFirstValue(StampClaim)
+               user.SecurityStamp == ticket.Principal.FindFirstValue(StampClaim) && AccountSecurityVersion.Matches(ticket.Principal, user)
             ? user
             : null;
     }
@@ -148,24 +149,24 @@ public sealed class LoginSessionService(UserService users, TimeProvider clock, I
         if (ids.Length != 1 || !Guid.TryParseExact(ids[0].Value, "N", out _))
         {
             context.RejectPrincipal();
-            await context.HttpContext.SignOutAsync(Scheme);
+            await context.HttpContext.SignOutAsync(context.Scheme.Name);
             return;
         }
         if (revocations is not null && await revocations.IsRevokedAsync(PandaAuthSessionApi.SsoPartition,
             principal.FindFirstValue(PandaAuthClaims.SsoSessionId)!, context.HttpContext.RequestAborted))
         {
             context.RejectPrincipal();
-            await context.HttpContext.SignOutAsync(Scheme);
+            await context.HttpContext.SignOutAsync(context.Scheme.Name);
             return;
         }
         var userId = principal.FindFirstValue(ClaimTypes.NameIdentifier) ?? principal.FindFirstValue("sub");
         var stamp = principal.FindFirstValue(StampClaim);
         var user = await users.FindByIdAsync(userId ?? string.Empty);
         if (user is null || user.Status != UserStatus.Active || string.IsNullOrEmpty(user.SecurityStamp) ||
-            user.SecurityStamp != stamp)
+            user.SecurityStamp != stamp || !AccountSecurityVersion.Matches(principal, user))
         {
             context.RejectPrincipal();
-            await context.HttpContext.SignOutAsync(Scheme);
+            await context.HttpContext.SignOutAsync(context.Scheme.Name);
             return;
         }
 
