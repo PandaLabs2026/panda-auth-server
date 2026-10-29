@@ -3,7 +3,7 @@
 # Context is the verified workspace root: docker build -f panda-auth-server/Dockerfile.r1-helper .
 # The registered builder supplies and attests both source revisions in its
 # artifact manifest; Docker labels alone do not prove source provenance.
-FROM mcr.microsoft.com/dotnet/sdk@sha256:0eeb52c76e35a5431ca707ad2bc75e38006a05393045d8532ae44c15d9474523 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0.403@sha256:de4fe90a98845d75910b9769662465c84de1a934665c431279d1382b2bddc02b AS build
 WORKDIR /src
 
 # Restore the actual harness -> Server -> Share project graph without host
