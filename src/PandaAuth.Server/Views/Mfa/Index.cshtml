@@ -6,7 +6,7 @@
 <div id="mfa" data-return-url="@Model.ReturnUrl" data-totp-options-url="/account/mfa/totp/options" data-totp-confirm-url="/account/mfa/totp/confirm" data-totp-assert-url="/account/mfa/totp/assert">
     @Html.AntiForgeryToken()
     <p class="footnote">管理员须以密码＋TOTP 完成验证。Passkey 已于本版本退役。</p>
-    <div id="mfa-message" class="notice" hidden></div>
+    <div id="mfa-message" class="notice" role="status" aria-live="polite" hidden></div>
     @if (!Model.HasTotp)
     {
         <p class="footnote">尚未绑定 TOTP：绑定后才能进入管理台。</p>
