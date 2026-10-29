@@ -13,7 +13,8 @@ using PandaAuth.Shared;
 
 namespace PandaAuth.ReadinessHarness;
 
-internal sealed record ActivationHumanIdentity(string UserName, string Password, string TotpSecret, string SubjectSha256, string UsernameSha256);
+internal sealed record ActivationHumanIdentity(string UserName, string Password, string? TotpSecret, string SubjectSha256, string UsernameSha256,
+    string? TotpCode = null, DateTimeOffset? TotpCodeCreatedAt = null);
 internal sealed record ActivationHumanInput(int Schema, string Instance, string Component, string Attempt, string SourceSha256,
     string PolicySha256, string RuntimesSha256, DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt, string Issuer,
     string ClientId, string ClientSecret, string RedirectUri, ActivationHumanIdentity Identity, ActivationHumanIdentity? Restricted,
@@ -60,11 +61,11 @@ public static class ActivationHumanProtocol
             && callback.Scheme == "https" && callback.GetLeftPart(UriPartial.Authority) == new Uri(issuer).GetLeftPart(UriPartial.Authority)
             && callback.UserInfo.Length == 0 && callback.Query.Length == 0 && callback.Fragment.Length == 0
             && callback.AbsolutePath.StartsWith("/" + input.Component + "/callback/", StringComparison.Ordinal));
-        Identity(input.Identity);
+        Identity(input.Identity, input);
         if (input.Component == "admin")
         {
             Require(input.Restricted is not null);
-            Identity(input.Restricted!);
+            Identity(input.Restricted!, input);
             Require(input.Restricted!.SubjectSha256 != input.Identity.SubjectSha256 && input.Restricted.UsernameSha256 != input.Identity.UsernameSha256);
         }
         else Require(input.Restricted is null);
@@ -73,15 +74,42 @@ public static class ActivationHumanProtocol
         _ = ActivationIdentityPreflight.Connection(input);
     }
 
-    private static void Identity(ActivationHumanIdentity value)
+    private static void Identity(ActivationHumanIdentity value, ActivationHumanInput input)
     {
         Require(value is not null && value.UserName is { Length: > 0 and <= 256 } && value.UserName == value.UserName.Trim()
             && !value.UserName.Any(char.IsControl)
             && value.Password is { Length: > 0 and <= 1024 } && Hex(value.SubjectSha256, 64)
-            && Hex(value.UsernameSha256, 64) && Sha(value.UserName) == value.UsernameSha256 && value.TotpSecret is { Length: 28 });
+            && Hex(value.UsernameSha256, 64) && Sha(value.UserName) == value.UsernameSha256);
+        if (value.TotpSecret is null)
+        {
+            Require(value.TotpCode is { Length: 6 } && value.TotpCode.All(c => c is >= '0' and <= '9')
+                && value.TotpCodeCreatedAt is { } created && created >= input.CreatedAt && created < input.ExpiresAt);
+            return;
+        }
+        Require(value.TotpSecret.Length == 28 && value.TotpCode is null && value.TotpCodeCreatedAt is null);
         var seed = Convert.FromBase64String(value.TotpSecret);
         try { Require(seed.Length == 20 && Convert.ToBase64String(seed) == value.TotpSecret); }
         finally { CryptographicOperations.ZeroMemory(seed); }
+    }
+
+    internal static Func<string>? CodeProvider(ActivationHumanIdentity identity, Func<DateTimeOffset>? clock = null)
+    {
+        if (identity.TotpCode is null) return null;
+        clock ??= () => DateTimeOffset.UtcNow;
+        void Fresh()
+        {
+            var now = clock();
+            Require(identity.TotpCodeCreatedAt is { } created && now >= created && now - created < TimeSpan.FromSeconds(30));
+        }
+        Fresh();
+        var used = false;
+        return () =>
+        {
+            Require(!used);
+            Fresh();
+            used = true;
+            return identity.TotpCode;
+        };
     }
 
     public static async Task<int> Dispatch(string line)
@@ -147,7 +175,8 @@ public static class ActivationHumanProtocol
 
         async Task Actor(ActivationHumanIdentity identity, bool bff, HttpStatusCode? resourceStatus)
         {
-            var seed = Convert.FromBase64String(identity.TotpSecret);
+            var currentCode = CodeProvider(identity);
+            var seed = identity.TotpSecret is null ? [] : Convert.FromBase64String(identity.TotpSecret);
             var cookies = new CookieContainer();
             using var browser = browserFactory(cookies);
             var pending = new List<SessionSnapshot>();
@@ -159,14 +188,14 @@ public static class ActivationHumanProtocol
                 checkpoint();
                 if (bff)
                 {
-                    var subject = await BffLogin.LoginAsync(browser, input.Component, identity.UserName, identity.Password, seed, waitForStep);
+                    var subject = await BffLogin.LoginAsync(browser, input.Component, identity.UserName, identity.Password, seed, waitForStep, currentCode: currentCode);
                     Require(Sha(subject) == identity.SubjectSha256);
                     ownedLogin = true;
                 }
                 var scopes = "openid profile email roles offline_access" + (input.Component == "admin" ? " " + PandaAuthAdminApi.Scope : "");
                 var settings = new ProtocolActorSettings(input.Attempt, input.Issuer, identity.Password, input.ClientId, input.ClientSecret,
                     input.RedirectUri, identity.UserName, "cookie", scopes);
-                actor = new ProtocolUser(settings, 0, browser, cookies, seed, waitForStep);
+                actor = new ProtocolUser(settings, 0, browser, cookies, seed, waitForStep, currentCode);
                 if (bff) await actor.AuthorizeSsoAsync(CancellationToken.None);
                 else await actor.InitializeAsync(CancellationToken.None);
                 var snapshot = actor.Snapshot();

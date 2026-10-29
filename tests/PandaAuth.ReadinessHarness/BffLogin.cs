@@ -35,7 +35,7 @@ public static class BffLogin
     }
 
     internal static async Task<string> LoginAsync(HttpClient browser, string component, string userName, string password,
-        byte[] totpSecret, Func<CancellationToken, Task>? waitForStep = null, CancellationToken cancellation = default)
+        byte[] totpSecret, Func<CancellationToken, Task>? waitForStep = null, CancellationToken cancellation = default, Func<string>? currentCode = null)
     {
         Require(component is "admin" or "me");
         var owner = browser.BaseAddress ?? throw new InvalidOperationException("readiness_bff_login_binding_invalid");
@@ -45,19 +45,20 @@ public static class BffLogin
         Require(query.TryGetValue("returnUrl", out var returnUrl) && returnUrl.Count == 1);
         var authorization = BffSnapshot.ResolveOwnedRedirect(owner, new Uri(returnUrl.ToString(), UriKind.RelativeOrAbsolute));
         Require(authorization.AbsolutePath == PandaAuthEndpoints.Authorization);
-        var continuation = await AuthenticateMfaAsync(browser, login, authorization, userName, password, totpSecret, waitForStep, cancellation);
+        var continuation = await AuthenticateMfaAsync(browser, login, authorization, userName, password, totpSecret, waitForStep, cancellation, currentCode);
         await FollowAsync(browser, continuation, "/" + component + "/", cancellation);
         return await SessionAsync(browser, "/" + component + "/api/session", requireAdmin: component == "admin");
     }
 
     internal static async Task<Uri> AuthenticateMfaAsync(HttpClient browser, Uri login, Uri authorization,
         string userName, string password, byte[] totpSecret, Func<CancellationToken, Task>? waitForStep = null,
-        CancellationToken cancellation = default)
+        CancellationToken cancellation = default, Func<string>? currentCode = null)
     {
         var owner = browser.BaseAddress ?? throw new InvalidOperationException("readiness_bff_login_binding_invalid");
         login = BffSnapshot.ResolveOwnedRedirect(owner, login);
         authorization = BffSnapshot.ResolveOwnedRedirect(owner, authorization);
-        Require(login.AbsolutePath == "/account/login" && authorization.AbsolutePath == PandaAuthEndpoints.Authorization && totpSecret.Length == 20);
+        Require(login.AbsolutePath == "/account/login" && authorization.AbsolutePath == PandaAuthEndpoints.Authorization
+            && ((totpSecret.Length == 20 && currentCode is null) || (totpSecret.Length == 0 && currentCode is not null)));
         using var page = await browser.GetAsync(login, cancellation);
         Require(page.StatusCode == HttpStatusCode.OK);
         using var credentials = new FormUrlEncodedContent(new Dictionary<string, string>
@@ -71,15 +72,21 @@ public static class BffLogin
         Require(challenge.AbsolutePath == "/account/mfa/challenge");
         using var mfaPage = await browser.GetAsync(challenge, cancellation);
         Require(mfaPage.StatusCode == HttpStatusCode.OK);
-        // Source and restored factors retain anti-replay state. Use a fresh real
-        // time step rather than weakening that state or retrying reused codes.
-        var delay = 32 - DateTimeOffset.UtcNow.ToUnixTimeSeconds() % 30;
-        if (waitForStep is null) await Task.Delay(TimeSpan.FromSeconds(delay), cancellation);
-        else await waitForStep(cancellation);
+        // Source and restored factors retain normal server anti-replay checks.
+        // Generated codes wait for a new step. A supplied code is obtained at
+        // submission time and must not be delayed into a later step.
+        if (currentCode is null)
+        {
+            var delay = 32 - DateTimeOffset.UtcNow.ToUnixTimeSeconds() % 30;
+            if (waitForStep is null) await Task.Delay(TimeSpan.FromSeconds(delay), cancellation);
+            else await waitForStep(cancellation);
+        }
+        var code = currentCode is null ? BffSnapshot.TotpCode(totpSecret, DateTimeOffset.UtcNow) : currentCode();
+        Require(code.Length == 6 && code.All(c => c is >= '0' and <= '9'));
         using var factor = new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["__RequestVerificationToken"] = Csrf(await mfaPage.Content.ReadAsStringAsync()),
-            ["Code"] = BffSnapshot.TotpCode(totpSecret, DateTimeOffset.UtcNow),
+            ["Code"] = code,
             ["ReturnUrl"] = authorization.PathAndQuery
         });
         using var mfa = await browser.PostAsync("/account/mfa/challenge/totp", factor, cancellation);
