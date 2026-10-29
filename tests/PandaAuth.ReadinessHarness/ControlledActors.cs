@@ -90,7 +90,7 @@ public static class ControlledActors
                         var id=Guid.NewGuid();var cipher=protector.Protect(user.Id,id,totpSecret);
                         db.TotpFactors.Add(new MfaTotpFactor{Id=id,UserId=user.Id,KeyVersion=cipher.KeyVersion,Nonce=cipher.Nonce,
                             Ciphertext=cipher.Ciphertext,Tag=cipher.Tag,ConfirmedAt=DateTimeOffset.UtcNow});
-                        user.TwoFactorEnabled=true;await db.SaveChangesAsync();
+                        user.TwoFactorEnabled=false;await db.SaveChangesAsync();
                     }
                 }
                 await apps.CreateAsync(new OpenIddictApplicationDescriptor{ClientId=names[3],ClientSecret=clientSecret,

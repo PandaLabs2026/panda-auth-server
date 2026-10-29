@@ -223,6 +223,34 @@ public sealed class ActivationHumanProtocolTests
             cookies => new HttpClient(new ProtocolHandler(state, cookies)) { BaseAddress = new Uri(input.Issuer) }, () => { }, _ => Task.CompletedTask));
     }
 
+    [Theory]
+    [InlineData("admin")]
+    [InlineData("me")]
+    public async Task OrdinaryPasswordLoginUsesTheNormalProtectedTotpStepUp(string component)
+    {
+        var input = CoreInput(component);
+        var state = new ProtocolState { OrdinaryPasswordOnly = true };
+        var result = await ActivationHumanProtocol.RunCoreAsync(input,
+            cookies => new HttpClient(new ProtocolHandler(state, cookies)) { BaseAddress = new Uri(input.Issuer) },
+            () => { }, _ => Task.CompletedTask);
+        Assert.Equal(1, state.StepUps);
+        Assert.All(state.Sessions.Values, session => Assert.True(session.Revoked));
+        Assert.True(JsonSerializer.SerializeToElement(result, Json).GetProperty("assertions").GetProperty("mfaVerified").GetBoolean());
+    }
+
+    [Fact]
+    public async Task RejectedStepUpFailsAcceptanceAndCleansOnlyTheKnownOwnedSession()
+    {
+        var input = CoreInput("me");
+        var state = new ProtocolState { OrdinaryPasswordOnly = true, RejectStepUp = true };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ActivationHumanProtocol.RunCoreAsync(input,
+            cookies => new HttpClient(new ProtocolHandler(state, cookies)) { BaseAddress = new Uri(input.Issuer) },
+            () => { }, _ => Task.CompletedTask));
+        Assert.Equal(1, state.StepUps);
+        Assert.Equal(2, state.Revocations);
+        Assert.All(state.Sessions.Values, session => Assert.True(session.Revoked));
+    }
+
     private static ActivationHumanInput CoreInput(string component)
     {
         ActivationHumanIdentity Approved(string name) => Actor(name, 'e') with { SubjectSha256 = Hash("subject-" + name) };
@@ -237,6 +265,9 @@ public sealed class ActivationHumanProtocolTests
     {
         public string? ExpectedManualCode { get; init; }
         public bool RejectManualCode { get; init; }
+        public bool OrdinaryPasswordOnly { get; init; }
+        public bool RejectStepUp { get; init; }
+        public int StepUps { get; set; }
         public Dictionary<string, Session> Sessions { get; } = [];
         public Dictionary<string, string> Codes { get; } = [];
         public Dictionary<string, string> Access { get; } = [];
@@ -282,7 +313,26 @@ public sealed class ActivationHumanProtocolTests
             {
                 if (request.Method == HttpMethod.Get) return Page();
                 pending = form!["UserName"].ToString();
+                if (pending == "approved-nonadmin" && state.OrdinaryPasswordOnly)
+                {
+                    var sid = Guid.NewGuid().ToString("N");state.Sessions[sid] = new(pending);state.Logins++;
+                    Cookie("fixture-sso", sid);
+                    return Redirect(form["ReturnUrl"].ToString());
+                }
                 return Redirect("/account/mfa/challenge");
+            }
+            if (path == "/account/mfa/user/antiforgery")
+            {
+                Assert.True(Live(Sid));return Body(new { token = "fixture-step-up-csrf" });
+            }
+            if (path == "/account/mfa/user/totp/assert")
+            {
+                Assert.True(Live(Sid));Assert.Equal("approved-nonadmin", state.Sessions[Sid].Name);
+                Assert.Equal("fixture-step-up-csrf", request.Headers.GetValues("RequestVerificationToken").Single());
+                using var json = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
+                Assert.Equal(6, json.RootElement.GetProperty("code").GetString()!.Length);
+                state.StepUps++;
+                return state.RejectStepUp ? Body(new { error = "fixture-rejected" }, HttpStatusCode.BadRequest) : Body(new { status = "ok" });
             }
             if (path == "/account/mfa/challenge") return Page();
             if (path == "/account/mfa/challenge/totp")

@@ -61,7 +61,8 @@ public static class FixtureSeed
                 .Protect(administrator.Id, factor.Id, RecoveryCrypto.SyntheticTotpSecret(settings.RunId));
             factor.KeyVersion = encrypted.KeyVersion; factor.Nonce = encrypted.Nonce; factor.Ciphertext = encrypted.Ciphertext; factor.Tag = encrypted.Tag;
             db.TotpFactors.Add(factor);
-            administrator.TwoFactorEnabled = true;
+            // Confirmed factor rows enable MFA; true is the legacy reconfiguration marker.
+            administrator.TwoFactorEnabled = false;
             await db.SaveChangesAsync();
             await FixtureRecoveryState.PopulateAsync(db, users, scope.ServiceProvider.GetRequiredService<LoginSessionService>(), settings, administrator);
         }
