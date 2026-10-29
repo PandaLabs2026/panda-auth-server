@@ -143,13 +143,13 @@ internal static class ActivationIdentityPreflight
         // TOTP ciphertext into the helper.
         var normalized = userName.Normalize().ToUpperInvariant();
         var matches = await db.Users.AsNoTracking().Where(user => user.NormalizedUserName == normalized)
-            .Select(user => new { user.Id, user.UserName, user.Status, user.EmailConfirmed, user.TwoFactorEnabled,
+            .Select(user => new { user.Id, user.UserName, user.Status, user.EmailConfirmed,
                 user.LockoutEnabled, user.LockoutEnd, HasPassword = user.PasswordHash != null && user.PasswordHash != "" })
             .Take(2).ToListAsync(cancellation);
         Require(matches.Count == 1);
         var user = matches[0];
         Require(user.UserName == userName && Hash(user.Id) == subjectSha256 && user.Status == UserStatus.Active
-            && user.EmailConfirmed && user.TwoFactorEnabled && user.HasPassword
+            && user.EmailConfirmed && user.HasPassword
             && (!user.LockoutEnabled || user.LockoutEnd is null || user.LockoutEnd <= now));
         var roleNames = await (from membership in db.UserRoles.AsNoTracking()
                              join role in db.Roles.AsNoTracking() on membership.RoleId equals role.Id
@@ -159,6 +159,8 @@ internal static class ActivationIdentityPreflight
         // lookup keys or potentially case-insensitive database collation.
         var isAdmin = roleNames.Any(name => string.Equals(name, PandaAuthRoles.Admin, StringComparison.Ordinal));
         Require(isAdmin == expectAdmin);
+        // Match MfaService: confirmed, non-revoked TOTP is authoritative.
+        // TwoFactorEnabled is a legacy reconfiguration marker cleared by enrollment/login.
         var step = now.ToUnixTimeSeconds() / 30;
         var usableFactor = await db.TotpFactors.AsNoTracking().AnyAsync(factor => factor.UserId == user.Id
             && factor.ConfirmedAt != null && factor.RevokedAt == null
