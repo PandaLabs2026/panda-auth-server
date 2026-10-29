@@ -28,6 +28,7 @@ internal sealed class ProtocolUser : IProtocolActor
     private readonly bool ownsBrowser = true;
     private readonly byte[]? totpSecret;
     private readonly Func<string>? currentMfaCode;
+    private readonly Action? passwordOnly;
     private readonly Func<CancellationToken, Task>? waitForMfaStep;
     private CookieContainer cookies = new();
     private HttpClient browser;
@@ -46,11 +47,11 @@ internal sealed class ProtocolUser : IProtocolActor
     }
 
     internal ProtocolUser(ProtocolActorSettings settings, int index, HttpClient browser, CookieContainer cookies,
-        byte[]? totpSecret = null, Func<CancellationToken, Task>? waitForMfaStep = null, Func<string>? currentMfaCode = null)
+        byte[]? totpSecret = null, Func<CancellationToken, Task>? waitForMfaStep = null, Func<string>? currentMfaCode = null, Action? passwordOnly = null)
     {
         Require(browser.BaseAddress?.AbsoluteUri == settings.BaseUri);
         this.settings = settings; this.index = index; this.browser = browser; this.cookies = cookies;
-        this.totpSecret = totpSecret; this.currentMfaCode = currentMfaCode; this.waitForMfaStep = waitForMfaStep; ownsBrowser = false;
+        this.totpSecret = totpSecret; this.currentMfaCode = currentMfaCode; this.passwordOnly = passwordOnly; this.waitForMfaStep = waitForMfaStep; ownsBrowser = false;
     }
 
     internal static HttpClient CreateBrowser(LoadRequest settings, X509Certificate2 root, CookieContainer? cookies = null)
@@ -151,7 +152,7 @@ internal sealed class ProtocolUser : IProtocolActor
         if (totpSecret is not null || currentMfaCode is not null)
         {
             await BffLogin.AuthenticateMfaAsync(browser, new Uri(browser.BaseAddress!, loginPath), new Uri(browser.BaseAddress!, authorize),
-                settings.UserName, settings.Password, totpSecret ?? [], waitForMfaStep, cancellation, currentMfaCode);
+                settings.UserName, settings.Password, totpSecret ?? [], waitForMfaStep, cancellation, currentMfaCode, passwordOnly);
         }
         else
         {

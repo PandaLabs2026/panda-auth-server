@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -35,7 +36,7 @@ public static class BffLogin
     }
 
     internal static async Task<string> LoginAsync(HttpClient browser, string component, string userName, string password,
-        byte[] totpSecret, Func<CancellationToken, Task>? waitForStep = null, CancellationToken cancellation = default, Func<string>? currentCode = null)
+        byte[] totpSecret, Func<CancellationToken, Task>? waitForStep = null, CancellationToken cancellation = default, Func<string>? currentCode = null, Action? passwordOnly = null)
     {
         Require(component is "admin" or "me");
         var owner = browser.BaseAddress ?? throw new InvalidOperationException("readiness_bff_login_binding_invalid");
@@ -45,14 +46,14 @@ public static class BffLogin
         Require(query.TryGetValue("returnUrl", out var returnUrl) && returnUrl.Count == 1);
         var authorization = BffSnapshot.ResolveOwnedRedirect(owner, new Uri(returnUrl.ToString(), UriKind.RelativeOrAbsolute));
         Require(authorization.AbsolutePath == PandaAuthEndpoints.Authorization);
-        var continuation = await AuthenticateMfaAsync(browser, login, authorization, userName, password, totpSecret, waitForStep, cancellation, currentCode);
+        var continuation = await AuthenticateMfaAsync(browser, login, authorization, userName, password, totpSecret, waitForStep, cancellation, currentCode, passwordOnly);
         await FollowAsync(browser, continuation, "/" + component + "/", cancellation);
         return await SessionAsync(browser, "/" + component + "/api/session", requireAdmin: component == "admin");
     }
 
     internal static async Task<Uri> AuthenticateMfaAsync(HttpClient browser, Uri login, Uri authorization,
         string userName, string password, byte[] totpSecret, Func<CancellationToken, Task>? waitForStep = null,
-        CancellationToken cancellation = default, Func<string>? currentCode = null)
+        CancellationToken cancellation = default, Func<string>? currentCode = null, Action? passwordOnly = null)
     {
         var owner = browser.BaseAddress ?? throw new InvalidOperationException("readiness_bff_login_binding_invalid");
         login = BffSnapshot.ResolveOwnedRedirect(owner, login);
@@ -69,9 +70,31 @@ public static class BffLogin
         });
         using var passwordResponse = await browser.PostAsync("/account/login", credentials, cancellation);
         var challenge = Redirect(owner, passwordResponse);
+        if (passwordOnly is not null && challenge.AbsolutePath == PandaAuthEndpoints.Authorization)
+        {
+            Require(challenge.PathAndQuery == authorization.PathAndQuery);
+            passwordOnly();
+            return challenge;
+        }
         Require(challenge.AbsolutePath == "/account/mfa/challenge");
         using var mfaPage = await browser.GetAsync(challenge, cancellation);
         Require(mfaPage.StatusCode == HttpStatusCode.OK);
+        var code = await FreshCodeAsync(totpSecret, waitForStep, cancellation, currentCode);
+        using var factor = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = Csrf(await mfaPage.Content.ReadAsStringAsync()),
+            ["Code"] = code,
+            ["ReturnUrl"] = authorization.PathAndQuery
+        });
+        using var mfa = await browser.PostAsync("/account/mfa/challenge/totp", factor, cancellation);
+        var continuation = Redirect(owner, mfa);
+        Require(continuation.AbsolutePath == PandaAuthEndpoints.Authorization);
+        return continuation;
+    }
+
+    private static async Task<string> FreshCodeAsync(byte[] totpSecret, Func<CancellationToken, Task>? waitForStep,
+        CancellationToken cancellation, Func<string>? currentCode)
+    {
         // Source and restored factors retain normal server anti-replay checks.
         // Generated codes wait for a new step. A supplied code is obtained at
         // submission time and must not be delayed into a later step.
@@ -83,16 +106,25 @@ public static class BffLogin
         }
         var code = currentCode is null ? BffSnapshot.TotpCode(totpSecret, DateTimeOffset.UtcNow) : currentCode();
         Require(code.Length == 6 && code.All(c => c is >= '0' and <= '9'));
-        using var factor = new FormUrlEncodedContent(new Dictionary<string, string>
-        {
-            ["__RequestVerificationToken"] = Csrf(await mfaPage.Content.ReadAsStringAsync()),
-            ["Code"] = code,
-            ["ReturnUrl"] = authorization.PathAndQuery
-        });
-        using var mfa = await browser.PostAsync("/account/mfa/challenge/totp", factor, cancellation);
-        var continuation = Redirect(owner, mfa);
-        Require(continuation.AbsolutePath == PandaAuthEndpoints.Authorization);
-        return continuation;
+        return code;
+    }
+
+    internal static async Task AssertTotpAsync(HttpClient browser, byte[] totpSecret,
+        Func<CancellationToken, Task>? waitForStep = null, Func<string>? currentCode = null, CancellationToken cancellation = default)
+    {
+        using var tokenResponse = await browser.GetAsync("/account/mfa/user/antiforgery", cancellation);
+        Require(tokenResponse.StatusCode == HttpStatusCode.OK);
+        using var tokens = JsonDocument.Parse(await tokenResponse.Content.ReadAsStringAsync(cancellation));
+        var token = tokens.RootElement.GetProperty("token").GetString();
+        Require(token is { Length: > 0 and <= 4096 });
+        var code = await FreshCodeAsync(totpSecret, waitForStep, cancellation, currentCode);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/account/mfa/user/totp/assert")
+            { Content = JsonContent.Create(new { code }) };
+        request.Headers.Add("RequestVerificationToken", token);
+        using var response = await browser.SendAsync(request, cancellation);
+        Require(response.StatusCode == HttpStatusCode.OK);
+        using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellation));
+        Require(result.RootElement.GetProperty("status").GetString() == "ok");
     }
 
     internal static async Task<string> SessionAsync(HttpClient browser, string path, bool requireAdmin)

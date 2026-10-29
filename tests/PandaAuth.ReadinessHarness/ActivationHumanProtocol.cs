@@ -183,25 +183,29 @@ public static class ActivationHumanProtocol
             ProtocolUser? actor = null;
             var ownedLogin = false;
             var loggedOut = false;
+            var needsStepUp = false;
+            Action? passwordOnly = !bff || input.Component == "me" ? () => needsStepUp = true : null;
             try
             {
                 checkpoint();
                 if (bff)
                 {
-                    var subject = await BffLogin.LoginAsync(browser, input.Component, identity.UserName, identity.Password, seed, waitForStep, currentCode: currentCode);
+                    var subject = await BffLogin.LoginAsync(browser, input.Component, identity.UserName, identity.Password, seed, waitForStep, currentCode: currentCode, passwordOnly: passwordOnly);
                     Require(Sha(subject) == identity.SubjectSha256);
                     ownedLogin = true;
                 }
                 var scopes = "openid profile email roles offline_access" + (input.Component == "admin" ? " " + PandaAuthAdminApi.Scope : "");
                 var settings = new ProtocolActorSettings(input.Attempt, input.Issuer, identity.Password, input.ClientId, input.ClientSecret,
                     input.RedirectUri, identity.UserName, "cookie", scopes);
-                actor = new ProtocolUser(settings, 0, browser, cookies, seed, waitForStep, currentCode);
+                actor = new ProtocolUser(settings, 0, browser, cookies, seed, waitForStep, currentCode, passwordOnly);
                 if (bff) await actor.AuthorizeSsoAsync(CancellationToken.None);
                 else await actor.InitializeAsync(CancellationToken.None);
                 var snapshot = actor.Snapshot();
                 var subjectId = await Subject(browser, snapshot.AccessToken, identity.SubjectSha256);
                 ownedLogin = true;
                 pending.Add(snapshot);
+                if (needsStepUp)
+                    await BffLogin.AssertTotpAsync(browser, seed, waitForStep, currentCode);
                 if (resourceStatus is not null)
                 {
                     using var request = new HttpRequestMessage(HttpMethod.Get, PandaAuthAdminApi.User(subjectId));
