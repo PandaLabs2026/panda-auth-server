@@ -71,6 +71,92 @@ public sealed class ActivationHumanProtocolTests
     }
 
     [Fact]
+    public void NativeInputCanCarryAFreshCodeWithoutExportingTheExistingFactor()
+    {
+        var input = Input();
+        var document = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(input, Json))!;
+        document["identity"]!["totpSecret"] = null;
+        document["identity"]!["totpCode"] = "123456";
+        document["identity"]!["totpCodeCreatedAt"] = DateTimeOffset.UtcNow;
+        var line = document.ToJsonString();
+        var env = EnvironmentFor(input, line);
+        var parsed = ActivationHumanProtocol.Parse(line, key => env.GetValueOrDefault(key), DateTimeOffset.UtcNow);
+        Assert.Equal(input.Identity.UserName, parsed.Identity.UserName);
+    }
+
+    [Fact]
+    public void CodeInputCannotMixSeedsOrOmitItsBoundedTimestamp()
+    {
+        var input = Input();
+        var identity = input.Identity with { TotpSecret = null, TotpCode = "123456", TotpCodeCreatedAt = DateTimeOffset.UtcNow };
+        foreach (var changed in new[] { identity with { TotpSecret = input.Identity.TotpSecret },
+            identity with { TotpCode = null }, identity with { TotpCodeCreatedAt = null },
+            identity with { TotpCode = "１２３４５６" }, identity with { TotpCode = "12345 " },
+            identity with { TotpCodeCreatedAt = input.CreatedAt.AddSeconds(-1) },
+            identity with { TotpCodeCreatedAt = input.ExpiresAt } })
+        {
+            var payload = JsonSerializer.Serialize(input with { Identity = changed }, Json);
+            var pins = EnvironmentFor(input, payload);
+            Assert.Throws<InvalidOperationException>(() => ActivationHumanProtocol.Parse(payload, key => pins.GetValueOrDefault(key), DateTimeOffset.UtcNow));
+        }
+    }
+
+    [Fact]
+    public void CodeProviderRejectsExpiredFutureAndRepeatedUseWithoutReplayingMfa()
+    {
+        var issued = DateTimeOffset.UtcNow;
+        var now = issued;
+        var identity = Input().Identity with { TotpSecret = null, TotpCode = "123456", TotpCodeCreatedAt = issued };
+        var code = ActivationHumanProtocol.CodeProvider(identity, () => now)!;
+        Assert.Equal("123456", code());
+        Assert.Throws<InvalidOperationException>(() => code());
+        var delayed = ActivationHumanProtocol.CodeProvider(identity, () => now)!;
+        now = issued.AddSeconds(30);
+        Assert.Throws<InvalidOperationException>(() => delayed());
+        Assert.Throws<InvalidOperationException>(() => ActivationHumanProtocol.CodeProvider(identity, () => now));
+        now = issued.AddSeconds(-1);
+        Assert.Throws<InvalidOperationException>(() => ActivationHumanProtocol.CodeProvider(identity, () => now));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SuppliedCodeStillRequiresNormalMfaResponseAndDoesNotDelayIntoAnotherStep(bool rejected)
+    {
+        var input = CoreInput("admin");
+        input = input with { Identity = input.Identity with { TotpSecret = null, TotpCode = "123456", TotpCodeCreatedAt = DateTimeOffset.UtcNow } };
+        var state = new ProtocolState { ExpectedManualCode = "123456", RejectManualCode = rejected };
+        var waits = 0;
+        Task<object> Run() => ActivationHumanProtocol.RunCoreAsync(input,
+            cookies => new HttpClient(new ProtocolHandler(state, cookies)) { BaseAddress = new Uri(input.Issuer) },
+            () => { }, _ => { waits++; return Task.CompletedTask; });
+        if (rejected)
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(Run);
+            Assert.Equal(0, state.Logins);Assert.Equal(0, state.Revocations);Assert.Equal(0, waits);
+        }
+        else
+        {
+            var report = JsonSerializer.Serialize(await Run(), Json);
+            Assert.DoesNotContain("123456", report);Assert.DoesNotContain("fixture-password", report);
+            Assert.Equal(2, state.Logins);Assert.Equal(8, state.Revocations);
+            Assert.Equal(1, waits); // Only the seed-based restricted actor waits.
+            Assert.All(state.Sessions.Values, session => Assert.True(session.Revoked));
+        }
+    }
+
+    [Fact]
+    public async Task ExpiredCodeFailsBeforeSendingAnyActorCredentials()
+    {
+        var input = CoreInput("admin");
+        input = input with { Identity = input.Identity with { TotpSecret = null, TotpCode = "123456", TotpCodeCreatedAt = DateTimeOffset.UtcNow.AddSeconds(-31) } };
+        var browsers = 0;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ActivationHumanProtocol.RunCoreAsync(input,
+            _ => { browsers++; throw new InvalidOperationException("must-not-open-browser"); }, () => { }));
+        Assert.Equal(0, browsers);
+    }
+
+    [Fact]
     public async Task RevocationUsesOnlyTheTwoSuppliedSessionTokensAndFailsOnServiceErrors()
     {
         var handler = new RevocationHandler();
@@ -149,6 +235,8 @@ public sealed class ActivationHumanProtocolTests
     private sealed class Session(string name) { public string Name { get; } = name; public bool Revoked { get; set; } }
     private sealed class ProtocolState
     {
+        public string? ExpectedManualCode { get; init; }
+        public bool RejectManualCode { get; init; }
         public Dictionary<string, Session> Sessions { get; } = [];
         public Dictionary<string, string> Codes { get; } = [];
         public Dictionary<string, string> Access { get; } = [];
@@ -199,6 +287,11 @@ public sealed class ActivationHumanProtocolTests
             if (path == "/account/mfa/challenge") return Page();
             if (path == "/account/mfa/challenge/totp")
             {
+                if (pending == "approved-admin" && state.ExpectedManualCode is not null)
+                {
+                    Assert.Equal(state.ExpectedManualCode, form!["Code"].ToString());
+                    if (state.RejectManualCode) return new(HttpStatusCode.BadRequest);
+                }
                 var sid = Guid.NewGuid().ToString("N"); state.Sessions[sid] = new(pending); state.Logins++;
                 Cookie("fixture-sso", sid);
                 return Redirect(form!["ReturnUrl"].ToString());

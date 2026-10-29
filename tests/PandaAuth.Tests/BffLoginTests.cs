@@ -6,15 +6,24 @@ namespace PandaAuth.Tests;
 
 public sealed class BffLoginTests
 {
-    [Fact]
-    public async Task PasswordSuccessCannotBypassTheRequiredMfaChallenge()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PasswordSuccessCannotBypassTheRequiredMfaChallenge(bool suppliedCode)
     {
         using var browser = new HttpClient(new MfaBypassHandler()) { BaseAddress = new Uri("https://localhost:39001/") };
         var settings = new LoadRequest { RunId = new string('a', 32), BaseUri = browser.BaseAddress.AbsoluteUri,
             RootCertificateFile = "/fixture/root.pem", Password = "synthetic-only", ClientSecret = "synthetic-only",
             Workload = "cookie", Concurrency = 1, DurationSeconds = 3, RecoveryScenario = true,
             RecoveryTotpKey = Convert.ToBase64String(new byte[32]) };
-        await Assert.ThrowsAsync<InvalidOperationException>(() => BffLogin.VerifyAsync(settings, browser));
+        if (suppliedCode)
+        {
+            var reads = 0;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => BffLogin.LoginAsync(browser, "admin", "fixture", "fixture-only", [],
+                currentCode: () => { reads++; return "123456"; }));
+            Assert.Equal(0, reads);
+        }
+        else await Assert.ThrowsAsync<InvalidOperationException>(() => BffLogin.VerifyAsync(settings, browser));
     }
 
     private sealed class MfaBypassHandler : HttpMessageHandler
