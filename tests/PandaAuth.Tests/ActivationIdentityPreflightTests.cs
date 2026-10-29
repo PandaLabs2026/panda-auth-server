@@ -55,6 +55,41 @@ public sealed class ActivationIdentityPreflightTests
         factor.RevokedAt = DateTimeOffset.UtcNow; await db.SaveChangesAsync();
         await Assert.ThrowsAsync<InvalidOperationException>(() => ActivationIdentityPreflight.CheckAsync(db, name, Hash(name), expected, true, DateTimeOffset.UtcNow));
     }
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ConfirmedTotpIsAuthoritativeRegardlessOfLegacyFlag(bool legacyFlag, bool administrator)
+    {
+        await using var db = new PandaAuthDbContext(new DbContextOptionsBuilder<PandaAuthDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        var now = DateTimeOffset.UtcNow;
+        var user = new PandaUser { Id = "approved-id", UserName = "approved-user", NormalizedUserName = "APPROVED-USER",
+            Status = UserStatus.Active, EmailConfirmed = true, TwoFactorEnabled = legacyFlag, PasswordHash = "synthetic-only" };
+        db.Users.Add(user);
+        if (administrator)
+        {
+            db.Roles.Add(new PandaRole { Id = "role", Name = "admin", NormalizedName = "ADMIN" });
+            db.UserRoles.Add(new PandaUserRole { UserId = user.Id, RoleId = "role" });
+        }
+        await db.SaveChangesAsync();
+        Task<bool> Check() => ActivationIdentityPreflight.CheckAsync(db, user.UserName, Hash(user.UserName), Hash(user.Id), administrator, now);
+        // Neither legacy value substitutes for a real confirmed, active factor.
+        await Assert.ThrowsAsync<InvalidOperationException>(Check);
+        var factor = new MfaTotpFactor { UserId = user.Id, CreatedAt = now };
+        db.TotpFactors.Add(factor); await db.SaveChangesAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(Check);
+        factor.ConfirmedAt = now; await db.SaveChangesAsync();
+        Assert.True(await Check());
+        Assert.Equal(legacyFlag, user.TwoFactorEnabled);
+        Assert.False(db.ChangeTracker.HasChanges());
+        factor.LastAcceptedTimeStep = now.ToUnixTimeSeconds() / 30 + 1; await db.SaveChangesAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(Check);
+        factor.LastAcceptedTimeStep = null; factor.RevokedAt = now; await db.SaveChangesAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(Check);
+    }
+
     private static string Hash(string value) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
     [Fact]
