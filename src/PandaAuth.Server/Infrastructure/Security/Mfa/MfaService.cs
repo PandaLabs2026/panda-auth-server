@@ -45,6 +45,7 @@ public sealed class MfaService(
     public async Task<bool> ConfirmLegacyReconfigurationAsync(
         string userId, Guid factorId, string code, CancellationToken cancellationToken)
     {
+        await using var transaction = await AccountSecurityTransaction.BeginAsync(db, cancellationToken);
         var user = await users.FindByIdAsync(userId) ?? throw new MfaPolicyException("User not found.");
         if (!user.TwoFactorEnabled) throw new MfaPolicyException("MFA reconfiguration is not required.");
         if (!user.EmailConfirmed) throw new MfaPolicyException("Email confirmation is required.");
@@ -52,30 +53,27 @@ public sealed class MfaService(
         user.TwoFactorEnabled = false;
         var result = await users.UpdateAsync(user);
         if (!result.Succeeded) throw new MfaPolicyException("MFA reconfiguration could not be completed.");
+        await transaction.CommitAsync(cancellationToken);
         return true;
     }
 
     public async Task<bool> ConfirmEnrollmentAsync(
         string userId, ClaimsPrincipal principal, Guid factorId, string code, CancellationToken cancellationToken)
     {
+        await using var transaction = await AccountSecurityTransaction.BeginAsync(db, cancellationToken);
         await RequireEnrollmentPolicyAsync(userId, principal, cancellationToken);
         var confirmed = await totpFactors.ConfirmAsync(userId, factorId, code, cancellationToken);
         if (!confirmed) return false;
-        // 轮换收口：新因子确认成功即撤销其余确认因子——换绑全程旧因子保持可用，
-        // 不存在无因子窗口；到达此处的路径都已验证现有因子（self.totp-enroll 授权
-        // 要求 TOTP+密码），恢复码不作废（比原撤销路径的 amr 窗验证更强）。
-        var superseded = await db.TotpFactors
-            .Where(item => item.UserId == userId && item.RevokedAt == null && item.ConfirmedAt != null && item.Id != factorId)
-            .ToListAsync(cancellationToken);
-        foreach (var stale in superseded)
-            stale.RevokedAt = clock.GetUtcNow();
-        if (superseded.Count > 0) await db.SaveChangesAsync(cancellationToken);
+        // TotpFactorService joins this transaction; factor replacement and legacy state
+        // must commit together. Rotation keeps existing recovery codes unchanged.
         var user = await users.FindByIdAsync(userId);
         if (user is not null && user.TwoFactorEnabled)
         {
             user.TwoFactorEnabled = false;
-            await users.UpdateAsync(user);
+            var result = await users.UpdateAsync(user);
+            if (!result.Succeeded) throw new MfaPolicyException("MFA reconfiguration could not be completed.");
         }
+        await transaction.CommitAsync(cancellationToken);
         return true;
     }
 

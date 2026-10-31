@@ -702,6 +702,9 @@ public sealed class AdminUsersController(
         await using var transaction = db.Database.IsRelational()
             ? await db.Database.BeginTransactionAsync(cancellationToken)
             : null;
+        // Enrollment may be committing a replacement pending factor. Lock before reading
+        // the factor set so a successful reset cannot miss that in-flight factor.
+        await AccountSecurityTransaction.LockUserAsync(db, user.Id, cancellationToken);
         user.TwoFactorEnabled = false;
         foreach (var factor in await db.TotpFactors.Where(item => item.UserId == user.Id && item.RevokedAt == null).ToListAsync(cancellationToken)) factor.RevokedAt = now;
 

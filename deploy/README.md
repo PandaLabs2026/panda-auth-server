@@ -39,6 +39,28 @@
 
 若以容器编排运行 Server：一次性迁移等价于**用同一镜像执行一次 `--migrate`**（例如 `docker compose --profile migrate run --rm <server-migrate 服务>`，具体项目名与服务名由你的编排定义），通过环境变量提供 `ConnectionStrings:Migration` 与全部种子配置。结构变化前先 `pg_dump -Fc` 备份，并在临时 postgres:18 容器验证可恢复，不得覆盖既有数据库。通过一次性迁移账号执行结构变化，不依赖常驻服务启动迁移，不为运行角色扩大 DDL 权限。
 
+## TOTP 换绑迁移（AllowTotpRotation）
+
+`20261031111911_AllowTotpRotation` 将原来每个用户仅一条未撤销 TOTP 的
+唯一索引替换为两条过滤唯一索引：最多一个已确认因子和一个待确认因子。
+迁移不删除/重写因子、密钥或恢复码；历史迁移保持不变。
+对应服务实现先验证新验证码，在同一事务中撤旧、确认新因子并更新遗留账户标记；
+注册、确认、验证与管理员重置的因子枚举按用户行锁串行化。
+外部读者在提交前仍看到旧已确认因子，
+失败会回滚整次替换，恢复码保持原策略。
+
+激活必须遵循上节的一次性 migrator、维护窗口、专属备份及隔离恢复验证：
+停止旧 Server 写入后执行迁移，再启动对应新制品，不能滚动混跑旧换绑逻辑。
+本说明及源码合并不构成执行生产迁移或部署的授权。
+
+镜像回退不会回滚数据库。旧唯一索引不能容纳正在换绑的 confirmed/pending 对；
+存在这种数据时 EF `Down` 会失败并整体回滚，不会为了降级自动撤销或删除因子。
+优先采用前向修复；如需库结构降级，必须在独立维护流程中先核实已无双行过渡状态，
+保留恢复材料并重新验证旧制品兼容性，不得直接删数据以通过唯一约束。
+
+隔离回归：`dotnet test tests/PandaAuth.Tests/PandaAuth.Tests.csproj --no-restore --filter FullyQualifiedName~TotpRotationPostgresTests`。
+须使用测试夹具允许的可丢弃 PostgreSQL；未提供 `PANDA_AUTH_TEST_POSTGRES` 的跳过不是通过。
+
 ## 开发构建与验证
 
 按本仓 global.json 准备 .NET SDK，Share 必须同级克隆。以下从本仓根目录执行：

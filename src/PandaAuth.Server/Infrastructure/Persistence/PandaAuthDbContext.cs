@@ -212,7 +212,10 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
             entity.Property(x => x.Ciphertext).IsRequired();
             entity.Property(x => x.Tag).IsRequired();
             entity.Property(x => x.ConcurrencyStamp).IsConcurrencyToken();
-            entity.HasIndex(x => x.UserId).IsUnique().HasFilter("\"RevokedAt\" IS NULL");
+            entity.HasIndex(x => x.UserId, "IX_panda_totp_factors_UserId_Confirmed")
+                .IsUnique().HasFilter("\"RevokedAt\" IS NULL AND \"ConfirmedAt\" IS NOT NULL");
+            entity.HasIndex(x => x.UserId, "IX_panda_totp_factors_UserId_Pending")
+                .IsUnique().HasFilter("\"RevokedAt\" IS NULL AND \"ConfirmedAt\" IS NULL");
             entity.HasOne<PandaUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
         });
 
