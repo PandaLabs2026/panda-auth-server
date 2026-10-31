@@ -595,9 +595,13 @@ namespace PandaAuth.Server.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("UserId")
+                    b.HasIndex(new[] { "UserId" }, "IX_panda_totp_factors_UserId_Confirmed")
                         .IsUnique()
-                        .HasFilter("\"RevokedAt\" IS NULL");
+                        .HasFilter("\"RevokedAt\" IS NULL AND \"ConfirmedAt\" IS NOT NULL");
+
+                    b.HasIndex(new[] { "UserId" }, "IX_panda_totp_factors_UserId_Pending")
+                        .IsUnique()
+                        .HasFilter("\"RevokedAt\" IS NULL AND \"ConfirmedAt\" IS NULL");
 
                     b.ToTable("panda_totp_factors", (string)null);
                 });

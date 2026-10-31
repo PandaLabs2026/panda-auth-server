@@ -13,13 +13,17 @@ public sealed class TotpFactorService(PandaAuthDbContext db, TotpSecretProtector
     public async Task<TotpEnrollment> BeginEnrollmentAsync(
         string userId, CancellationToken cancellationToken)
     {
+        await using var transaction = await AccountSecurityTransaction.BeginAsync(db, cancellationToken);
+        await AccountSecurityTransaction.LockUserAsync(db, userId, cancellationToken);
         var pending = await db.TotpFactors
             .Where(item => item.UserId == userId && item.RevokedAt == null && item.ConfirmedAt == null)
             .ToListAsync(cancellationToken);
         foreach (var pendingFactor in pending)
             pendingFactor.RevokedAt = clock.GetUtcNow();
+        // Release the pending slot before inserting, but roll both writes back on failure.
+        if (pending.Count > 0) await db.SaveChangesAsync(cancellationToken);
         // 轮换注册（AUTH-DELIVERY-002）：允许已有确认因子时再开一个 pending——旧因子在
-        // 新因子确认成功时由 MfaService.ConfirmEnrollmentAsync 原子撤销。先撤后建会在
+        // 新因子确认成功时由 ConfirmAsync 在同一事务内撤销。先撤后建会在
         // 「撤了旧的、新的未确认」间留下无因子窗口（确认失败即锁死），故必须并存过渡。
 
         var factor = new MfaTotpFactor { Id = Guid.NewGuid(), UserId = userId, CreatedAt = clock.GetUtcNow() };
@@ -31,6 +35,7 @@ public sealed class TotpFactorService(PandaAuthDbContext db, TotpSecretProtector
         factor.Tag = protectedSecret.Tag;
         db.TotpFactors.Add(factor);
         await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
 
         var encoded = Base32(secret);
         return new TotpEnrollment(factor.Id, encoded,
@@ -43,6 +48,8 @@ public sealed class TotpFactorService(PandaAuthDbContext db, TotpSecretProtector
 
     public async Task<bool> ConfirmAsync(string userId, Guid factorId, string code, CancellationToken cancellationToken)
     {
+        await using var transaction = await AccountSecurityTransaction.BeginAsync(db, cancellationToken);
+        await AccountSecurityTransaction.LockUserAsync(db, userId, cancellationToken);
         // 只允许确认“待确认”因子：已确认因子只能走 VerifyAsync/assert，不能借确认端点重新获得 MFA 事实。
         var factor = await db.TotpFactors.SingleOrDefaultAsync(
             item => item.Id == factorId && item.UserId == userId && item.RevokedAt == null && item.ConfirmedAt == null,
@@ -51,20 +58,31 @@ public sealed class TotpFactorService(PandaAuthDbContext db, TotpSecretProtector
         if (clock.GetUtcNow() - factor.CreatedAt > PendingLifetime) return false;
         var secret = protector.Unprotect(userId, factor.Id, new ProtectedTotpSecret(factor.KeyVersion, factor.Nonce, factor.Ciphertext, factor.Tag));
         if (!TotpVerifier.TryVerify(secret, code, clock.GetUtcNow(), factor.LastAcceptedTimeStep, out var step)) return false;
+        // The confirmed slot is unique. Revoke before promoting, within one transaction:
+        // other connections keep seeing the old factor until the entire replacement commits.
+        var superseded = await db.TotpFactors
+            .Where(item => item.UserId == userId && item.RevokedAt == null && item.ConfirmedAt != null)
+            .ToListAsync(cancellationToken);
+        foreach (var stale in superseded) stale.RevokedAt = clock.GetUtcNow();
+        if (superseded.Count > 0) await db.SaveChangesAsync(cancellationToken);
         factor.LastAcceptedTimeStep = step;
         factor.ConfirmedAt = clock.GetUtcNow();
         await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return true;
     }
 
     public async Task<bool> VerifyAsync(string userId, string code, CancellationToken cancellationToken)
     {
+        await using var transaction = await AccountSecurityTransaction.BeginAsync(db, cancellationToken);
+        await AccountSecurityTransaction.LockUserAsync(db, userId, cancellationToken);
         var factor = await db.TotpFactors.SingleOrDefaultAsync(item => item.UserId == userId && item.RevokedAt == null && item.ConfirmedAt != null, cancellationToken);
         if (factor is null) return false;
         var secret = protector.Unprotect(userId, factor.Id, new ProtectedTotpSecret(factor.KeyVersion, factor.Nonce, factor.Ciphertext, factor.Tag));
         if (!TotpVerifier.TryVerify(secret, code, clock.GetUtcNow(), factor.LastAcceptedTimeStep, out var step)) return false;
         factor.LastAcceptedTimeStep = step;
         await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return true;
     }
 
