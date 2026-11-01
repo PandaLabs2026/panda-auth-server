@@ -77,3 +77,9 @@ EF 工具版本在 [.config/dotnet-tools.json](../.config/dotnet-tools.json)。�
 ## 镜像
 
 Server 的 Dockerfile 需要工作区根上下文，以包含同级 Share；本文件不提供生产镜像发布入口。镜像、数据库、反向代理与探活属于各部署方运维范围，不通过手工 push 或 scp 交付；社区用户只应使用本仓的本地构建和隔离数据库步骤。
+
+### 首激活与本次 TOTP 迁移的兼容边界
+
+`--migrate-admin-resource-only` 先在现有数据库租约和停写维护前提下核对迁移历史前缀与已审核待执行迁移，再捕获受保护状态。当前允许签名生命周期、空 WebAuthn 表退役及 TOTP 双槽索引迁移。未知/缺口历史、未审核的新迁移，以及退役 WebAuthn 表中存在任意行（含已撤销凭据），均在 DDL 前拒绝；不得删凭据来通过门禁。空表退役只排除该空表，历史比较只排除本次确认新增的迁移记录；已有历史与其余受保护数据仍逐表校验，迁移后要求完整目标历史。契约由 PandaAuth 协调仓 `docs/contracts/auth-r1-operational-readiness.md` 拥有。
+
+真实恢复回归 `ResourceMigration_PgDumpRestorePreservesStateAndAdmission` 在显式隔离 PG 测试实例上需要同主版本 `pg_dump`/`pg_restore` 工具。测试使用私有任务目录、仅合成数据库，通过真实备份/恢复比较受保护状态，并分别验证空表升级与非空表 DDL 前拒绝；不构成生产恢复验收。普通镜像回退不回滚数据库，首激活不兼容实例须保持维护并另审数据迁移方案。
