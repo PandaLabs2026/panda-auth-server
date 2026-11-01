@@ -35,8 +35,13 @@ public sealed class MfaService(
     public async Task<TotpEnrollment> BeginEnrollmentAsync(
         string userId, ClaimsPrincipal principal, CancellationToken cancellationToken)
     {
+        await using var transaction = await AccountSecurityTransaction.BeginAsync(db, cancellationToken);
+        // Policy must observe a reset that committed while this request waited for the user.
+        await AccountSecurityTransaction.LockUserAsync(db, userId, cancellationToken);
         await RequireEnrollmentPolicyAsync(userId, principal, cancellationToken);
-        return await totpFactors.BeginEnrollmentAsync(userId, cancellationToken);
+        var enrollment = await totpFactors.BeginEnrollmentAsync(userId, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return enrollment;
     }
 
     public Task RequireEnrollmentAsync(string userId, ClaimsPrincipal principal, CancellationToken cancellationToken)

@@ -391,6 +391,37 @@ public sealed class TotpRotationPostgresTests
         return (user, Service(db));
     }
 
+    [PostgresFact]
+    public async Task EnrollmentWaitingForReset_RechecksThePasswordSessionAfterTheLock()
+    {
+        await using var fixture = await AuthQualityPostgresFixture.CreateAsync();
+        await using var scope = fixture.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        var (user, service) = await CreateUserAsync(db);
+        var principal = new ClaimsPrincipal(new ClaimsIdentity([
+            new Claim(ClaimTypes.NameIdentifier, user.Id),
+            new Claim(LoginSessionService.AuthenticatedAtClaim, Clock.GetUtcNow().AddSeconds(-1).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture)),
+        ], LoginSessionService.Scheme));
+        await using var resetScope = fixture.Services.CreateAsyncScope();
+        var resetDb = resetScope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        await using var reset = await resetDb.Database.BeginTransactionAsync();
+        await resetDb.Database.ExecuteSqlInterpolatedAsync($"SELECT 1 FROM panda_users WHERE \"Id\" = {user.Id} FOR UPDATE");
+        resetDb.MfaRecoveryEvents.Add(new MfaRecoveryEvent
+        {
+            ActorUserId = user.Id, TargetUserId = user.Id, Reason = MfaRecoveryEvent.AdminResetReason,
+            AuthenticationMethod = MfaClaimTypes.Totp, CreatedAt = Clock.GetUtcNow(),
+        });
+        await resetDb.SaveChangesAsync();
+        var enrollment = service.BeginEnrollmentAsync(user.Id, principal, default);
+        var blocked = false;
+        try { blocked = await BothRequestsBlockedAsync(resetDb, minimum: 1); }
+        finally { await reset.CommitAsync(); }
+        Assert.True(blocked, "Enrollment must wait while the reset event is uncommitted.");
+        await Assert.ThrowsAsync<MfaPolicyException>(() => enrollment);
+        db.ChangeTracker.Clear();
+        Assert.Empty(await db.TotpFactors.Where(factor => factor.UserId == user.Id && factor.RevokedAt == null).ToListAsync());
+    }
+
     private static MfaService Service(PandaAuthDbContext db)
     {
         var users = new UserService(db, new Argon2idPasswordHasher(), Clock);
