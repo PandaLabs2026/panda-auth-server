@@ -116,14 +116,14 @@ public sealed class StartupConfigurationProcessTests
         Assert.Empty(await db.SigningKeys.ToListAsync());
         Assert.Empty(await db.Users.ToListAsync());
         var migrations = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
-        Assert.Equal(OperationalCommand.SigningMigration, migrations[^1]);
-        await db.GetService<IMigrator>().MigrateAsync(migrations[^2]);
+        Assert.Contains(OperationalCommand.SigningMigration, migrations);
+        await db.GetService<IMigrator>().MigrateAsync(migrations[Array.IndexOf(migrations, OperationalCommand.SigningMigration) - 1]);
         var legacy = await process.RunAsync(["--security-state"]);
         Assert.Equal(0, legacy.Code);
         using var old = JsonDocument.Parse(legacy.Output);
         Assert.Equal("legacy", old.RootElement.GetProperty("compatibility").GetString());
         Assert.Equal(upgraded.RootElement.GetProperty("databaseFingerprint").GetString(), old.RootElement.GetProperty("databaseFingerprint").GetString());
-        Assert.Equal(migrations.Length - 1, (await db.Database.GetAppliedMigrationsAsync()).Count());
+        Assert.Equal(Array.IndexOf(migrations, OperationalCommand.SigningMigration), (await db.Database.GetAppliedMigrationsAsync()).Count());
     }
 
     [PostgresFact]
@@ -174,7 +174,7 @@ public sealed class StartupConfigurationProcessTests
         db.Users.Add(new PandaUser { Id = Guid.NewGuid().ToString(), UserName = "fixture-existing", PasswordHash = "unchanged", SecurityStamp = "unchanged" });
         await db.SaveChangesAsync();
         var migrations = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
-        await db.GetService<IMigrator>().MigrateAsync(migrations[^2]);
+        await db.GetService<IMigrator>().MigrateAsync(migrations[Array.IndexOf(migrations, OperationalCommand.SigningMigration) - 1]);
         await using var process = new ProcessFixture();
         process.Environment["ConnectionStrings__Migration"] = db.Database.GetConnectionString()!;
         process.Environment["Auth__Seed__Admin__Email"] = "must-not-create@example.invalid";
@@ -202,7 +202,7 @@ public sealed class StartupConfigurationProcessTests
         using var scope = database.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
         var migrations = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
-        await db.GetService<IMigrator>().MigrateAsync(migrations[^2]);
+        await db.GetService<IMigrator>().MigrateAsync(migrations[Array.IndexOf(migrations, OperationalCommand.SigningMigration) - 1]);
         await using var process = new ProcessFixture();
         process.Environment["ConnectionStrings__Migration"] = db.Database.GetConnectionString()!;
         var result = await process.RunAsync(["--migrate-admin-resource-only"]);
@@ -227,7 +227,7 @@ public sealed class StartupConfigurationProcessTests
             ClientSecret = "synthetic-original-secret",
         });
         var migrations = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
-        await db.GetService<IMigrator>().MigrateAsync(migrations[^2]);
+        await db.GetService<IMigrator>().MigrateAsync(migrations[Array.IndexOf(migrations, OperationalCommand.SigningMigration) - 1]);
         await db.Database.ExecuteSqlRawAsync("""
             CREATE FUNCTION public.panda_r1_resource_failure() RETURNS trigger LANGUAGE plpgsql AS
             $$ BEGIN RAISE EXCEPTION 'synthetic-resource-write-fault'; END $$;
@@ -244,6 +244,132 @@ public sealed class StartupConfigurationProcessTests
         Assert.DoesNotContain(OpenIddictConstants.Permissions.Prefixes.Scope + PandaAuthAdminApi.Scope, app.Permissions ?? "");
         Assert.DoesNotContain("synthetic-resource-write-fault", result.Output + result.Error);
         Assert.Empty(Directory.GetFiles(process.Root, "*.xml", SearchOption.AllDirectories));
+    }
+
+    [PostgresFact]
+    public async Task ResourceMigration_RejectsUnprotectedLegacyCredentialRemovalBeforeDdl()
+    {
+        await using var database = await AuthQualityPostgresFixture.CreateAsync();
+        using var scope = database.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        var migrations = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
+        await db.GetService<IMigrator>().MigrateAsync(migrations[Array.IndexOf(migrations, OperationalCommand.SigningMigration) - 1]);
+        await scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>().CreateAsync(new OpenIddictApplicationDescriptor
+        {
+            ClientId = FirstPartyClients.AdminWeb, ClientType = OpenIddictConstants.ClientTypes.Confidential,
+            ClientSecret = "synthetic-original-secret",
+        });
+        var user = new PandaUser { Id = Guid.NewGuid().ToString(), UserName = "synthetic-legacy-owner" };
+        db.Users.Add(user); await db.SaveChangesAsync();
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO panda_webauthn_credentials
+              ("Id","UserId","CredentialId","PublicKeyCose","SignatureCounter","Aaguid","BackupEligible","BackupState","CreatedAt","UpdatedAt")
+            VALUES ({Guid.NewGuid()}, {user.Id}, decode('01','hex'), decode('02','hex'), 0,
+                    '00000000-0000-0000-0000-000000000000', false, false, now(), now())
+            """);
+        var before = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
+        await using var process = new ProcessFixture();
+        process.Environment["ConnectionStrings__Migration"] = db.Database.GetConnectionString()!;
+        var result = await process.RunAsync(["--migrate-admin-resource-only"]);
+        Assert.Equal(2, result.Code);
+        Assert.Equal(before, (await db.Database.GetAppliedMigrationsAsync()).ToArray());
+        Assert.Equal(1, await db.Database.SqlQueryRaw<int>("SELECT count(*)::int AS \"Value\" FROM panda_webauthn_credentials").SingleAsync());
+        Assert.Empty(await db.Set<OpenIddictEntityFrameworkCoreScope>().ToListAsync());
+    }
+
+    [PostgresTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ResourceMigration_PgDumpRestorePreservesStateAndAdmission(bool populated)
+    {
+        await using var source = await AuthQualityPostgresFixture.CreateAsync();
+        await using var restored = await AuthQualityPostgresFixture.CreateAsync();
+        using var sourceScope = source.Services.CreateScope();
+        using var restoredScope = restored.Services.CreateScope();
+        var db = sourceScope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        var target = restoredScope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        var migrations = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
+        await db.GetService<IMigrator>().MigrateAsync(migrations[Array.IndexOf(migrations, OperationalCommand.SigningMigration) - 1]);
+        await sourceScope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>().CreateAsync(new OpenIddictApplicationDescriptor
+        {
+            ClientId = FirstPartyClients.AdminWeb, ClientType = OpenIddictConstants.ClientTypes.Confidential,
+            ClientSecret = "synthetic-restored-secret",
+        });
+        var user = new PandaUser { Id = Guid.NewGuid().ToString(), UserName = "synthetic-restored-owner", SecurityStamp = "synthetic-preserved-stamp" };
+        db.Users.Add(user); await db.SaveChangesAsync();
+        if (populated)
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO panda_webauthn_credentials
+                  ("Id","UserId","CredentialId","PublicKeyCose","SignatureCounter","Aaguid","BackupEligible","BackupState","CreatedAt","UpdatedAt")
+                VALUES ({Guid.NewGuid()}, {user.Id}, decode('01','hex'), decode('02','hex'), 0,
+                        '00000000-0000-0000-0000-000000000000', false, false, now(), now())
+                """);
+        var expected = await ActivationPreservation.CaptureAsync(db.Database.GetConnectionString()!);
+        await using var process = new ProcessFixture();
+        var backup = Path.Combine(process.Root, "synthetic.dump");
+        await RunPostgresToolAsync("pg_dump", db.Database.GetConnectionString()!, process.Root,
+            ["--format=custom", "--no-owner", "--no-acl", "--file", backup]);
+        await RunPostgresToolAsync("pg_restore", target.Database.GetConnectionString()!, process.Root,
+            ["--clean", "--if-exists", "--no-owner", "--no-acl", "--exit-on-error", "--dbname", target.Database.GetDbConnection().Database, backup]);
+        ActivationPreservation.RequireUnchanged(expected, await ActivationPreservation.CaptureAsync(target.Database.GetConnectionString()!));
+        process.Environment["ConnectionStrings__Migration"] = target.Database.GetConnectionString()!;
+        var result = await process.RunAsync(["--migrate-admin-resource-only"]);
+        Assert.Equal(populated ? 2 : 0, result.Code);
+        if (populated)
+        {
+            ActivationPreservation.RequireUnchanged(expected, await ActivationPreservation.CaptureAsync(target.Database.GetConnectionString()!));
+            Assert.Equal(1, await target.Database.SqlQueryRaw<int>("SELECT count(*)::int AS \"Value\" FROM panda_webauthn_credentials").SingleAsync());
+        }
+        else
+        {
+            Assert.Equal(target.Database.GetMigrations(), await target.Database.GetAppliedMigrationsAsync());
+            Assert.Equal("synthetic-preserved-stamp", (await target.Users.AsNoTracking().SingleAsync()).SecurityStamp);
+            Assert.Equal(0, (await process.RunAsync(["--migrate-admin-resource-only"])).Code);
+        }
+    }
+
+    [PostgresTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ResourceMigration_UnreviewedOrGappedHistoryRejectsBeforeChanges(bool gap)
+    {
+        await using var fixture = await AuthQualityPostgresFixture.CreateAsync();
+        using var scope = fixture.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        await scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>().CreateAsync(new OpenIddictApplicationDescriptor
+        {
+            ClientId = FirstPartyClients.AdminWeb, ClientType = OpenIddictConstants.ClientTypes.Confidential,
+            ClientSecret = "synthetic-original-secret",
+        });
+        if (gap)
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM \"__EFMigrationsHistory\" WHERE \"MigrationId\" = {OperationalCommand.SigningMigration}");
+        else
+            await db.Database.ExecuteSqlRawAsync("INSERT INTO \"__EFMigrationsHistory\" VALUES ('20990101000000_Unreviewed','10.0.12')");
+        var before = await ActivationPreservation.CaptureAsync(db.Database.GetConnectionString()!);
+        await using var process = new ProcessFixture();
+        process.Environment["ConnectionStrings__Migration"] = db.Database.GetConnectionString()!;
+        Assert.Equal(2, (await process.RunAsync(["--migrate-admin-resource-only"])).Code);
+        ActivationPreservation.RequireUnchanged(before, await ActivationPreservation.CaptureAsync(db.Database.GetConnectionString()!));
+    }
+
+    private static async Task RunPostgresToolAsync(string tool, string connection, string root, string[] arguments)
+    {
+        var endpoint = new Npgsql.NpgsqlConnectionStringBuilder(connection);
+        PostgresTestBoundary.ValidateEndpoint(endpoint, PostgresTestBoundary.SharedMode);
+        var start = new ProcessStartInfo(tool) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var name in start.Environment.Keys.Where(name => name.StartsWith("PG", StringComparison.OrdinalIgnoreCase)).ToArray()) start.Environment.Remove(name);
+        start.Environment["PGHOST"] = endpoint.Host; start.Environment["PGPORT"] = endpoint.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        start.Environment["PGUSER"] = endpoint.Username; start.Environment["PGPASSWORD"] = endpoint.Password ?? "";
+        start.Environment["PGDATABASE"] = endpoint.Database; start.Environment["PGSSLMODE"] = "disable";
+        start.Environment["PGPASSFILE"] = Path.Combine(root, "unused-passfile");
+        start.Environment["PGSERVICEFILE"] = Path.Combine(root, "unused-servicefile");
+        start.ArgumentList.Add("--no-password"); foreach (var argument in arguments) start.ArgumentList.Add(argument);
+        using var process = Process.Start(start)!;
+        var stdout = process.StandardOutput.ReadToEndAsync(); var stderr = process.StandardError.ReadToEndAsync();
+        try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60)); }
+        finally { if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); } }
+        await stdout; await stderr;
+        Assert.True(process.ExitCode == 0, tool + " failed against the task-owned fixture database.");
     }
 
     private sealed class ProcessFixture : IAsyncDisposable
@@ -268,6 +394,7 @@ public sealed class StartupConfigurationProcessTests
         internal ProcessFixture()
         {
             Directory.CreateDirectory(Root);
+            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(Root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             Environment["Auth__DataProtectionKeyPath"] = Root;
         }
 

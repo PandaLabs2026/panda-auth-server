@@ -4,13 +4,14 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Npgsql;
+using Microsoft.EntityFrameworkCore;
 using OpenIddict.Abstractions;
 using PandaAuth.Server.Configuration;
 using PandaAuth.Shared;
 
 namespace PandaAuth.Server.Infrastructure.Persistence;
 
-public sealed record ActivationDataState(Dictionary<string,string> Tables, bool AddAdminPermission, bool CreateAdminScope);
+public sealed record ActivationDataState(Dictionary<string,string> Tables, bool AddAdminPermission, bool CreateAdminScope, IReadOnlySet<string>? AddedMigrations = null);
 
 /// <summary>Cold activation invariants. No identities, private material or row contents leave this process.</summary>
 public static class ActivationPreservation
@@ -37,6 +38,31 @@ public static class ActivationPreservation
             row.Remove("ConcurrencyToken");
         }
         return Canonical(row)!.ToJsonString();
+    }
+
+    // Resource-only activation may apply only reviewed, row-preserving migrations.
+    // A retired credential table is removable only when the protected snapshot proves it empty.
+    public static async Task<ActivationDataState> PrepareAsync(PandaAuthDbContext db, string connection)
+    {
+        var known = db.Database.GetMigrations().ToArray();
+        var applied = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
+        Require(applied.SequenceEqual(known.Take(applied.Length), StringComparer.Ordinal));
+        var pending = known.Skip(applied.Length).ToHashSet(StringComparer.Ordinal);
+        var reviewed = new HashSet<string>(StringComparer.Ordinal)
+        {
+            OperationalCommand.SigningMigration,
+            "20261026120000_DropWebAuthnCredentials",
+            "20261031111911_AllowTotpRotation",
+        };
+        Require(pending.IsSubsetOf(reviewed));
+        var original = await CaptureAsync(connection);
+        if (pending.Contains("20261026120000_DropWebAuthnCredentials"))
+        {
+            Require(original.Tables.TryGetValue("panda_webauthn_credentials", out var hash)
+                && hash == Convert.ToHexStringLower(SHA256.HashData(Array.Empty<byte>())));
+            original.Tables.Remove("panda_webauthn_credentials");
+        }
+        return original with { AddedMigrations = pending };
     }
 
     public static async Task<ActivationDataState> CaptureAsync(string connectionString,ActivationDataState? original=null)
@@ -72,7 +98,7 @@ public static class ActivationPreservation
                 Require(!reader.IsDBNull(0));var json=reader.GetString(0);
                 totalBytes+=Encoding.UTF8.GetByteCount(json);Require(totalBytes<=64*1024*1024);
                 var row=JsonNode.Parse(json)!.AsObject();
-                if(table=="__EFMigrationsHistory" && row["MigrationId"]?.GetValue<string>()==OperationalCommand.SigningMigration) continue;
+                if(table=="__EFMigrationsHistory" && original?.AddedMigrations?.Contains(row["MigrationId"]?.GetValue<string>() ?? "") == true) continue;
                 if(table=="OpenIddictScopes" && createScope && row["Name"]?.GetValue<string>()==PandaAuthAdminApi.Scope)
                 {
                     var resources=JsonSerializer.Deserialize<string[]>(row["Resources"]?.GetValue<string>() ?? "[]") ?? [];

@@ -41,8 +41,11 @@ public static class AdminResourceMigrationCommand
             await using var lease = await DatabaseLease.AcquireAsync(connection);
             // Reject missing/incompatible existing registrations before any DDL.
             await AdminResourceActivation.ValidateSourceAsync(scope.ServiceProvider);
-            var original = await ActivationPreservation.CaptureAsync(connection);
-            await scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>().Database.MigrateAsync();
+            var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+            var original = await ActivationPreservation.PrepareAsync(db, connection);
+            await db.Database.MigrateAsync();
+            if (!(await db.Database.GetAppliedMigrationsAsync()).SequenceEqual(db.Database.GetMigrations(), StringComparer.Ordinal))
+                throw new InvalidOperationException("activation_migration_history_mismatch");
             await AdminResourceActivation.ApplyAsync(scope.ServiceProvider);
             ActivationPreservation.RequireUnchanged(original, await ActivationPreservation.CaptureAsync(connection, original));
             OperationalCommand.Write(output, new { Schema = 1, Valid = true, Operation = Capability });
