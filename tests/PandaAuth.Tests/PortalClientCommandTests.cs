@@ -74,8 +74,7 @@ public class PortalClientCommandTests
     [InlineData("--register-portal-client --client-id arbitrary")]
     public async Task ActualProcess_RejectsModesBeforeProviderOrKeys(string args)
     {
-        var executable = Path.GetFullPath("../../../../../src/PandaAuth.Server/bin/Debug/net10.0/PandaAuth.Server.dll", AppContext.BaseDirectory);
-        var start = new ProcessStartInfo("dotnet", executable + " " + args) { RedirectStandardOutput = true, RedirectStandardError = true };
+        var start = TestPaths.ServerCommand(args.Split(' '));
         start.Environment["ASPNETCORE_ENVIRONMENT"] = "Production";
         start.Environment["ConnectionStrings__Default"] = "Host=127.0.0.1;Port=1;Database=unreachable;Username=fixture;Password=fixture;Timeout=1";
         using var process = Process.Start(start)!;

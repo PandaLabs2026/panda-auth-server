@@ -786,8 +786,7 @@ public class DbSeederTests
         // me/callback/logout/pandaauth，默认值若为裸根 /me/，end-session 会因
         // post_logout_redirect_uri 全等失配被拒。与 deploy/verify-me-callback.sh 的
         // ②④⑥⑧ 与条数不变式同口径，仓内先行卡住漂移。
-        var serverDirectory = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "PandaAuth.Server"));
+        var serverDirectory = Path.Combine(TestPaths.Repository(), "src", "PandaAuth.Server");
 
         var options = new ConfigurationBuilder()
             .SetBasePath(serverDirectory)
@@ -814,8 +813,7 @@ public class DbSeederTests
     public async Task DevelopmentConfig_SeedsFreshDatabaseWithoutThrowing()
     {
         // 回归：全新空库 + Development 配置启动即播种不抛异常（旧结构缺 MeClientSecret 会硬失败）。
-        var serverDirectory = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "PandaAuth.Server"));
+        var serverDirectory = Path.Combine(TestPaths.Repository(), "src", "PandaAuth.Server");
 
         var configuration = new ConfigurationBuilder()
             .SetBasePath(serverDirectory)

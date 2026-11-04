@@ -9,10 +9,23 @@ internal static class CloudConfigRegistration
 {
     internal static void Validate(AuthOptions options)
     {
+        if (options.Seed.CloudConfig.FleetReadEnabled && (!options.Seed.CloudConfig.Enabled || !options.Seed.FleetAdminWeb.Enabled))
+            throw new InvalidOperationException("CLOUD_CONFIG_FLEET_REGISTRATION_INVALID");
         if (!options.Seed.CloudConfig.Enabled) return;
         if (!string.Equals(options.Issuer, CloudConfigScopes.Issuer, StringComparison.Ordinal) ||
             string.IsNullOrWhiteSpace(options.Seed.CloudConfig.ClientSecret))
             throw new InvalidOperationException("CLOUD_CONFIG_REGISTRATION_INVALID");
+    }
+
+    internal static async Task ValidateFleetReadClientAsync(IOpenIddictApplicationManager applications, CloudConfigSeedOptions options)
+    {
+        if (!options.FleetReadEnabled) return;
+        var fleet = await applications.FindByClientIdAsync(FirstPartyClients.FleetAdminWeb);
+        if (fleet is null) return;
+        var permissions = await applications.GetPermissionsAsync(fleet);
+        if (CloudConfigScopes.All.Where(scope => scope != CloudConfigScopes.Read)
+            .Any(scope => permissions.Contains(Permissions.Prefixes.Scope + scope)))
+            throw new InvalidOperationException("CLOUD_CONFIG_FLEET_CLIENT_DRIFT");
     }
 
     internal static async Task SeedAsync(IOpenIddictApplicationManager applications,

@@ -63,8 +63,6 @@ public sealed class IdentityViewRenderingTests
 
     private static string RepositoryRoot()
     {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "PandaAuth.Server.slnx"))) directory = directory.Parent;
-        return directory?.FullName ?? throw new InvalidOperationException("Server source root missing");
+        return TestPaths.Repository();
     }
 }

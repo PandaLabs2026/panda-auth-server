@@ -101,8 +101,59 @@ public sealed class CloudConfigRegistrationTests
         Assert.Null(await applications.FindByClientIdAsync(FirstPartyClients.CloudConsoleWeb));
     }
 
+    [Fact]
+    public async Task FleetRead_DefaultClosedDoesNotWidenFleetClient()
+    {
+        using var provider=Provider(fleet:true);await DbSeeder.SeedAsync(provider);
+        var manager=provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var fleet=await manager.FindByClientIdAsync(FirstPartyClients.FleetAdminWeb);Assert.NotNull(fleet);
+        foreach(var scope in CloudConfigScopes.All)Assert.False(await manager.HasPermissionAsync(fleet,Permissions.Prefixes.Scope+scope));
+    }
+
+    [Fact]
+    public async Task FleetRead_ExplicitRegistrationAddsOnlyMetadataReadAndIsIdempotent()
+    {
+        using var provider=Provider(fleet:true,fleetRead:true);await DbSeeder.SeedAsync(provider);await DbSeeder.SeedAsync(provider);
+        var manager=provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var fleet=await manager.FindByClientIdAsync(FirstPartyClients.FleetAdminWeb);Assert.NotNull(fleet);
+        foreach(var scope in CloudConfigScopes.All)Assert.Equal(scope==CloudConfigScopes.Read,await manager.HasPermissionAsync(fleet,Permissions.Prefixes.Scope+scope));
+        Assert.True(await manager.HasPermissionAsync(fleet,Permissions.Prefixes.Scope+PandaAuthScopes.FleetRead));
+        Assert.Equal(ClientTypes.Confidential,await manager.GetClientTypeAsync(fleet));
+        Assert.False(await manager.HasPermissionAsync(fleet,Permissions.GrantTypes.ClientCredentials));
+        var unrelated=await manager.FindByClientIdAsync(FirstPartyClients.MeWeb);Assert.NotNull(unrelated);
+        foreach(var scope in CloudConfigScopes.All)Assert.False(await manager.HasPermissionAsync(unrelated,Permissions.Prefixes.Scope+scope));
+    }
+
+    [Theory]
+    [InlineData(false,true)] [InlineData(true,false)]
+    public async Task FleetRead_MissingDependencyRefusesBeforeAnySeedWrites(bool cloud,bool fleet)
+    {
+        using var provider=Provider(enabled:cloud,fleet:fleet,fleetRead:true);
+        await Assert.ThrowsAsync<InvalidOperationException>(()=>DbSeeder.SeedAsync(provider));
+        Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().Roles);
+        Assert.Null(await provider.GetRequiredService<IOpenIddictApplicationManager>().FindByClientIdAsync(CloudConfigScopes.IntrospectionClient));
+    }
+
+    [Theory]
+    [InlineData(CloudConfigScopes.ValuesRead)] [InlineData(CloudConfigScopes.Create)]
+    [InlineData(CloudConfigScopes.Approve)] [InlineData(CloudConfigScopes.Execute)]
+    public async Task FleetRead_BroaderExistingCloudPermissionRefusesWithoutRemovingIt(string scope)
+    {
+        using var provider=Provider(fleet:true);await DbSeeder.SeedAsync(provider);
+        var manager=provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var fleet=await manager.FindByClientIdAsync(FirstPartyClients.FleetAdminWeb);Assert.NotNull(fleet);
+        var descriptor=new OpenIddictApplicationDescriptor();await manager.PopulateAsync(descriptor,fleet);
+        descriptor.Permissions.Add(Permissions.Prefixes.Scope+scope);await manager.UpdateAsync(fleet,descriptor);
+        new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"FleetReadEnabled","true"}}).Build()
+            .Bind(provider.GetRequiredService<IOptions<AuthOptions>>().Value.Seed.CloudConfig);
+        var db=provider.GetRequiredService<PandaAuthDbContext>();db.Roles.RemoveRange(await db.Roles.ToListAsync());await db.SaveChangesAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(()=>DbSeeder.SeedAsync(provider));Assert.Empty(db.Roles);
+        Assert.True(await manager.HasPermissionAsync(fleet,Permissions.Prefixes.Scope+scope));
+        Assert.False(await manager.HasPermissionAsync(fleet,Permissions.Prefixes.Scope+CloudConfigScopes.Read));
+    }
+
     private static ServiceProvider Provider(bool enabled = true, string issuer = CloudConfigScopes.Issuer,
-        string secret = "config-fixture-secret")
+        string secret = "config-fixture-secret", bool fleet = false, bool fleetRead = false)
     {
         var options = new AuthOptions();
         new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -119,6 +170,11 @@ public sealed class CloudConfigRegistrationTests
             ["Seed:CloudConsoleWeb:ClientSecret"] = "console-fixture-secret",
             ["Seed:CloudConsoleWeb:RedirectUris:0"] = "https://fixture.example/console/callback",
             ["Seed:CloudConsoleWeb:PostLogoutRedirectUris:0"] = "https://fixture.example/console/logout",
+            ["Seed:FleetAdminWeb:Enabled"] = fleet.ToString(),
+            ["Seed:FleetAdminWeb:ClientSecret"] = "fleet-fixture-secret",
+            ["Seed:FleetAdminWeb:RedirectUris:0"] = "https://fixture.example/fleet/callback",
+            ["Seed:FleetAdminWeb:PostLogoutRedirectUris:0"] = "https://fixture.example/fleet/logout",
+            ["Seed:CloudConfig:FleetReadEnabled"] = fleetRead.ToString(),
             ["Seed:CloudConfig:Enabled"] = enabled.ToString(),
             ["Seed:CloudConfig:ClientSecret"] = secret,
         }).Build().Bind(options);
