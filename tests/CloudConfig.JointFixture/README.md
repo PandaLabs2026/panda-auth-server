@@ -12,7 +12,13 @@ The process requires non-root Linux, an owner-private tree under `~/dev/tmp`,
 `authpg-*`/`cfgpg-*` socket and the database's matching fixture nonce. It creates
 only its own `auth_config_test_<uuid>` database as `auth_config_fixture_owner`,
 revokes PUBLIC connect and seeds only the synthetic user and existing Cloud
-Console/config clients. The synthetic user has the fixture-only `cloud-admin`
+Console/config clients by default. Optional `FleetReadEnabled` defaults to false;
+when true, it seeds the existing Fleet API/Fleet Admin identities and enables the
+existing Cloud read-only Fleet registration instead of the Console client. The
+Fleet Admin client receives `fleet.read` and `cloud.config.read` without any
+Cloud values/write scope; all callbacks remain the same fixed localhost paths.
+This flag is admitted only by this disposable fixture and does not change
+production registration. The synthetic user has the fixture-only `cloud-admin`
 role. The Console client retains `https://localhost/callback` and also admits
 only the fixed real Console callback `https://localhost/callback/pandaauth`;
 no caller-supplied redirect, role or production registration is accepted. The parent must provide that disposable role; there
@@ -36,6 +42,12 @@ Bootstrap uses a new owner-only `MvcTestingAppManifest.json` in the private
 content root, so it works from a caller outside the Auth checkout. It does not
 add host settings that the real Server CLI allowlist would reject. The private
 `client.json` supplies the owning `FirstPartyClients` client ID plus the fixed
-Console callback and synthetic role to callers.
+callback, selected client ID, `FleetReadEnabled` mode and synthetic role to callers.
 Startup failure diagnostics contain only stage, exception type, SQL state and
 stack frames in owner-only `failure.json`; request/policy values are omitted.
+
+The real PostgreSQL `SeparateJointHostSupportsFleetReadOnlyClientAndBothAudiences`
+case verifies actual PKCE login, encrypted access token, introspected Fleet/Cloud
+audiences and read scopes, plus rejection of each Cloud values/write scope. This
+prepares the real multi-component read joint; it is not evidence that Fleet,
+Cloud target grants or the Admin browser are jointly accepted.

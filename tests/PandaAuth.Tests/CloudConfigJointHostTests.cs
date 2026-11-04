@@ -35,7 +35,10 @@ public sealed class CloudConfigJointHostTests
     [CloudConfigPostgresFact]
     public Task SeparateJointHostSupportsRealConsoleCallbackAndCloudAdminRole()
         => RunRealJointHost("https://localhost/callback/pandaauth",true);
-    private static async Task RunRealJointHost(string callback,bool consoleRole)
+    [CloudConfigPostgresFact]
+    public Task SeparateJointHostSupportsFleetReadOnlyClientAndBothAudiences()
+        => RunRealJointHost("https://localhost/callback",false,true);
+    private static async Task RunRealJointHost(string callback,bool consoleRole,bool fleetRead=false)
     {
         if(!OperatingSystem.IsLinux())throw new PlatformNotSupportedException("Registered Linux fixture required.");
         var pg=new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("PANDA_AUTH_CONFIG_TEST_POSTGRES"));
@@ -48,19 +51,34 @@ public sealed class CloudConfigJointHostTests
         using var process=Process.Start(start)!;var error=process.StandardError.ReadToEndAsync();
         try
         {
-            await process.StandardInput.WriteLineAsync(JsonSerializer.Serialize(policy));await process.StandardInput.FlushAsync();
+            var serialized=JsonSerializer.SerializeToNode(policy)!.AsObject();if(fleetRead)serialized["FleetReadEnabled"]=true;
+            await process.StandardInput.WriteLineAsync(serialized.ToJsonString());await process.StandardInput.FlushAsync();
             var ready=await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(60));
-            if(ready!="AUTH_CONFIG_JOINT_READY"){process.StandardInput.Close();await process.WaitForExitAsync();Assert.Fail(await error);}
+            if(ready!="AUTH_CONFIG_JOINT_READY"){process.StandardInput.Close();await process.WaitForExitAsync();var diagnostic=Path.Combine(root,"failure.json");Assert.Fail(await error+(File.Exists(diagnostic)?await File.ReadAllTextAsync(diagnostic):""));}
             using var handler=new SocketsHttpHandler{AllowAutoRedirect=false,UseCookies=true,ConnectCallback=async(_,ct)=>{var socket=new Socket(AddressFamily.Unix,SocketType.Stream,ProtocolType.Unspecified);try{await socket.ConnectAsync(new UnixDomainSocketEndPoint(Path.Combine(root,"auth.sock")),ct);return new NetworkStream(socket,true);}catch{socket.Dispose();throw;}},SslOptions=new SslClientAuthenticationOptions{RemoteCertificateValidationCallback=(_,cert,_,errors)=>cert is not null&&(errors&SslPolicyErrors.RemoteCertificateNameMismatch)==0&&cert.GetCertHashString(HashAlgorithmName.SHA256)==certificate.GetCertHashString(HashAlgorithmName.SHA256)}};
             using var browser=new HttpClient(handler){BaseAddress=new Uri(CloudConfigScopes.Issuer),Timeout=TimeSpan.FromSeconds(20)};
             using(var discovery=await browser.GetAsync(".well-known/openid-configuration")){Assert.Equal(HttpStatusCode.OK,discovery.StatusCode);using var json=JsonDocument.Parse(await discovery.Content.ReadAsStringAsync());Assert.Equal(CloudConfigScopes.Issuer,json.RootElement.GetProperty("issuer").GetString());}
             const string verifier="config-joint-pkce-verifier-012345678901234567890123456789";
-            var authorize="/connect/authorize?client_id="+FirstPartyClients.CloudConsoleWeb+"&redirect_uri="+Uri.EscapeDataString(callback)+"&response_type=code&scope=openid%20profile%20"+(consoleRole?"roles%20":"")+string.Join("%20",CloudConfigScopes.All)+"&state=joint-state&nonce=joint-nonce&code_challenge_method=S256&code_challenge="+Microsoft.IdentityModel.Tokens.Base64UrlEncoder.Encode(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
+            var clientId=fleetRead?FirstPartyClients.FleetAdminWeb:FirstPartyClients.CloudConsoleWeb;
+            var requestedScopes=fleetRead?new[]{PandaAuthScopes.FleetRead,CloudConfigScopes.Read}:CloudConfigScopes.All;
+            var authorize="/connect/authorize?client_id="+clientId+"&redirect_uri="+Uri.EscapeDataString(callback)+"&response_type=code&scope=openid%20profile%20"+(consoleRole?"roles%20":"")+string.Join("%20",requestedScopes)+"&state=joint-state&nonce=joint-nonce&code_challenge_method=S256&code_challenge="+Microsoft.IdentityModel.Tokens.Base64UrlEncoder.Encode(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
             using var redirect=await browser.GetAsync(authorize);Assert.Equal(HttpStatusCode.Redirect,redirect.StatusCode);using var page=await browser.GetAsync(redirect.Headers.Location!.PathAndQuery);var hidden=Regex.Match(await page.Content.ReadAsStringAsync(),"name=\"__RequestVerificationToken\"[^>]*value=\"([^\"]+)\"");Assert.True(hidden.Success);
             using var login=await browser.PostAsync("/account/login",new FormUrlEncodedContent(new Dictionary<string,string>{{"__RequestVerificationToken",WebUtility.HtmlDecode(hidden.Groups[1].Value)},{"UserName","config-joint-user"},{"Password",password},{"ReturnUrl",authorize}}));Assert.Equal(HttpStatusCode.Redirect,login.StatusCode);
             using var authorization=await browser.GetAsync(authorize);Assert.Equal(HttpStatusCode.Redirect,authorization.StatusCode);var query=Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(authorization.Headers.Location!.Query);Assert.Equal("joint-state",query["state"].ToString());
-            using var exchange=await browser.PostAsync("/connect/token",new FormUrlEncodedContent(new Dictionary<string,string>{{"client_id",FirstPartyClients.CloudConsoleWeb},{"client_secret",console},{"grant_type","authorization_code"},{"code",query["code"].ToString()},{"redirect_uri",callback},{"code_verifier",verifier}}));Assert.Equal(HttpStatusCode.OK,exchange.StatusCode);using var token=JsonDocument.Parse(await exchange.Content.ReadAsStringAsync());var access=token.RootElement.GetProperty("access_token").GetString()!;Assert.Equal(5,access.Split('.').Length);
+            using var exchange=await browser.PostAsync("/connect/token",new FormUrlEncodedContent(new Dictionary<string,string>{{"client_id",clientId},{"client_secret",console},{"grant_type","authorization_code"},{"code",query["code"].ToString()},{"redirect_uri",callback},{"code_verifier",verifier}}));Assert.Equal(HttpStatusCode.OK,exchange.StatusCode);using var token=JsonDocument.Parse(await exchange.Content.ReadAsStringAsync());var access=token.RootElement.GetProperty("access_token").GetString()!;Assert.Equal(5,access.Split('.').Length);
             using var inspected=await browser.PostAsync("/connect/introspect",new FormUrlEncodedContent(new Dictionary<string,string>{{"client_id",CloudConfigScopes.IntrospectionClient},{"client_secret",secret},{"token",access}}));Assert.Equal(HttpStatusCode.OK,inspected.StatusCode);using var claims=JsonDocument.Parse(await inspected.Content.ReadAsStringAsync());Assert.True(claims.RootElement.GetProperty("active").GetBoolean());Assert.Equal("human",claims.RootElement.GetProperty("subject_type").GetString());
+            if(fleetRead)
+            {
+                Assert.Equal(new[]{PandaAuthScopes.FleetApi,CloudConfigScopes.Audience,CloudConfigScopes.IntrospectionClient}.Order(),claims.RootElement.GetProperty("aud").EnumerateArray().Select(value=>value.GetString()).Order());
+                var granted=claims.RootElement.GetProperty("scope").GetString()!.Split(' ');
+                Assert.Contains(PandaAuthScopes.FleetRead,granted);Assert.Contains(CloudConfigScopes.Read,granted);
+                Assert.DoesNotContain(granted,scope=>scope.StartsWith("cloud.config.",StringComparison.Ordinal)&&scope!=CloudConfigScopes.Read);
+                foreach(var scope in CloudConfigScopes.All.Where(scope=>scope!=CloudConfigScopes.Read))
+                {
+                    using var rejected=await browser.GetAsync(authorize.Replace("scope=openid%20profile%20"+string.Join("%20",requestedScopes),"scope=openid%20profile%20"+scope,StringComparison.Ordinal));
+                    Assert.Equal(HttpStatusCode.BadRequest,rejected.StatusCode);
+                }
+            }
             if(consoleRole)
             {
                 using var userinfoRequest=new HttpRequestMessage(HttpMethod.Get,PandaAuthEndpoints.Userinfo);
