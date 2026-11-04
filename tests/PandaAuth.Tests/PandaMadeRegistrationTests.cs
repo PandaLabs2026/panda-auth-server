@@ -34,8 +34,7 @@ public class PandaMadeRegistrationTests
     {
         // ADR-089 批次 3：--register-pandamade-clients 已退役为显式拒绝，
         // 不得落入正常启动（不监听 HTTP、不读库、退出码 1）。
-        var executable = Path.GetFullPath("../../../../../src/PandaAuth.Server/bin/Debug/net10.0/PandaAuth.Server.dll", AppContext.BaseDirectory);
-        var start = new System.Diagnostics.ProcessStartInfo("dotnet", executable + " --register-pandamade-clients") { RedirectStandardOutput = true, RedirectStandardError = true };
+        var start = TestPaths.ServerCommand("--register-pandamade-clients");
         start.Environment["ASPNETCORE_ENVIRONMENT"] = "Production";
         start.Environment.Remove("ConnectionStrings__Default");
         using var process = System.Diagnostics.Process.Start(start)!;
