@@ -51,3 +51,13 @@ case verifies actual PKCE login, encrypted access token, introspected Fleet/Clou
 audiences and read scopes, plus rejection of each Cloud values/write scope. This
 prepares the real multi-component read joint; it is not evidence that Fleet,
 Cloud target grants or the Admin browser are jointly accepted.
+
+Fleet mode also admits the actual Fleet Admin callback
+`https://localhost/admin/callback/pandaauth` and its fixed logout callback
+`https://localhost/admin/callback/logout/pandaauth`. Its `client.json` callback
+points at that owning product path. These are test-only localhost registrations,
+not arbitrary callback input or a production registration change. A separate
+real PKCE case exchanges the code at the actual Admin callback and retains the
+read-only audience/scope rejection matrix.
+
+The admitted `authpg-`/`cfgpg-` socket basename also accepts underscores, matching Python temporary-directory names. The fixed parent, private fixture root, PG nonce and production-environment refusal remain required.
