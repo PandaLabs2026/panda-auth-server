@@ -38,6 +38,9 @@ public sealed class CloudConfigJointHostTests
     [CloudConfigPostgresFact]
     public Task SeparateJointHostSupportsFleetReadOnlyClientAndBothAudiences()
         => RunRealJointHost("https://localhost/callback",false,true);
+    [CloudConfigPostgresFact]
+    public Task SeparateJointHostSupportsTheActualFleetAdminCallback()
+        => RunRealJointHost("https://localhost/admin/callback/pandaauth",false,true);
     private static async Task RunRealJointHost(string callback,bool consoleRole,bool fleetRead=false)
     {
         if(!OperatingSystem.IsLinux())throw new PlatformNotSupportedException("Registered Linux fixture required.");
