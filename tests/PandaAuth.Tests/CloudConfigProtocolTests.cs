@@ -54,6 +54,23 @@ public sealed class CloudConfigProtocolTests
         Assert.False(inspected.GetProperty("active").GetBoolean());
     }
 
+    [CloudConfigPostgresFact]
+    public async Task FleetReader_EncryptedHumanTokenHasBothAudiencesAndRejectsValuesOrWriteScopes()
+    {
+        await using var fixture=await Fixture.CreateAsync(true,fleetRead:true);using var browser=fixture.Browser();
+        var token=await fixture.TokenAsync(browser);Assert.Equal(5,token.Split('.').Length);
+        var inspected=await fixture.IntrospectAsync(browser,token);Assert.True(inspected.GetProperty("active").GetBoolean());
+        Assert.Equal(new[]{PandaAuthScopes.FleetApi,CloudConfigScopes.Audience,CloudConfigScopes.IntrospectionClient}.Order(),
+            inspected.GetProperty("aud").EnumerateArray().Select(x=>x.GetString()).Order());
+        Assert.Equal(PandaAuthClaims.SubjectTypes.Human,inspected.GetProperty(PandaAuthClaims.SubjectType).GetString());
+        var scopes=inspected.GetProperty("scope").GetString()!.Split(' ');
+        Assert.Contains(PandaAuthScopes.FleetRead,scopes);Assert.Contains(CloudConfigScopes.Read,scopes);
+        foreach(var denied in CloudConfigScopes.All.Where(scope=>scope!=CloudConfigScopes.Read))
+        {
+            Assert.DoesNotContain(denied,scopes);await fixture.AssertScopeRefusedAsync(browser,denied);
+        }
+    }
+
     private sealed class Factory(string connection) : WebApplicationFactory<Program>
     {
         private readonly ConfigContentRoot _root = new(connection, new Dictionary<string, string>
@@ -111,13 +128,16 @@ public sealed class CloudConfigProtocolTests
     {
         private const string Verifier = "config-fixture-pkce-verifier-012345678901234567890123456789";
         private const string ConsoleSecret = "console-config-protocol-fixture";
+        private const string FleetSecret = "fleet-config-protocol-fixture";
+        private readonly bool _fleetRead;
+        private string ClientId=>_fleetRead?FirstPartyClients.FleetAdminWeb:FirstPartyClients.CloudConsoleWeb;
         private readonly string _connection;
         private readonly string _password = "Aa!9" + Convert.ToHexString(RandomNumberGenerator.GetBytes(20));
         private readonly string _introspectionSecret = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         private readonly Factory _factory;
-        private Fixture(string connection) { _connection = connection; _factory = new Factory(connection); }
+        private Fixture(string connection,bool fleetRead) { _connection = connection; _fleetRead=fleetRead; _factory = new Factory(connection); }
 
-        internal static async Task<Fixture> CreateAsync(bool includeIntrospector)
+        internal static async Task<Fixture> CreateAsync(bool includeIntrospector,bool fleetRead=false)
         {
             var builder = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("PANDA_AUTH_CONFIG_TEST_POSTGRES"));
             ValidateBoundary(builder, "postgres");
@@ -129,7 +149,7 @@ public sealed class CloudConfigProtocolTests
                 await using var create = new NpgsqlCommand($"CREATE DATABASE \"{builder.Database}\"", connection);
                 await create.ExecuteNonQueryAsync();
             }
-            var fixture = new Fixture(builder.ConnectionString);
+            var fixture = new Fixture(builder.ConnectionString,fleetRead);
             try
             {
                 await using (var db = fixture.Context()) await db.Database.MigrateAsync();
@@ -148,7 +168,13 @@ public sealed class CloudConfigProtocolTests
                 {
                     Enabled = true, Admin = new() { Password = "" },
                     Me = new() { Enabled = false }, AdminWeb = new() { Enabled = false },
-                    CloudConfig = new() { Enabled = true, ClientSecret = _introspectionSecret },
+                    CloudConfig = new() { Enabled = true, ClientSecret = _introspectionSecret, FleetReadEnabled=_fleetRead },
+                    Fleet = new() { Enabled=_fleetRead,ClientSecret="fleet-api-config-protocol-fixture" },
+                    FleetAdminWeb = new()
+                    {
+                        Enabled=_fleetRead,ClientSecret=FleetSecret,RedirectUris=["http://localhost/callback"],
+                        PostLogoutRedirectUris=["http://localhost/logout"],
+                    },
                     CloudConsoleWeb = new()
                     {
                         Enabled = true, ClientSecret = ConsoleSecret,
@@ -187,10 +213,7 @@ public sealed class CloudConfigProtocolTests
 
         internal async Task<string> TokenAsync(HttpClient browser)
         {
-            var authorize = "/connect/authorize?client_id=" + FirstPartyClients.CloudConsoleWeb +
-                "&redirect_uri=http%3A%2F%2Flocalhost%2Fcallback&response_type=code&scope=openid%20profile%20offline_access%20" +
-                string.Join("%20", CloudConfigScopes.All) + "&state=config-state&nonce=config-nonce&code_challenge_method=S256&code_challenge=" +
-                Microsoft.IdentityModel.Tokens.Base64UrlEncoder.Encode(SHA256.HashData(Encoding.ASCII.GetBytes(Verifier)));
+            var authorize=AuthorizationRequest(_fleetRead?[PandaAuthScopes.FleetRead,CloudConfigScopes.Read]:CloudConfigScopes.All);
             using var redirect = await browser.GetAsync(authorize);
             Assert.Equal(HttpStatusCode.Redirect, redirect.StatusCode);
             using var page = await browser.GetAsync(redirect.Headers.Location!.PathAndQuery);
@@ -210,7 +233,7 @@ public sealed class CloudConfigProtocolTests
             Assert.True(query.ContainsKey("code"));
             using var exchange = new FormUrlEncodedContent(new Dictionary<string, string>
             {
-                ["client_id"] = FirstPartyClients.CloudConsoleWeb, ["client_secret"] = ConsoleSecret,
+                ["client_id"] = ClientId, ["client_secret"] = _fleetRead?FleetSecret:ConsoleSecret,
                 ["grant_type"] = GrantTypes.AuthorizationCode, ["code"] = query["code"].ToString(),
                 ["redirect_uri"] = "http://localhost/callback", ["code_verifier"] = Verifier,
             });
@@ -218,6 +241,22 @@ public sealed class CloudConfigProtocolTests
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
             return json.RootElement.GetProperty("access_token").GetString()!;
+        }
+
+        private string AuthorizationRequest(IEnumerable<string> scopes)=>
+            "/connect/authorize?client_id="+ClientId+"&redirect_uri=http%3A%2F%2Flocalhost%2Fcallback&response_type=code&scope="+
+            Uri.EscapeDataString("openid profile offline_access "+string.Join(' ',scopes))+
+            "&state=config-state&nonce=config-nonce&code_challenge_method=S256&code_challenge="+
+            Microsoft.IdentityModel.Tokens.Base64UrlEncoder.Encode(SHA256.HashData(Encoding.ASCII.GetBytes(Verifier)));
+
+        internal async Task AssertScopeRefusedAsync(HttpClient browser,string scope)
+        {
+            using var rejected=await browser.GetAsync(AuthorizationRequest([PandaAuthScopes.FleetRead,scope]));
+            // OpenIddict rejects disallowed client scopes before authorization redirect.
+            Assert.Equal(HttpStatusCode.BadRequest,rejected.StatusCode);Assert.Null(rejected.Headers.Location);
+            var response=await rejected.Content.ReadAsStringAsync();
+            Assert.Contains(Errors.InvalidRequest,response,StringComparison.Ordinal);
+            Assert.DoesNotContain("access_token",response,StringComparison.Ordinal);
         }
 
         internal async Task<JsonElement> IntrospectAsync(HttpClient browser, string token)

@@ -33,6 +33,8 @@ public static class DbSeeder
         var db = services.GetService<PandaAuthDbContext>();
         var reconciliation = new SeedPermissionReconciler(applications, options.Seed, db, logger, services.GetService<TimeProvider>() ?? TimeProvider.System);
 
+        await CloudConfigRegistration.ValidateFleetReadClientAsync(applications, options.Seed.CloudConfig);
+
         if (options.Seed.CloudConfig.Enabled)
         {
             await CloudConfigRegistration.SeedAsync(applications, scopes, options.Seed.CloudConfig);
@@ -106,7 +108,8 @@ public static class DbSeeder
         {
             await SeedFirstPartyWebApplicationAsync(
                 applications, reconciliation, logger, db, FirstPartyClients.FleetAdminWeb, "Panda Fleet 管理台", "Auth:Seed:FleetAdminWeb", options.Seed.FleetAdminWeb,
-                permissions: FleetAdminWebPermissions());
+                permissions: FleetAdminWebPermissions().Concat(options.Seed.CloudConfig.FleetReadEnabled
+                    ? [Permissions.Prefixes.Scope + CloudConfigScopes.Read] : []).ToArray());
         }
 
         // Panda Fleet Hub 只部署在 Fleet 控制面（专用 PandaAuth 实例）；回调不参与租户路由展开；

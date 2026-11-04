@@ -400,5 +400,6 @@ public sealed class SessionStateSeedOptions
 public sealed class CloudConfigSeedOptions
 {
     public bool Enabled { get; set; }
+    public bool FleetReadEnabled { get; set; }
     public string ClientSecret { get; set; } = string.Empty;
 }
