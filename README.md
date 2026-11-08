@@ -32,9 +32,10 @@ cd panda-auth-server
 Share must be a sibling. Running requires an isolated development PostgreSQL database and suitable privileges; defaults are in [appsettings.Development.json](src/PandaAuth.Server/appsettings.Development.json). Demo credentials are for isolated development only, not production or public delivery records.
 
 ```bash
-dotnet build PandaAuth.Server.slnx
-dotnet test tests/PandaAuth.Tests/PandaAuth.Tests.csproj
+bash scripts/verify-local.sh
 ```
+
+The local verification entry checks the shared machine-capacity policy, workspace, task temp directory, Server/Share outputs and NuGet/.NET CLI caches before restore, build and test. Without `PANDA_AUTH_TEST_POSTGRES`, database-dependent tests are explicitly skipped; this does not count as database integration acceptance. Container builds must run through the organization execution wrapper so Docker host storage is admitted before Docker starts.
 
 The following existing entry points describe intent and side effects. The startup blockers are fixed, but these commands are still **not an accepted installation sequence** (end-to-end acceptance of the authentication flow is incomplete):
 
