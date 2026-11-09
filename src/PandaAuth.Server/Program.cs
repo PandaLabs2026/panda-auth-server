@@ -30,6 +30,13 @@ if (args is ["--profile-avatar-decode"])
     return;
 }
 
+if (ProfileMeRegistrationCommand.IsRequested(args))
+{
+    var commandBuilder = WebApplication.CreateBuilder([]);
+    Environment.ExitCode = await ProfileMeRegistrationCommand.RunAsync(args, commandBuilder.Configuration, commandBuilder.Environment, Console.Out);
+    return;
+}
+
 if (AdminResourceMigrationCommand.IsRequested(args))
 {
     var commandBuilder = WebApplication.CreateBuilder([]);

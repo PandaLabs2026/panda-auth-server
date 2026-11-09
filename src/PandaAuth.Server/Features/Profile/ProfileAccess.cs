@@ -14,6 +14,7 @@ namespace PandaAuth.Server.Features.Profile;
 public sealed class ProfileOptions
 {
     public bool Enabled { get; set; }
+    public bool MeClientEnabled { get; set; }
     public string[] AllowedClients { get; set; } = [];
 }
 
