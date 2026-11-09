@@ -85,6 +85,18 @@ internal static class ProfileRegistration
     public static IServiceCollection AddSelfProfiles(this IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<ProfileOptions>(configuration.GetSection("Profile"));
+        var oasis = configuration.GetSection("Profile:Oasis").Get<Oasis.OasisProfileOptions>() ?? new();
+        oasis.ValidateAndLoad(configuration["Auth:Issuer"]);
+        services.AddSingleton(oasis);
+        services.AddHttpClient("oasis-profile-access", client => client.Timeout = Timeout.InfiniteTimeSpan)
+            .RemoveAllLoggers()
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                AllowAutoRedirect = false, UseCookies = false,
+                AutomaticDecompression = System.Net.DecompressionMethods.None,
+                ConnectTimeout = TimeSpan.FromSeconds(3),
+            });
+        services.AddScoped<Oasis.OasisProfileAccessClient>();
         services.AddScoped<SelfProfileService>();
         services.AddScoped<ProfileContactService>();
         services.AddSingleton<ProfileAvatarDecoder>();
