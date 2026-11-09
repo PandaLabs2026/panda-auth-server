@@ -102,4 +102,24 @@ public sealed class SelfProfileServiceTests
             SelfProfileInput.ParsePatch("{\"displayName\":\"rejected\"}"), "profile-test"))).StatusCode);
         Assert.Empty(await db.UserProfiles.ToListAsync());
     }
+    [PostgresFact]
+    public async Task Unicode_scalar_limits_roundtrip_without_utf16_parameter_truncation()
+    {
+        await using var fixture = await AuthQualityPostgresFixture.CreateAsync();
+        string id;
+        var name = string.Concat(Enumerable.Repeat("🐼", 80));
+        var biography = string.Concat(Enumerable.Repeat("🐼", 1000));
+        await using (var scope = fixture.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+            var user = new PandaUser(); db.Users.Add(user); await db.SaveChangesAsync(); id = user.Id;
+            var patch = SelfProfileInput.ParsePatch(System.Text.Json.JsonSerializer.Serialize(new { displayName = name, biography }));
+            var first = await Service(db).PatchAsync(id, "\"0\"", patch, "unicode-profile");
+            await Service(db).PatchAsync(id, first.Revision, patch, "unicode-profile");
+        }
+        await using var check = fixture.Services.CreateAsyncScope();
+        var saved = await Service(check.ServiceProvider.GetRequiredService<PandaAuthDbContext>()).ReadAsync(id);
+        Assert.Equal(name, saved.DisplayName);
+        Assert.Equal(biography, saved.Biography);
+    }
 }

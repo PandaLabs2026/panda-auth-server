@@ -1,0 +1,79 @@
+using System.Buffers;
+using System.Text;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using OpenIddict.Validation.AspNetCore;
+using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Shared;
+
+namespace PandaAuth.Server.Features.Profile;
+
+[Authorize(AuthenticationSchemes = OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme)]
+[Route("~" + PandaAuthProfileApi.Self)]
+public sealed class SelfProfileController(SelfProfileService profiles, SecurityEventWriter audit) : ControllerBase
+{
+    [HttpGet, Authorize(Policy = ProfileAccess.ReadPolicy)]
+    public async Task<IActionResult> Read(CancellationToken ct)
+    {
+        try { return Profile(await profiles.ReadAsync(ProfileAccess.ActorId(User)!, ct)); }
+        catch (ProfileOperationException e) { return Error(e.Code, e.StatusCode); }
+    }
+
+    [HttpPatch, Authorize(Policy = ProfileAccess.WritePolicy)]
+    public async Task<IActionResult> Patch(CancellationToken ct)
+    {
+        try
+        {
+            var etags = Request.Headers.IfMatch;
+            if (etags.Count == 0) throw new ProfileOperationException("profile_revision_required", 428);
+            if (etags.Count != 1 || !SelfProfileInput.IsRevision(etags[0]!))
+                throw new ProfileInputException("profile_request_invalid", 400);
+            var patch = SelfProfileInput.ParsePatch(await ReadJsonAsync(ct));
+            return Profile(await profiles.PatchAsync(ProfileAccess.ActorId(User)!, etags[0]!, patch, HttpContext.TraceIdentifier, ct));
+        }
+        catch (ProfileInputException e) { return await RejectedAsync(e.Code, e.StatusCode, ct); }
+        catch (ProfileOperationException e) { return await RejectedAsync(e.Code, e.StatusCode, ct); }
+    }
+
+    private async Task<string> ReadJsonAsync(CancellationToken ct)
+    {
+        if (!Microsoft.Net.Http.Headers.MediaTypeHeaderValue.TryParse(Request.ContentType, out var media)
+            || !string.Equals(media.MediaType.Value, "application/json", StringComparison.OrdinalIgnoreCase)
+            || (media.Charset.HasValue && !string.Equals(media.Charset.Value?.Trim('"'), "utf-8", StringComparison.OrdinalIgnoreCase))
+            || Request.Headers.ContentEncoding.Any(value => !string.Equals(value, "identity", StringComparison.OrdinalIgnoreCase)))
+            throw new ProfileInputException("profile_request_invalid", 415);
+        if (Request.ContentLength > SelfProfileInput.MaxJsonBytes)
+            throw new ProfileInputException("profile_request_too_large", 413);
+        using var body = new MemoryStream();
+        var buffer = ArrayPool<byte>.Shared.Rent(4096);
+        try
+        {
+            while (true)
+            {
+                var count = await Request.Body.ReadAsync(buffer.AsMemory(0,
+                    Math.Min(buffer.Length, SelfProfileInput.MaxJsonBytes - (int)body.Length + 1)), ct);
+                if (count == 0) break;
+                if (body.Length + count > SelfProfileInput.MaxJsonBytes)
+                    throw new ProfileInputException("profile_request_too_large", 413);
+                body.Write(buffer, 0, count);
+            }
+            try { return new UTF8Encoding(false, true).GetString(body.GetBuffer(), 0, (int)body.Length); }
+            catch (DecoderFallbackException) { throw new ProfileInputException("profile_request_invalid", 400); }
+        }
+        finally { ArrayPool<byte>.Shared.Return(buffer, clearArray: true); }
+    }
+
+    private OkObjectResult Profile(SelfProfileDto profile)
+    {
+        Response.Headers.ETag = profile.Revision;
+        return Ok(profile);
+    }
+    private ObjectResult Error(string code, int status) => StatusCode(status, new ProfileErrorDto(code, HttpContext.TraceIdentifier));
+    private async Task<IActionResult> RejectedAsync(string code, int status, CancellationToken ct)
+    {
+        var actor = ProfileAccess.ActorId(User);
+        await audit.RecordAsync(new SecurityEventEntry("profile.mutation.rejected", actor, actor, "profile", null, null,
+            new { outcome = code }, null, null, HttpContext.TraceIdentifier), ct);
+        return Error(code, status);
+    }
+}

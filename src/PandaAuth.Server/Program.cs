@@ -1,3 +1,4 @@
+using PandaAuth.Server.Features.Profile;
 using System.Net;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNetCore.Authentication;
@@ -96,12 +97,15 @@ var connectionString = builder.Configuration.GetConnectionString(connectionStrin
 // Management API 是部署面开关：启动时一次性读取，未启用时管理控制器整体不进路由模型
 // （对外等效不存在，路由 404 且不进 ApiExplorer）；运行期改开关需重启进程。
 var mgmtApiEnabled = builder.Configuration.GetValue("Auth:Mgmt:Enabled", false);
+var profileEnabled = builder.Configuration.GetValue("Profile:Enabled", false);
+builder.Services.AddSelfProfiles(builder.Configuration);
 builder.Services.AddControllersWithViews(o =>
     {
         if (!mgmtApiEnabled)
         {
             o.Conventions.Add(new MgmtRoutesDisabledConvention());
         }
+        if (!profileEnabled) o.Conventions.Add(new ProfileRoutesDisabledConvention());
         // Admin API 错误码：title → 稳定码注册表注入 ProblemDetails.extensions.code
         // （ADR 2026-10-11-admin-error-codes；前端按 code 走 i18n，未登记 title 降级 detail）。
         o.Filters.Add<AdminErrorCodeFilter>();
