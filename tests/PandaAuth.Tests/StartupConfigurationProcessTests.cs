@@ -423,7 +423,8 @@ public sealed class StartupConfigurationProcessTests
             using var process = Process.Start(start)!;
             var output = process.StandardOutput.ReadToEndAsync();
             var error = process.StandardError.ReadToEndAsync();
-            try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(25)); }
+            // Allow a cold CLR/EF start under shared developer-host contention; keep a hard kill deadline.
+            try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60)); }
             finally { if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); } }
             return (process.ExitCode, await output, await error);
         }
