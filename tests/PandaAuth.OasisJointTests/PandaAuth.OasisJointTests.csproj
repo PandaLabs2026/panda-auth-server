@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>PandaAuth.Tests</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup><FrameworkReference Include="Microsoft.AspNetCore.App" /></ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/PandaAuth.Server/PandaAuth.Server.csproj" />
+    <ProjectReference Include="../../../panda-oasis-server/src/oasis/oasis.csproj" Aliases="OasisOwner" />
+    <Compile Include="../PandaAuth.Tests/SecurityProtocolFixture.cs" Link="SecurityProtocolFixture.cs" />
+    <Compile Include="../PandaAuth.Tests/ProtocolHostContentRoot.cs" Link="ProtocolHostContentRoot.cs" />
+    <Compile Include="../PandaAuth.Tests/PostgresTestBoundary.cs" Link="PostgresTestBoundary.cs" />
+  </ItemGroup>
+</Project>
