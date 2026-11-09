@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using OpenIddict.Validation.AspNetCore;
@@ -24,15 +25,74 @@ public sealed class SelfProfileController(SelfProfileService profiles, SecurityE
     {
         try
         {
-            var etags = Request.Headers.IfMatch;
-            if (etags.Count == 0) throw new ProfileOperationException("profile_revision_required", 428);
-            if (etags.Count != 1 || !SelfProfileInput.IsRevision(etags[0]!))
-                throw new ProfileInputException("profile_request_invalid", 400);
+            var revision = RequiredRevision();
             var patch = SelfProfileInput.ParsePatch(await ReadJsonAsync(ct));
-            return Profile(await profiles.PatchAsync(ProfileAccess.ActorId(User)!, etags[0]!, patch, HttpContext.TraceIdentifier, ct));
+            return Profile(await profiles.PatchAsync(ProfileAccess.ActorId(User)!, revision, patch, HttpContext.TraceIdentifier, ct));
         }
         catch (ProfileInputException e) { return await RejectedAsync(e.Code, e.StatusCode, ct); }
         catch (ProfileOperationException e) { return await RejectedAsync(e.Code, e.StatusCode, ct); }
+    }
+
+    [HttpPost("~" + PandaAuthProfileApi.ContactEmailChallenges), Authorize(Policy = ProfileAccess.WritePolicy)]
+    public async Task<IActionResult> CreateContact([FromServices] ProfileContactService contacts, CancellationToken ct)
+    {
+        try
+        {
+            var revision = RequiredRevision();
+            var values = await ContactFieldsAsync(["address"], ct);
+            var result = await contacts.CreateAsync(ProfileAccess.ActorId(User)!, revision, values["address"], HttpContext.TraceIdentifier, ct);
+            Response.Headers.ETag = result.Profile.Revision;
+            return StatusCode(202, result);
+        }
+        catch (ProfileInputException e) { return await RejectedAsync(e.Code, e.StatusCode, ct); }
+        catch (ProfileOperationException e) { return await RejectedAsync(e.Code, e.StatusCode, ct); }
+    }
+
+    [HttpPost("~" + PandaAuthProfileApi.ContactEmailConfirmation), Authorize(Policy = ProfileAccess.WritePolicy)]
+    public async Task<IActionResult> ConfirmContact([FromServices] ProfileContactService contacts, CancellationToken ct)
+    {
+        try
+        {
+            var values = await ContactFieldsAsync(["challengeId", "token"], ct);
+            return Profile(await contacts.ConfirmAsync(ProfileAccess.ActorId(User)!, values["challengeId"], values["token"], HttpContext.TraceIdentifier, ct));
+        }
+        catch (ProfileInputException e) { return await RejectedAsync(e.Code, e.StatusCode, ct); }
+        catch (ProfileOperationException e) { return await RejectedAsync(e.Code, e.StatusCode, ct); }
+    }
+
+    [HttpDelete("~" + PandaAuthProfileApi.ContactEmail), Authorize(Policy = ProfileAccess.WritePolicy)]
+    public async Task<IActionResult> DeleteContact([FromServices] ProfileContactService contacts, CancellationToken ct)
+    {
+        try { return Profile(await contacts.DeleteAsync(ProfileAccess.ActorId(User)!, RequiredRevision(), HttpContext.TraceIdentifier, ct)); }
+        catch (ProfileInputException e) { return await RejectedAsync(e.Code, e.StatusCode, ct); }
+        catch (ProfileOperationException e) { return await RejectedAsync(e.Code, e.StatusCode, ct); }
+    }
+
+    private string RequiredRevision()
+    {
+        var etags = Request.Headers.IfMatch;
+        if (etags.Count == 0) throw new ProfileOperationException("profile_revision_required", 428);
+        if (etags.Count != 1 || !SelfProfileInput.IsRevision(etags[0]!))
+            throw new ProfileInputException("profile_request_invalid", 400);
+        return etags[0]!;
+    }
+
+    private async Task<Dictionary<string, string>> ContactFieldsAsync(string[] fields, CancellationToken ct)
+    {
+        var json = await ReadJsonAsync(ct);
+        try
+        {
+            using var document = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = 4 });
+            if (document.RootElement.ValueKind != JsonValueKind.Object) throw new JsonException();
+            var result = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var property in document.RootElement.EnumerateObject())
+                if (!fields.Contains(property.Name, StringComparer.Ordinal) || property.Value.ValueKind != JsonValueKind.String
+                    || !result.TryAdd(property.Name, property.Value.GetString()!)) throw new JsonException();
+            if (result.Count != fields.Length) throw new JsonException();
+            return result;
+        }
+        catch (JsonException) { throw new ProfileInputException("profile_request_invalid", 400); }
+        catch (InvalidOperationException) { throw new ProfileInputException("profile_request_invalid", 400); }
     }
 
     private async Task<string> ReadJsonAsync(CancellationToken ct)

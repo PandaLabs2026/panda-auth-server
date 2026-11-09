@@ -9,6 +9,8 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
     public DbSet<PandaUser> Users => Set<PandaUser>();
     public DbSet<UserProfile> UserProfiles => Set<UserProfile>();
     public DbSet<ProfileAvatar> ProfileAvatars => Set<ProfileAvatar>();
+    public DbSet<ProfileContactChallenge> ProfileContactChallenges => Set<ProfileContactChallenge>();
+    public DbSet<ProfileRateLimit> ProfileRateLimits => Set<ProfileRateLimit>();
     public DbSet<PandaRole> Roles => Set<PandaRole>();
     public DbSet<PandaUserRole> UserRoles => Set<PandaUserRole>();
     public DbSet<LoginLog> LoginLogs => Set<LoginLog>();
@@ -84,6 +86,34 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
             entity.HasKey(x => x.UserId);
             entity.Property(x => x.UserId).HasMaxLength(450);
             entity.HasOne<UserProfile>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<ProfileContactChallenge>(entity =>
+        {
+            entity.ToTable("panda_profile_contact_challenges", table =>
+            {
+                table.HasCheckConstraint("CK_profile_challenge_digest", "octet_length(\"TokenDigest\") = 32");
+                table.HasCheckConstraint("CK_profile_challenge_attempts", "\"FailedAttempts\" BETWEEN 0 AND 5");
+                table.HasCheckConstraint("CK_profile_challenge_state", "\"State\" BETWEEN 0 AND 5");
+            });
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.UserId).HasMaxLength(450);
+            entity.Property(x => x.Address).HasMaxLength(256);
+            entity.Property(x => x.ExpectedRevision).HasMaxLength(32);
+            entity.HasOne<UserProfile>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(x => x.UserId).IsUnique().HasFilter("\"State\" IN (0, 1)");
+            entity.HasIndex(x => x.DeliveryId).IsUnique();
+            entity.HasIndex(x => x.ExpiresAt);
+        });
+        builder.Entity<ProfileRateLimit>(entity =>
+        {
+            entity.ToTable("panda_profile_rate_limits", table =>
+            {
+                table.HasCheckConstraint("CK_profile_creation_count", "\"CreationCount\" BETWEEN 0 AND 5");
+                table.HasCheckConstraint("CK_profile_confirmation_count", "\"ConfirmationCount\" BETWEEN 0 AND 10");
+            });
+            entity.HasKey(x => x.UserId);
+            entity.Property(x => x.UserId).HasMaxLength(450);
+            entity.HasOne<PandaUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
         builder.Entity<PandaRole>(entity =>
         {

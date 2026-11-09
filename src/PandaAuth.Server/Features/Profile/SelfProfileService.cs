@@ -33,35 +33,11 @@ public sealed class SelfProfileService(PandaAuthDbContext db, SecurityEventWrite
         ProfileTextPatch patch, string correlationId, CancellationToken ct = default)
     {
         await using var transaction = await db.Database.BeginTransactionAsync(ct);
-        // The existing immutable account row also serializes concurrent first profile inserts.
-        // No tracking: previously loaded account state must not bypass a fresh status check.
-        var actor = await db.Users.FromSqlInterpolated($"""
-            SELECT * FROM panda_users WHERE "Id" = {actorId} FOR UPDATE
-            """).AsNoTracking().SingleOrDefaultAsync(ct);
-        if (actor?.Status != UserStatus.Active) throw Denied();
-        var profile = await db.UserProfiles.AsNoTracking().SingleOrDefaultAsync(p => p.UserId == actorId, ct);
-        if (!string.Equals(expectedRevision, ETag(profile), StringComparison.Ordinal)) throw Conflict();
-        var previous = profile?.Revision;
-        profile ??= new UserProfile { UserId = actorId, Revision = "" };
+        var write = await PrepareWriteAsync(actorId, expectedRevision, ct);
+        var profile = write.Profile;
         if (patch.HasDisplayName) profile.DisplayName = patch.DisplayName;
         if (patch.HasBiography) profile.Biography = patch.Biography;
-        profile.Revision = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
-        profile.UpdatedAt = clock.GetUtcNow();
-        if (previous is null)
-        {
-            db.UserProfiles.Add(profile);
-        }
-        else
-        {
-            // A CAS remains mandatory even while cooperating writers hold the account lock.
-            var changed = await db.UserProfiles.Where(p => p.UserId == actorId && p.Revision == previous)
-                .ExecuteUpdateAsync(setters => setters
-                    .SetProperty(p => p.DisplayName, profile.DisplayName)
-                    .SetProperty(p => p.Biography, profile.Biography)
-                    .SetProperty(p => p.Revision, profile.Revision)
-                    .SetProperty(p => p.UpdatedAt, profile.UpdatedAt), ct);
-            if (changed != 1) throw Conflict();
-        }
+        await PersistWriteAsync(write, ct);
         var fields = new List<string>();
         if (patch.HasDisplayName) fields.Add("displayName");
         if (patch.HasBiography) fields.Add("biography");
@@ -72,6 +48,49 @@ public sealed class SelfProfileService(PandaAuthDbContext db, SecurityEventWrite
         var result = Projection(profile, hasAvatar);
         await transaction.CommitAsync(ct);
         return result;
+    }
+
+    internal sealed record Write(UserProfile Profile, string? PreviousRevision);
+
+    internal async Task LockActorAsync(string actorId, CancellationToken ct)
+    {
+        var actor = await db.Users.FromSqlInterpolated($"""
+            SELECT * FROM panda_users WHERE "Id" = {actorId} FOR UPDATE
+            """).AsNoTracking().SingleOrDefaultAsync(ct);
+        if (actor?.Status != UserStatus.Active) throw Denied();
+    }
+
+    // Caller owns a transaction. All profile mutators share the immutable account lock.
+    internal async Task<Write> PrepareWriteAsync(string actorId, string expectedRevision, CancellationToken ct)
+    {
+        await LockActorAsync(actorId, ct);
+        var profile = await db.UserProfiles.AsNoTracking().SingleOrDefaultAsync(p => p.UserId == actorId, ct);
+        if (!string.Equals(expectedRevision, ETag(profile), StringComparison.Ordinal)) throw Conflict();
+        return new(profile ?? new UserProfile { UserId = actorId, Revision = "" }, profile?.Revision);
+    }
+
+    internal async Task PersistWriteAsync(Write write, CancellationToken ct, Guid? consumedChallenge = null)
+    {
+        var profile = write.Profile;
+        profile.Revision = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+        profile.UpdatedAt = clock.GetUtcNow();
+        await db.ProfileContactChallenges.Where(c => c.UserId == profile.UserId
+                && (c.State == ProfileContactChallengeState.PendingDelivery || c.State == ProfileContactChallengeState.Delivered)
+                && (consumedChallenge == null || c.Id != consumedChallenge))
+            .ExecuteUpdateAsync(setters => setters.SetProperty(c => c.State, ProfileContactChallengeState.Superseded), ct);
+        if (write.PreviousRevision is null) db.UserProfiles.Add(profile);
+        else
+        {
+            var changed = await db.UserProfiles.Where(p => p.UserId == profile.UserId && p.Revision == write.PreviousRevision)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(p => p.DisplayName, profile.DisplayName)
+                    .SetProperty(p => p.Biography, profile.Biography)
+                    .SetProperty(p => p.ContactEmail, profile.ContactEmail)
+                    .SetProperty(p => p.ContactEmailState, profile.ContactEmailState)
+                    .SetProperty(p => p.Revision, profile.Revision)
+                    .SetProperty(p => p.UpdatedAt, profile.UpdatedAt), ct);
+            if (changed != 1) throw Conflict();
+        }
     }
 
     private static string ETag(UserProfile? profile) => profile is null ? "\"0\"" : "\"" + profile.Revision + "\"";

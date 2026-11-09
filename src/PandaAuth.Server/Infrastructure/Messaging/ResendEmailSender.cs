@@ -47,7 +47,13 @@ public sealed class ResendEmailSender(
         logger.LogInformation("邮件已发送 email={Email} subject={Subject}", MaskEmail(email), subject);
     }
 
-    private async Task SendCoreAsync(string email, string subject, string html, CancellationToken ct)
+    public Task SendProfileContactVerificationAsync(string email, string token, Guid deliveryId, CancellationToken ct)
+    {
+        var (subject, html) = EmailTemplates.ProfileContactVerification(token);
+        return SendCoreAsync(email, subject, html, ct, $"auth-profile-contact:{deliveryId:N}");
+    }
+
+    private async Task SendCoreAsync(string email, string subject, string html, CancellationToken ct, string? deliveryKey = null)
     {
         var payload = new
         {
@@ -63,10 +69,11 @@ public sealed class ResendEmailSender(
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.Value.ApiKey);
 
+        if (deliveryKey is not null) request.Headers.Add("Idempotency-Key", deliveryKey);
         using var response = await httpClient.SendAsync(request, ct);
         if (!response.IsSuccessStatusCode)
         {
-            var body = await response.Content.ReadAsStringAsync(ct);
+            var body = deliveryKey is null ? await response.Content.ReadAsStringAsync(ct) : "profile_contact_delivery_rejected";
             logger.LogError("Resend API 失败 status={Status} detail={Detail}", (int)response.StatusCode, SummarizeErrorBody(body));
             throw new InvalidOperationException($"Resend API 返回 {(int)response.StatusCode}");
         }

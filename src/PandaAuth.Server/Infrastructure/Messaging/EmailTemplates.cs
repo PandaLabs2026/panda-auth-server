@@ -39,6 +39,13 @@ public static class EmailTemplates
         """
     );
 
+    public static (string Subject, string Html) ProfileContactVerification(string token) =>
+    (
+        "验证你的 PandaAuth 联系邮箱",
+        $"<p>请使用一次性令牌验证个人资料中的联系邮箱：</p><p>{System.Net.WebUtility.HtmlEncode(token)}</p>" +
+        "<p>10 分钟内有效且只能使用一次。此操作不会修改登录邮箱、密码、多因素认证或账号恢复方式。若非本人操作，请忽略。</p>"
+    );
+
     private static string TokenMessage(string heading, string action, string token) =>
         $"""
         <h2 style="color:#2E6F96;margin-bottom:8px;">PandaAuth {heading}</h2>

@@ -98,6 +98,55 @@ public sealed class SelfProfileProtocolTests
         Assert.Equal("no-store", frozen.Headers.CacheControl?.ToString());
     }
 
+    private sealed class ContactMail : PandaAuth.Server.Infrastructure.Messaging.IEmailSender
+    {
+        public string Token { get; private set; } = "";
+        public Task SendAsync(string email, string subject, string html, CancellationToken ct) => throw new InvalidOperationException();
+        public Task SendPasswordResetNoticeAsync(string email, CancellationToken ct) => throw new InvalidOperationException();
+        public Task SendProfileContactVerificationAsync(string email, string token, Guid deliveryId, CancellationToken ct)
+        { Token = token; return Task.CompletedTask; }
+    }
+
+    [PostgresFact]
+    public async Task Contact_http_challenge_confirmation_and_delete_preserve_credentials_and_reject_unknown_fields()
+    {
+        var mail = new ContactMail();
+        await using var fixture = await SecurityProtocolFixture.CreateAsync(
+            services => services.AddSingleton<PandaAuth.Server.Infrastructure.Messaging.IEmailSender>(mail), Enabled);
+        await RegisterReadWriteAsync(fixture);
+        using var browser = fixture.Browser();
+        var tokens = await fixture.IssueAsync(browser, Client, "openid roles " + ProfileScopes.Read + " " + ProfileScopes.Write);
+        browser.DefaultRequestHeaders.Authorization = new("Bearer", tokens.GetProperty("access_token").GetString());
+        using var missing = await browser.PostAsync(PandaAuthProfileApi.ContactEmailChallenges, Json("{\"address\":\"contact@example.invalid\"}"));
+        Assert.Equal((HttpStatusCode)428, missing.StatusCode);
+        using var unknown = new HttpRequestMessage(HttpMethod.Post, PandaAuthProfileApi.ContactEmailChallenges)
+            { Content = Json("{\"address\":\"contact@example.invalid\",\"subject\":\"other\"}") };
+        unknown.Headers.TryAddWithoutValidation("If-Match", "\"0\"");
+        using var invalid = await browser.SendAsync(unknown);
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+        using var create = new HttpRequestMessage(HttpMethod.Post, PandaAuthProfileApi.ContactEmailChallenges)
+            { Content = Json("{\"address\":\"contact@example.invalid\"}") };
+        create.Headers.TryAddWithoutValidation("If-Match", "\"0\"");
+        using var pending = await browser.SendAsync(create);
+        Assert.Equal(HttpStatusCode.Accepted, pending.StatusCode);
+        Assert.Equal("no-store", pending.Headers.CacheControl?.ToString());
+        var challenge = (await pending.Content.ReadFromJsonAsync<ProfileContactEmailChallengeResponse>())!;
+        Assert.Equal(challenge.Profile.Revision, pending.Headers.ETag!.ToString());
+        using var confirmed = await browser.PostAsJsonAsync(PandaAuthProfileApi.ContactEmailConfirmation,
+            new ProfileContactEmailConfirmationRequest(challenge.ChallengeId, mail.Token));
+        Assert.Equal(HttpStatusCode.OK, confirmed.StatusCode);
+        var verified = (await confirmed.Content.ReadFromJsonAsync<SelfProfileDto>())!;
+        Assert.Equal(ProfileContactEmailState.Verified, verified.ContactEmail.State);
+        using var delete = new HttpRequestMessage(HttpMethod.Delete, PandaAuthProfileApi.ContactEmail);
+        delete.Headers.TryAddWithoutValidation("If-Match", verified.Revision);
+        using var removed = await browser.SendAsync(delete);
+        Assert.Equal(HttpStatusCode.OK, removed.StatusCode);
+        Assert.Equal(ProfileContactEmailState.None, (await removed.Content.ReadFromJsonAsync<SelfProfileDto>())!.ContactEmail.State);
+        using var db = fixture.Context();
+        Assert.Equal("security-admin@example.test", (await db.Users.SingleAsync()).Email);
+        Assert.Empty(await db.ProfileContactChallenges.ToListAsync());
+    }
+
     [PostgresTheory]
     [InlineData("other-client", "profile.read", "profile-api")]
     [InlineData(Client, "profile.read", "other-api")]

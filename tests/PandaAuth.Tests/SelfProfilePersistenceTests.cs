@@ -90,12 +90,11 @@ public sealed class SelfProfilePersistenceTests
     [PostgresFact]
     public async Task Upgrade_preserves_existing_accounts_and_does_not_backfill_profiles()
     {
-        await using var fixture = await AuthQualityPostgresFixture.CreateAsync();
+        await using var fixture = await AuthQualityPostgresFixture.CreateAsync(migrate: false);
         await using var scope = fixture.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
-        var migrations = db.Database.GetMigrations().ToArray();
         var migrator = db.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>();
-        await migrator.MigrateAsync(migrations[^2]);
+        await migrator.MigrateAsync("20261031111911_AllowTotpRotation");
         var user = new PandaUser { Email = "old@example.invalid", PasswordHash = "synthetic-credential" };
         db.Users.Add(user);
         await db.SaveChangesAsync();

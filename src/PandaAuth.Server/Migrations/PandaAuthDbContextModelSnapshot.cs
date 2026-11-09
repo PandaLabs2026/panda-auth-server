@@ -878,6 +878,98 @@ namespace PandaAuth.Server.Migrations
                         });
                 });
 
+            modelBuilder.Entity("PandaAuth.Server.Domain.ProfileContactChallenge", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Address")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("DeliveryId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ExpectedRevision")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("FailedAttempts")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("State")
+                        .HasColumnType("integer");
+
+                    b.Property<byte[]>("TokenDigest")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeliveryId")
+                        .IsUnique();
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.HasIndex("UserId")
+                        .IsUnique()
+                        .HasFilter("\"State\" IN (0, 1)");
+
+                    b.ToTable("panda_profile_contact_challenges", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_profile_challenge_attempts", "\"FailedAttempts\" BETWEEN 0 AND 5");
+
+                            t.HasCheckConstraint("CK_profile_challenge_digest", "octet_length(\"TokenDigest\") = 32");
+
+                            t.HasCheckConstraint("CK_profile_challenge_state", "\"State\" BETWEEN 0 AND 5");
+                        });
+                });
+
+            modelBuilder.Entity("PandaAuth.Server.Domain.ProfileRateLimit", b =>
+                {
+                    b.Property<string>("UserId")
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.Property<int>("ConfirmationCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("ConfirmationWindowStart")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("CreationCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("CreationWindowStart")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("LastChallengeAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("UserId");
+
+                    b.ToTable("panda_profile_rate_limits", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_profile_confirmation_count", "\"ConfirmationCount\" BETWEEN 0 AND 10");
+
+                            t.HasCheckConstraint("CK_profile_creation_count", "\"CreationCount\" BETWEEN 0 AND 5");
+                        });
+                });
+
             modelBuilder.Entity("PandaAuth.Server.Domain.SecurityEvent", b =>
                 {
                     b.Property<long>("Id")
@@ -1157,6 +1249,24 @@ namespace PandaAuth.Server.Migrations
             modelBuilder.Entity("PandaAuth.Server.Domain.ProfileAvatar", b =>
                 {
                     b.HasOne("PandaAuth.Server.Domain.UserProfile", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PandaAuth.Server.Domain.ProfileContactChallenge", b =>
+                {
+                    b.HasOne("PandaAuth.Server.Domain.UserProfile", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PandaAuth.Server.Domain.ProfileRateLimit", b =>
+                {
+                    b.HasOne("PandaAuth.Server.Domain.PandaUser", null)
                         .WithMany()
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
