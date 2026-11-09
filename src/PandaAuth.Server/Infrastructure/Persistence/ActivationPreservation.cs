@@ -16,6 +16,8 @@ public sealed record ActivationDataState(Dictionary<string,string> Tables, bool 
 /// <summary>Cold activation invariants. No identities, private material or row contents leave this process.</summary>
 public static class ActivationPreservation
 {
+    // Resource-only activation never authorizes later feature migrations.
+    public const string LastReviewedMigration = "20261031111911_AllowTotpRotation";
     private static string Permission => OpenIddictConstants.Permissions.Prefixes.Scope + PandaAuthAdminApi.Scope;
     private static void Require(bool condition)
     { if (!condition) throw new InvalidOperationException("activation_data_changed"); }
@@ -47,7 +49,9 @@ public static class ActivationPreservation
         var known = db.Database.GetMigrations().ToArray();
         var applied = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
         Require(applied.SequenceEqual(known.Take(applied.Length), StringComparer.Ordinal));
-        var pending = known.Skip(applied.Length).ToHashSet(StringComparer.Ordinal);
+        var ceiling = Array.IndexOf(known, LastReviewedMigration);
+        Require(ceiling >= 0);
+        var pending = known.Take(ceiling + 1).Skip(applied.Length).ToHashSet(StringComparer.Ordinal);
         var reviewed = new HashSet<string>(StringComparer.Ordinal)
         {
             OperationalCommand.SigningMigration,

@@ -25,7 +25,7 @@ internal sealed class AuthQualityPostgresFixture : IAsyncDisposable
         Services = services.BuildServiceProvider();
     }
 
-    internal static async Task<AuthQualityPostgresFixture> CreateAsync(IInterceptor? interceptor = null)
+    internal static async Task<AuthQualityPostgresFixture> CreateAsync(IInterceptor? interceptor = null, bool migrate = true)
     {
         var builder = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("PANDA_AUTH_TEST_POSTGRES"));
         PostgresTestBoundary.ValidateEndpoint(builder, PostgresTestBoundary.SharedMode);
@@ -43,7 +43,8 @@ internal sealed class AuthQualityPostgresFixture : IAsyncDisposable
         try
         {
             await using var scope = fixture.Services.CreateAsyncScope();
-            await scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>().Database.MigrateAsync();
+            if (migrate)
+                await scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>().Database.MigrateAsync();
             return fixture;
         }
         catch { await fixture.DisposeAsync(); throw; }

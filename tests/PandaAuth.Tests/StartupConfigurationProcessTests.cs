@@ -193,6 +193,8 @@ public sealed class StartupConfigurationProcessTests
         Assert.Empty(Directory.GetFiles(process.Root, "*.xml", SearchOption.AllDirectories));
         Assert.Contains(OperationalCommand.SigningMigration, await db.Database.GetAppliedMigrationsAsync());
         Assert.Equal(0, (await process.RunAsync(["--migrate-admin-resource-only"])).Code);
+        Assert.False(await db.Database.SqlQueryRaw<bool>("SELECT to_regclass('public.panda_user_profiles') IS NOT NULL AS \"Value\"").SingleAsync());
+        Assert.DoesNotContain("20261109033223_AddPrivateSelfProfiles", await db.Database.GetAppliedMigrationsAsync());
     }
 
     [PostgresFact]
@@ -283,7 +285,7 @@ public sealed class StartupConfigurationProcessTests
     public async Task ResourceMigration_PgDumpRestorePreservesStateAndAdmission(bool populated)
     {
         await using var source = await AuthQualityPostgresFixture.CreateAsync();
-        await using var restored = await AuthQualityPostgresFixture.CreateAsync();
+        await using var restored = await AuthQualityPostgresFixture.CreateAsync(migrate: false);
         using var sourceScope = source.Services.CreateScope();
         using var restoredScope = restored.Services.CreateScope();
         var db = sourceScope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
@@ -309,6 +311,7 @@ public sealed class StartupConfigurationProcessTests
         var backup = Path.Combine(process.Root, "synthetic.dump");
         await RunPostgresToolAsync("pg_dump", db.Database.GetConnectionString()!, process.Root,
             ["--format=custom", "--no-owner", "--no-acl", "--file", backup]);
+        Assert.Empty(await target.Database.SqlQueryRaw<string>("SELECT tablename AS \"Value\" FROM pg_tables WHERE schemaname = 'public'").ToListAsync());
         await RunPostgresToolAsync("pg_restore", target.Database.GetConnectionString()!, process.Root,
             ["--clean", "--if-exists", "--no-owner", "--no-acl", "--exit-on-error", "--dbname", target.Database.GetDbConnection().Database, backup]);
         ActivationPreservation.RequireUnchanged(expected, await ActivationPreservation.CaptureAsync(target.Database.GetConnectionString()!));
@@ -322,7 +325,10 @@ public sealed class StartupConfigurationProcessTests
         }
         else
         {
-            Assert.Equal(target.Database.GetMigrations(), await target.Database.GetAppliedMigrationsAsync());
+            var expectedMigrations = target.Database.GetMigrations()
+                .TakeWhile(id => string.CompareOrdinal(id, "20261031111911_AllowTotpRotation") <= 0);
+            Assert.Equal(expectedMigrations, await target.Database.GetAppliedMigrationsAsync());
+            Assert.False(await target.Database.SqlQueryRaw<bool>("SELECT to_regclass('public.panda_user_profiles') IS NOT NULL AS \"Value\"").SingleAsync());
             Assert.Equal("synthetic-preserved-stamp", (await target.Users.AsNoTracking().SingleAsync()).SecurityStamp);
             Assert.Equal(0, (await process.RunAsync(["--migrate-admin-resource-only"])).Code);
         }
@@ -368,8 +374,10 @@ public sealed class StartupConfigurationProcessTests
         var stdout = process.StandardOutput.ReadToEndAsync(); var stderr = process.StandardError.ReadToEndAsync();
         try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60)); }
         finally { if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); } }
-        await stdout; await stderr;
-        Assert.True(process.ExitCode == 0, tool + " failed against the task-owned fixture database.");
+        await stdout;
+        var diagnostic = (await stderr).Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "no diagnostic";
+        // Endpoint is validated above and contains only this test's synthetic data.
+        Assert.True(process.ExitCode == 0, tool + " failed against the task-owned fixture database: " + diagnostic);
     }
 
     private sealed class ProcessFixture : IAsyncDisposable

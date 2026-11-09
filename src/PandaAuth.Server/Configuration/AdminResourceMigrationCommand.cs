@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using PandaAuth.Server.Infrastructure.Persistence;
 
 namespace PandaAuth.Server.Configuration;
@@ -43,8 +45,11 @@ public static class AdminResourceMigrationCommand
             await AdminResourceActivation.ValidateSourceAsync(scope.ServiceProvider);
             var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
             var original = await ActivationPreservation.PrepareAsync(db, connection);
-            await db.Database.MigrateAsync();
-            if (!(await db.Database.GetAppliedMigrationsAsync()).SequenceEqual(db.Database.GetMigrations(), StringComparer.Ordinal))
+            var appliedCount = (await db.Database.GetAppliedMigrationsAsync()).Count();
+            if (original.AddedMigrations is { Count: > 0 })
+                await db.GetService<IMigrator>().MigrateAsync(ActivationPreservation.LastReviewedMigration);
+            var expectedHistory = db.Database.GetMigrations().Take(appliedCount + (original.AddedMigrations?.Count ?? 0));
+            if (!(await db.Database.GetAppliedMigrationsAsync()).SequenceEqual(expectedHistory, StringComparer.Ordinal))
                 throw new InvalidOperationException("activation_migration_history_mismatch");
             await AdminResourceActivation.ApplyAsync(scope.ServiceProvider);
             ActivationPreservation.RequireUnchanged(original, await ActivationPreservation.CaptureAsync(connection, original));
