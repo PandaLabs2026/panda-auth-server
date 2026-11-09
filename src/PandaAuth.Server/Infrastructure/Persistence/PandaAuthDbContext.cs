@@ -110,6 +110,7 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
             {
                 table.HasCheckConstraint("CK_profile_creation_count", "\"CreationCount\" BETWEEN 0 AND 5");
                 table.HasCheckConstraint("CK_profile_confirmation_count", "\"ConfirmationCount\" BETWEEN 0 AND 10");
+                table.HasCheckConstraint("CK_profile_avatar_count", "\"AvatarCount\" BETWEEN 0 AND 2");
             });
             entity.HasKey(x => x.UserId);
             entity.Property(x => x.UserId).HasMaxLength(450);

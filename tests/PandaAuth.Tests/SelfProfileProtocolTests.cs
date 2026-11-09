@@ -148,6 +148,92 @@ public sealed class SelfProfileProtocolTests
     }
 
     [PostgresTheory]
+    [InlineData("seed.jpg", "image/jpeg")]
+    [InlineData("max-Png", "image/png")]
+    [InlineData("max-Jpeg", "image/jpeg")]
+    [InlineData("max-Webp", "image/webp")]
+    public async Task Avatar_http_uses_private_png_and_strong_revision_for_upload_and_delete(string source, string mediaType)
+    {
+        await using var fixture = await SecurityProtocolFixture.CreateAsync(settings: Enabled);
+        await RegisterReadWriteAsync(fixture);
+        using var browser = fixture.Browser();
+        var tokens = await fixture.IssueAsync(browser, Client, "openid roles " + ProfileScopes.Read + " " + ProfileScopes.Write);
+        browser.DefaultRequestHeaders.Authorization = new("Bearer", tokens.GetProperty("access_token").GetString());
+        var bytes = await File.ReadAllBytesAsync(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ProfileAvatar", source));
+        using var request = new HttpRequestMessage(HttpMethod.Put, PandaAuthProfileApi.Avatar) { Content = new ByteArrayContent(bytes) };
+        request.Content.Headers.ContentType = new(mediaType);
+        request.Headers.TryAddWithoutValidation("If-Match", "\"0\"");
+        using var saved = await browser.SendAsync(request);
+        Assert.Equal(HttpStatusCode.OK, saved.StatusCode);
+        var profile = (await saved.Content.ReadFromJsonAsync<SelfProfileDto>())!;
+        Assert.True(profile.HasAvatar);
+        using var image = await browser.GetAsync(PandaAuthProfileApi.Avatar);
+        Assert.Equal(HttpStatusCode.OK, image.StatusCode);
+        Assert.Equal("image/png", image.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("no-store", image.Headers.CacheControl?.ToString());
+        Assert.Equal(profile.Revision, image.Headers.ETag!.ToString());
+        Assert.Equal("nosniff", image.Headers.GetValues("X-Content-Type-Options").Single());
+        using var delete = new HttpRequestMessage(HttpMethod.Delete, PandaAuthProfileApi.Avatar);
+        delete.Headers.TryAddWithoutValidation("If-Match", profile.Revision);
+        using var removed = await browser.SendAsync(delete);
+        Assert.Equal(HttpStatusCode.OK, removed.StatusCode);
+        Assert.False((await removed.Content.ReadFromJsonAsync<SelfProfileDto>())!.HasAvatar);
+        using var absent = await browser.GetAsync(PandaAuthProfileApi.Avatar);
+        Assert.Equal(HttpStatusCode.NotFound, absent.StatusCode);
+        Assert.Equal("no-store", absent.Headers.CacheControl?.ToString());
+    }
+
+    private sealed class AvatarBudgetClock : TimeProvider
+    {
+        private DateTimeOffset now = DateTimeOffset.UtcNow;
+        public override DateTimeOffset GetUtcNow() => now;
+        public void Advance() => now = now.AddMinutes(2);
+    }
+
+    [PostgresFact]
+    public async Task Avatar_budget_one_host_handles_all_max_formats_and_three_bounded_uploads()
+    {
+        var clock = new AvatarBudgetClock();
+        await using var fixture = await SecurityProtocolFixture.CreateAsync(services => services.AddSingleton<TimeProvider>(clock), Enabled);
+        await RegisterReadWriteAsync(fixture);
+        using var browser = fixture.Browser();
+        var tokens = await fixture.IssueAsync(browser, Client, "openid roles " + ProfileScopes.Read + " " + ProfileScopes.Write);
+        browser.DefaultRequestHeaders.Authorization = new("Bearer", tokens.GetProperty("access_token").GetString());
+        var revision = "\"0\"";
+        foreach (var (source, media) in new[] { ("max-Png", "image/png"), ("max-Jpeg", "image/jpeg"), ("max-Webp", "image/webp") })
+        {
+            clock.Advance();
+            using var request = new HttpRequestMessage(HttpMethod.Put, PandaAuthProfileApi.Avatar)
+                { Content = new ByteArrayContent(await File.ReadAllBytesAsync(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ProfileAvatar", source))) };
+            request.Content.Headers.ContentType = new(media);
+            request.Headers.TryAddWithoutValidation("If-Match", revision);
+            using var response = await browser.SendAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            revision = (await response.Content.ReadFromJsonAsync<SelfProfileDto>())!.Revision;
+        }
+        var sourceBytes = await File.ReadAllBytesAsync(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ProfileAvatar", "max-Jpeg"));
+        string[] actors;
+        await using (var setup = fixture.Host.Services.CreateAsyncScope())
+        {
+            var db = setup.ServiceProvider.GetRequiredService<PandaAuth.Server.Infrastructure.Persistence.PandaAuthDbContext>();
+            var users = Enumerable.Range(0, 3).Select(_ => new PandaUser()).ToArray();
+            db.Users.AddRange(users); await db.SaveChangesAsync(); actors = users.Select(u => u.Id).ToArray();
+        }
+        async Task Upload(string actor)
+        {
+            await using var scope = fixture.Host.Services.CreateAsyncScope();
+            var service = scope.ServiceProvider.GetRequiredService<PandaAuth.Server.Features.Profile.ProfileAvatarService>();
+            var profile = await service.PutAsync(actor, "\"0\"", _ =>
+            {
+                var input = new byte[2097152]; sourceBytes.CopyTo(input, 0);
+                return Task.FromResult(input);
+            }, "avatar-budget");
+            Assert.True(profile.HasAvatar);
+        }
+        await Task.WhenAll(actors.Select(Upload));
+    }
+
+    [PostgresTheory]
     [InlineData("other-client", "profile.read", "profile-api")]
     [InlineData(Client, "profile.read", "other-api")]
     [InlineData(Client, "other.scope", "profile-api")]

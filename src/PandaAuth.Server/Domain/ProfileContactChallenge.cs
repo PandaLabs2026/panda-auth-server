@@ -26,4 +26,6 @@ public sealed class ProfileRateLimit
     public DateTimeOffset? LastChallengeAt { get; set; }
     public DateTimeOffset? ConfirmationWindowStart { get; set; }
     public int ConfirmationCount { get; set; }
+    public DateTimeOffset? AvatarWindowStart { get; set; }
+    public int AvatarCount { get; set; }
 }

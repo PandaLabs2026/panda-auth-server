@@ -945,6 +945,12 @@ namespace PandaAuth.Server.Migrations
                         .HasMaxLength(450)
                         .HasColumnType("character varying(450)");
 
+                    b.Property<int>("AvatarCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("AvatarWindowStart")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<int>("ConfirmationCount")
                         .HasColumnType("integer");
 
@@ -964,6 +970,8 @@ namespace PandaAuth.Server.Migrations
 
                     b.ToTable("panda_profile_rate_limits", null, t =>
                         {
+                            t.HasCheckConstraint("CK_profile_avatar_count", "\"AvatarCount\" BETWEEN 0 AND 2");
+
                             t.HasCheckConstraint("CK_profile_confirmation_count", "\"ConfirmationCount\" BETWEEN 0 AND 10");
 
                             t.HasCheckConstraint("CK_profile_creation_count", "\"CreationCount\" BETWEEN 0 AND 5");

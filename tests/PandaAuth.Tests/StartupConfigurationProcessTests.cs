@@ -358,6 +358,44 @@ public sealed class StartupConfigurationProcessTests
         ActivationPreservation.RequireUnchanged(before, await ActivationPreservation.CaptureAsync(db.Database.GetConnectionString()!));
     }
 
+    [PostgresFact]
+    public async Task ProfileBackupRestore_preserves_avatar_proof_revision_and_rate_counters()
+    {
+        await using var source = await AuthQualityPostgresFixture.CreateAsync();
+        await using var destination = await AuthQualityPostgresFixture.CreateAsync(migrate: false);
+        await using var sourceScope = source.Services.CreateAsyncScope();
+        await using var destinationScope = destination.Services.CreateAsyncScope();
+        var db = sourceScope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        var target = destinationScope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        var user = new PandaUser { Email = "backup-profile@example.invalid" };
+        var revision = new string('c', 32); var challenge = Guid.NewGuid();
+        var bytes = await File.ReadAllBytesAsync(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ProfileAvatar", "seed.png"));
+        db.Users.Add(user);
+        db.UserProfiles.Add(new UserProfile { UserId = user.Id, Revision = revision, DisplayName = "Synthetic profile",
+            ContactEmail = "contact@example.invalid", ContactEmailState = ProfileContactEmailState.Pending });
+        db.ProfileAvatars.Add(new ProfileAvatar { UserId = user.Id, Bytes = bytes, Width = 64, Height = 32 });
+        db.ProfileContactChallenges.Add(new ProfileContactChallenge { Id = challenge, UserId = user.Id,
+            Address = "contact@example.invalid", TokenDigest = new byte[32], ExpectedRevision = revision,
+            DeliveryId = Guid.NewGuid(), State = ProfileContactChallengeState.Delivered,
+            CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10) });
+        db.ProfileRateLimits.Add(new ProfileRateLimit { UserId = user.Id, CreationCount = 5, ConfirmationCount = 7, AvatarCount = 2 });
+        await db.SaveChangesAsync();
+        await using var scratch = new ProcessFixture();
+        var dump = Path.Combine(scratch.Root, "profile.dump");
+        await RunPostgresToolAsync("pg_dump", db.Database.GetConnectionString()!, scratch.Root,
+            ["--format=custom", "--no-owner", "--no-acl", "--file", dump]);
+        await RunPostgresToolAsync("pg_restore", target.Database.GetConnectionString()!, scratch.Root,
+            ["--no-owner", "--no-acl", "--exit-on-error", "--dbname", target.Database.GetDbConnection().Database, dump]);
+        Assert.Equal(revision, (await target.UserProfiles.AsNoTracking().SingleAsync()).Revision);
+        Assert.Equal(bytes, (await target.ProfileAvatars.AsNoTracking().SingleAsync()).Bytes);
+        var proof = await target.ProfileContactChallenges.AsNoTracking().SingleAsync();
+        Assert.Equal(challenge, proof.Id); Assert.Equal(revision, proof.ExpectedRevision);
+        Assert.Equal(ProfileContactChallengeState.Delivered, proof.State); Assert.Equal(new byte[32], proof.TokenDigest);
+        var rate = await target.ProfileRateLimits.AsNoTracking().SingleAsync();
+        Assert.Equal(5, rate.CreationCount); Assert.Equal(7, rate.ConfirmationCount); Assert.Equal(2, rate.AvatarCount);
+        Assert.False(target.Database.HasPendingModelChanges());
+    }
+
     private static async Task RunPostgresToolAsync(string tool, string connection, string root, string[] arguments)
     {
         var endpoint = new Npgsql.NpgsqlConnectionStringBuilder(connection);

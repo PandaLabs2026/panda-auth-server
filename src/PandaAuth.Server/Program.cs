@@ -23,6 +23,13 @@ using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Shared;
 using PandaAuth.Server.Features.PortalClients;
 
+if (args is ["--profile-avatar-decode"])
+{
+    try { Environment.ExitCode = await ProfileAvatarWorker.RunAsync(Console.OpenStandardInput(), Console.OpenStandardOutput(), CancellationToken.None); }
+    catch { Environment.ExitCode = 70; } // No input/native exception details on either output stream.
+    return;
+}
+
 if (AdminResourceMigrationCommand.IsRequested(args))
 {
     var commandBuilder = WebApplication.CreateBuilder([]);

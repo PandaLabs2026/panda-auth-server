@@ -68,6 +68,58 @@ public sealed class SelfProfileController(SelfProfileService profiles, SecurityE
         catch (ProfileOperationException e) { return await RejectedAsync(e.Code, e.StatusCode, ct); }
     }
 
+    [HttpGet("~" + PandaAuthProfileApi.Avatar), Authorize(Policy = ProfileAccess.ReadPolicy)]
+    public async Task<IActionResult> ReadAvatar([FromServices] ProfileAvatarService avatars, CancellationToken ct)
+    {
+        try
+        {
+            var result = await avatars.ReadAsync(ProfileAccess.ActorId(User)!, ct);
+            Response.Headers.ETag = result.Revision;
+            Response.Headers["X-Content-Type-Options"] = "nosniff";
+            return File(result.Avatar.Bytes, PandaAuth.Server.Domain.ProfileAvatar.MediaType);
+        }
+        catch (ProfileOperationException e) { return Error(e.Code, e.StatusCode); }
+    }
+
+    [HttpPut("~" + PandaAuthProfileApi.Avatar), Authorize(Policy = ProfileAccess.WritePolicy)]
+    public async Task<IActionResult> PutAvatar([FromServices] ProfileAvatarService avatars, CancellationToken ct)
+    {
+        try { return Profile(await avatars.PutAsync(ProfileAccess.ActorId(User)!, RequiredRevision(), ReadImageAsync, HttpContext.TraceIdentifier, ct)); }
+        catch (ProfileInputException e) { return await RejectedAsync(e.Code, e.StatusCode, ct); }
+        catch (ProfileOperationException e) { return await RejectedAsync(e.Code, e.StatusCode, ct); }
+    }
+
+    [HttpDelete("~" + PandaAuthProfileApi.Avatar), Authorize(Policy = ProfileAccess.WritePolicy)]
+    public async Task<IActionResult> DeleteAvatar([FromServices] ProfileAvatarService avatars, CancellationToken ct)
+    {
+        try { return Profile(await avatars.DeleteAsync(ProfileAccess.ActorId(User)!, RequiredRevision(), HttpContext.TraceIdentifier, ct)); }
+        catch (ProfileInputException e) { return await RejectedAsync(e.Code, e.StatusCode, ct); }
+        catch (ProfileOperationException e) { return await RejectedAsync(e.Code, e.StatusCode, ct); }
+    }
+
+    private async Task<byte[]> ReadImageAsync(CancellationToken ct)
+    {
+        const int maximum = 2097152;
+        if (!Microsoft.Net.Http.Headers.MediaTypeHeaderValue.TryParse(Request.ContentType, out var media)
+            || media.MediaType.Value?.ToLowerInvariant() is not ("image/png" or "image/jpeg" or "image/webp")
+            || Request.Headers.ContentEncoding.Any(value => !string.Equals(value, "identity", StringComparison.OrdinalIgnoreCase)))
+            throw new ProfileInputException("profile_request_invalid", 415);
+        if (Request.ContentLength > maximum) throw new ProfileInputException("profile_request_too_large", 413);
+        using var body = new MemoryStream();
+        var buffer = ArrayPool<byte>.Shared.Rent(8192);
+        try
+        {
+            while (true)
+            {
+                var count = await Request.Body.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, maximum - (int)body.Length + 1)), ct);
+                if (count == 0) return body.ToArray();
+                if (body.Length + count > maximum) throw new ProfileInputException("profile_request_too_large", 413);
+                body.Write(buffer, 0, count);
+            }
+        }
+        finally { ArrayPool<byte>.Shared.Return(buffer, clearArray: true); }
+    }
+
     private string RequiredRevision()
     {
         var etags = Request.Headers.IfMatch;

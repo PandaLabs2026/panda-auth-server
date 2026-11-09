@@ -87,6 +87,8 @@ internal static class ProfileRegistration
         services.Configure<ProfileOptions>(configuration.GetSection("Profile"));
         services.AddScoped<SelfProfileService>();
         services.AddScoped<ProfileContactService>();
+        services.AddSingleton<ProfileAvatarDecoder>();
+        services.AddScoped<ProfileAvatarService>();
         services.AddHostedService<ProfileContactRetention>();
         services.AddScoped<IAuthorizationHandler, ProfileResourceHandler>();
         services.AddSingleton<IAuthorizationMiddlewareResultHandler, ProfileAuthorizationResultHandler>();
