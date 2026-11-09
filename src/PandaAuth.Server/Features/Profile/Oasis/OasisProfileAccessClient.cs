@@ -87,8 +87,12 @@ internal sealed class OasisProfileAccessClient(OasisProfileOptions options, IAut
         {
             return await FinishAsync(null);
         }
-        catch (Exception error) when (error is HttpRequestException or IOException or JsonException or ArgumentException
-            or DbException or DbUpdateException)
+        catch (Exception error) when (error is DbException or DbUpdateException)
+        {
+            // A failed local/audit write cannot grant access or be retried as a second event.
+            return null;
+        }
+        catch (Exception error) when (error is HttpRequestException or IOException or JsonException or ArgumentException)
         {
             return await FinishAsync(null);
         }
@@ -113,7 +117,6 @@ internal sealed class OasisProfileAccessClient(OasisProfileOptions options, IAut
         {
             ["grant_type"] = OpenIddictConstants.GrantTypes.ClientCredentials,
             ["client_id"] = options.ClientId, ["client_secret"] = options.ClientSecret!, ["scope"] = Scope,
-            ["resource"] = Audience,
         });
         using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         using var json = await ReadJsonAsync(response, 16384, ct);
@@ -150,7 +153,31 @@ internal sealed class OasisProfileAccessClient(OasisProfileOptions options, IAut
             if (bytes.Length > maximum) return null;
         }
         ct.ThrowIfCancellationRequested();
-        return JsonDocument.Parse(Utf8.GetString(bytes.GetBuffer(), 0, (int)bytes.Length), new() { MaxDepth = 4 });
+        var document = JsonDocument.Parse(Utf8.GetString(bytes.GetBuffer(), 0, (int)bytes.Length), new() { MaxDepth = 4 });
+        try
+        {
+            // JsonDocument defers decoding escaped UTF-16 until strings/names are accessed.
+            DecodeStrings(document.RootElement);
+            return document;
+        }
+        catch (InvalidOperationException)
+        {
+            document.Dispose();
+            return null;
+        }
+    }
+
+    private static void DecodeStrings(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.String) _ = element.GetString();
+        else if (element.ValueKind == JsonValueKind.Object)
+            foreach (var property in element.EnumerateObject())
+            {
+                _ = property.Name;
+                DecodeStrings(property.Value);
+            }
+        else if (element.ValueKind == JsonValueKind.Array)
+            foreach (var item in element.EnumerateArray()) DecodeStrings(item);
     }
 
     private static bool Shape(JsonElement element, params string[] expected)

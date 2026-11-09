@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using OpenIddict.Abstractions;
@@ -51,6 +52,30 @@ public sealed class OasisProfileAccessClientTests
         Assert.DoesNotContain(audit, e => (e.Metadata ?? "").Contains("fixture-service-secret", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task Audit_storage_failure_rejects_without_retrying_the_same_write()
+    {
+        var failure = new FailMembershipAudit();
+        await using var fixture = new Fixture(auditInterceptor: failure);
+        Assert.Null(await fixture.Resolve());
+        Assert.Equal(1, failure.Attempts);
+    }
+
+    private sealed class FailMembershipAudit : SaveChangesInterceptor
+    {
+        internal int Attempts;
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData eventData,
+            InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            if (eventData.Context!.ChangeTracker.Entries<SecurityEvent>().Any())
+            {
+                Attempts++;
+                if (Attempts == 1) throw new DbUpdateException("Synthetic audit storage failure");
+            }
+            return ValueTask.FromResult(result);
+        }
+    }
+
     [Theory]
     [InlineData("expiresType")]
     [InlineData("scope")]
@@ -81,7 +106,9 @@ public sealed class OasisProfileAccessClientTests
     [InlineData("unknownProperty")]
     [InlineData("invalidJson")]
     [InlineData("invalidUtf8")]
+    [InlineData("invalidUnicode")]
     [InlineData("tooLarge")]
+    [InlineData("misleadingLength")]
     [InlineData("redirect")]
     [InlineData("unavailable")]
     [InlineData("cacheable")]
@@ -168,6 +195,21 @@ public sealed class OasisProfileAccessClientTests
             fixture.Caller, fixture.Organization, fixture.Member, new[] { "avatar" }, cancellation.Token));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Late_owner_output_cannot_grant_after_deadline_or_caller_cancellation(bool callerCancels)
+    {
+        await using var fixture = new Fixture();
+        fixture.Transport.LateOwner = TimeSpan.FromMilliseconds(callerCancels ? 150 : 3200);
+        using var cancellation = new CancellationTokenSource();
+        if (callerCancels) cancellation.CancelAfter(TimeSpan.FromMilliseconds(50));
+        var call = fixture.Client.ResolveAsync(fixture.Caller, fixture.Organization, fixture.Member,
+            new[] { "avatar" }, cancellation.Token);
+        if (callerCancels) await Assert.ThrowsAnyAsync<OperationCanceledException>(() => call);
+        else Assert.Null(await call);
+    }
+
     internal sealed class Fixture : IDisposable, IAsyncDisposable
     {
         internal const string Issuer = "https://auth.example.test/";
@@ -180,7 +222,7 @@ public sealed class OasisProfileAccessClientTests
         internal DefaultHttpContext Caller = new();
         internal OasisProfileAccessClient Client => Scope.ServiceProvider.GetRequiredService<OasisProfileAccessClient>();
 
-        internal Fixture(bool enabled = true, bool initialize = true)
+        internal Fixture(bool enabled = true, bool initialize = true, SaveChangesInterceptor? auditInterceptor = null)
         {
             SecretPath = Path.Combine(Path.GetTempPath(), "oasis-secret-" + Guid.NewGuid().ToString("N"));
             File.WriteAllText(SecretPath, "fixture-service-secret-00000000000000000000");
@@ -189,7 +231,11 @@ public sealed class OasisProfileAccessClientTests
             var configuration = Configuration(enabled);
             var services = new ServiceCollection().AddLogging();
             services.Configure<AuthOptions>(configuration.GetSection("Auth"));
-            services.AddDbContext<PandaAuthDbContext>(o => o.UseInMemoryDatabase(Guid.NewGuid().ToString()));
+            services.AddDbContext<PandaAuthDbContext>(o =>
+            {
+                o.UseInMemoryDatabase(Guid.NewGuid().ToString());
+                if (auditInterceptor is not null) o.AddInterceptors(auditInterceptor);
+            });
             services.AddSingleton(TimeProvider.System);
             services.AddScoped<SecurityEventWriter>();
             services.AddSelfProfiles(configuration);
@@ -228,6 +274,7 @@ public sealed class OasisProfileAccessClientTests
         internal string Mode = "";
         internal string TokenMode = "";
         internal TimeSpan Delay;
+        internal TimeSpan LateOwner;
         internal string? LastRequestId;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -256,6 +303,8 @@ public sealed class OasisProfileAccessClientTests
                 if (TokenMode == "redirect") tokenResponse.StatusCode = HttpStatusCode.TemporaryRedirect;
                 return tokenResponse;
             }
+            // Deliberately ignore cancellation to model an already completed/late transport response.
+            if (LateOwner > TimeSpan.Zero) await Task.Delay(LateOwner, CancellationToken.None);
             Assert.Equal("https://oasis.example.test/api/integrations/panda-auth/v1/profile-access", request.RequestUri.ToString());
             Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
             Assert.Equal("fixture-encrypted-access-token", request.Headers.Authorization?.Parameter);
@@ -284,13 +333,15 @@ public sealed class OasisProfileAccessClientTests
             var json = output.ToJsonString();
             if (Mode == "duplicateProperty") json = json[..^1] + ",\"requestId\":\"" + LastRequestId + "\"}";
             if (Mode == "invalidJson") json = "{";
-            if (Mode == "tooLarge") json += new string(' ', 8193);
+            if (Mode == "invalidUnicode") json = json.Replace("\"subject\":\"target\"", "\"subject\":\"\\uD800\"", StringComparison.Ordinal);
+            if (Mode is "tooLarge" or "misleadingLength") json += new string(' ', 8193);
             var response = Json(json);
             switch (Mode)
             {
                 case "invalidUtf8": response.Content = new ByteArrayContent(new byte[] { 0xC0, 0xAF }); response.Content.Headers.ContentType = new("application/json"); break;
                 case "redirect": response.StatusCode = HttpStatusCode.TemporaryRedirect; response.Headers.Location = new Uri("https://other.example.test/"); break;
                 case "unavailable": response.StatusCode = HttpStatusCode.ServiceUnavailable; break;
+                case "misleadingLength": response.Content.Headers.ContentLength = 0; break;
                 case "cacheable": response.Headers.CacheControl = null; break;
                 case "encoded": response.Content.Headers.ContentEncoding.Add("gzip"); break;
                 case "mediaType": response.Content.Headers.ContentType = new("text/plain"); break;
