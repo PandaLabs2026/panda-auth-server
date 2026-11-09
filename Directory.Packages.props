@@ -5,6 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageVersion Include="Magick.NET-Q8-x64" Version="15.1.0" />
     <!-- OpenIddict 7.x：官方支持 ASP.NET Core 10（6.x 未适配 .NET 10，已与需求方确认升级） -->
     <PackageVersion Include="OpenIddict.AspNetCore" Version="7.7.0" />
     <PackageVersion Include="OpenIddict.EntityFrameworkCore" Version="7.7.0" />

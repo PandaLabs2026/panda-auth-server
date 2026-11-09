@@ -8,6 +8,10 @@ public interface IEmailSender
 {
     Task SendAsync(string email, string subject, string htmlBody, CancellationToken ct);
 
+    // Must explicitly support the separate template and durable delivery identity.
+    Task SendProfileContactVerificationAsync(string email, string token, Guid deliveryId, CancellationToken ct)
+        => throw new NotSupportedException("Profile contact delivery is not configured.");
+
     /// <summary>密码重置成功后的安全通知：收件人是账号持有人，内容见 EmailTemplates.PasswordResetNotice。</summary>
     Task SendPasswordResetNoticeAsync(string email, CancellationToken ct);
 

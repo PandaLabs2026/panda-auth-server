@@ -60,11 +60,15 @@ public sealed class NotifyEmailSender : IEmailSender
     public Task SendEmailChangeNoticeAsync(string email, CancellationToken ct) =>
         SendTemplateAsync(email, "email-change-notice", null, ct);
 
+    public Task SendProfileContactVerificationAsync(string email, string token, Guid deliveryId, CancellationToken ct) =>
+        SendTemplateAsync(email, "profile-contact-verification", TokenVariables(token), ct,
+            $"auth-profile-contact:{deliveryId:N}", privateContact: true);
+
     private Task SendTemplateAsync(
         string email,
         string templateKey,
         IReadOnlyDictionary<string, string>? variables,
-        CancellationToken ct)
+        CancellationToken ct, string? deliveryKey = null, bool privateContact = false)
     {
         var payload = new
         {
@@ -74,10 +78,10 @@ public sealed class NotifyEmailSender : IEmailSender
             locale = "zh-CN",
             to = email,
             variables = variables ?? new Dictionary<string, string>(StringComparer.Ordinal),
-            idempotencyKey = BuildIdempotencyKey(email, templateKey, ""),
+            idempotencyKey = deliveryKey ?? BuildIdempotencyKey(email, templateKey, ""),
         };
 
-        return PostAsync("/v1/messages", payload, email, $"template:{templateKey}", ct);
+        return PostAsync("/v1/messages", payload, email, $"template:{templateKey}", ct, privateContact);
     }
 
     private static Dictionary<string, string> TokenVariables(string token) =>
@@ -99,7 +103,7 @@ public sealed class NotifyEmailSender : IEmailSender
         await PostAsync("/v1/messages/raw", payload, email, subject, ct);
     }
 
-    private async Task PostAsync(string path, object payload, string email, string subjectForLog, CancellationToken ct)
+    private async Task PostAsync(string path, object payload, string email, string subjectForLog, CancellationToken ct, bool privateContact = false)
     {
         Exception? lastError = null;
         foreach (var baseUrl in _urls)
@@ -140,21 +144,21 @@ public sealed class NotifyEmailSender : IEmailSender
                 {
                     _logger.LogError(
                         "Notify transactional delivery failed email={Email} status={Status}",
-                        MaskEmail(email),
+                        privateContact ? "[profile-contact]" : MaskEmail(email),
                         (int)response.StatusCode);
                     throw new InvalidOperationException($"Notify API returned {(int)response.StatusCode}.");
                 }
             }
 
-            _logger.LogInformation("Notify transactional delivery accepted email={Email} subject={Subject}", MaskEmail(email), subjectForLog);
+            _logger.LogInformation("Notify transactional delivery accepted email={Email} subject={Subject}", privateContact ? "[profile-contact]" : MaskEmail(email), subjectForLog);
             return;
         }
 
         _logger.LogError(
             "Notify transactional delivery failed email={Email} error={Error}",
-            MaskEmail(email),
-            lastError?.Message);
-        throw new InvalidOperationException("All notify endpoints failed.", lastError);
+            privateContact ? "[profile-contact]" : MaskEmail(email),
+            privateContact ? "transport_failed" : lastError?.Message);
+        throw new InvalidOperationException("All notify endpoints failed.", privateContact ? null : lastError);
     }
 
     private void AddHeaders(HttpRequestMessage request)

@@ -26,4 +26,7 @@
   <ItemGroup><ProjectReference Include="../CloudConfig.JointFixture/CloudConfig.JointFixture.csproj" /></ItemGroup>
   <ItemGroup><ProjectReference Include="../PandaAuth.ReadinessHarness/PandaAuth.ReadinessHarness.csproj" /></ItemGroup>
   <ItemGroup><ProjectReference Include="../IdentityViewHost/PandaAuth.Server.IdentityViewHost.csproj" /></ItemGroup>
+  <ItemGroup>
+    <None Update="Fixtures/ProfileAvatar/*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

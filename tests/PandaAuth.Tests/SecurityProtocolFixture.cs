@@ -34,13 +34,13 @@ internal sealed class SecurityProtocolFixture : IAsyncDisposable
     internal string UserId { get; private set; } = "";
     private byte[]? mfaSecret;
 
-    private SecurityProtocolFixture(string connection, Action<IServiceCollection>? configure)
+    private SecurityProtocolFixture(string connection, Action<IServiceCollection>? configure, IReadOnlyDictionary<string, string>? settings)
     {
         ConnectionString = connection;
-        Host = new Factory(connection, configure);
+        Host = new Factory(connection, configure, settings);
     }
 
-    internal static async Task<SecurityProtocolFixture> CreateAsync(Action<IServiceCollection>? configure = null)
+    internal static async Task<SecurityProtocolFixture> CreateAsync(Action<IServiceCollection>? configure = null, IReadOnlyDictionary<string, string>? settings = null)
     {
         var builder = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("PANDA_AUTH_TEST_POSTGRES"));
         PostgresTestBoundary.ValidateEndpoint(builder, PostgresTestBoundary.SharedMode);
@@ -53,7 +53,7 @@ internal sealed class SecurityProtocolFixture : IAsyncDisposable
             await command.ExecuteNonQueryAsync();
         }
         builder.Database = database;
-        var fixture = new SecurityProtocolFixture(builder.ConnectionString, configure);
+        var fixture = new SecurityProtocolFixture(builder.ConnectionString, configure, settings);
         try
         {
             await using (var db = fixture.Context()) await db.Database.MigrateAsync();
@@ -212,13 +212,20 @@ internal sealed class SecurityProtocolFixture : IAsyncDisposable
         await PostgresTestBoundary.DropOwnedDatabaseAsync(ConnectionString, "panda_protocol_test_");
     }
 
-    internal sealed class Factory(string connection, Action<IServiceCollection>? configure) : WebApplicationFactory<Program>
+    internal sealed class Factory(string connection, Action<IServiceCollection>? configure, IReadOnlyDictionary<string, string>? settings = null) : WebApplicationFactory<Program>
     {
-        private readonly ProtocolHostContentRoot root = new(connection, new Dictionary<string, string>
+        private readonly ProtocolHostContentRoot root = new(connection, Settings(settings));
+        private static Dictionary<string, string> Settings(IReadOnlyDictionary<string, string>? overrides)
         {
-            ["Auth:Issuer"] = "http://localhost/", ["Auth:HttpsRequired"] = "false", ["Auth:Seed:Enabled"] = "false",
-            ["Auth:LoginMfa:Enabled"] = "true",
-        });
+            var values = new Dictionary<string, string>
+            {
+                ["Auth:Issuer"] = "http://localhost/", ["Auth:HttpsRequired"] = "false", ["Auth:Seed:Enabled"] = "false",
+                ["Auth:LoginMfa:Enabled"] = "true",
+            };
+            if (overrides is not null)
+                foreach (var item in overrides) values[item.Key] = item.Value;
+            return values;
+        }
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Development").UseContentRoot(root.Path);
