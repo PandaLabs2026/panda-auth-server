@@ -24,6 +24,7 @@ public sealed class SelfProfileInputTests
     [InlineData("{\"biography\":null,\"biography\":\"override\"}")]
     [InlineData("{\"DisplayName\":\"name\"}")]
     [InlineData("{\"displayName\":\"\\uD800\"}")]
+    [InlineData("{\"biography\":\"\\u0000\"}")]
     public void Patch_rejects_ambiguous_and_invalid_inputs(string json)
         => Assert.Throws<ProfileInputException>(() => SelfProfileInput.ParsePatch(json));
 

@@ -7,6 +7,8 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
     : DbContext(options)
 {
     public DbSet<PandaUser> Users => Set<PandaUser>();
+    public DbSet<UserProfile> UserProfiles => Set<UserProfile>();
+    public DbSet<ProfileAvatar> ProfileAvatars => Set<ProfileAvatar>();
     public DbSet<PandaRole> Roles => Set<PandaRole>();
     public DbSet<PandaUserRole> UserRoles => Set<PandaUserRole>();
     public DbSet<LoginLog> LoginLogs => Set<LoginLog>();
@@ -56,6 +58,32 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
             entity.Property(x => x.ConcurrencyStamp).IsConcurrencyToken();
             entity.HasIndex(x => x.NormalizedUserName).IsUnique();
             entity.HasIndex(x => x.NormalizedEmail).IsUnique();
+        });
+        builder.Entity<UserProfile>(entity =>
+        {
+            entity.ToTable("panda_user_profiles", table =>
+            {
+                table.HasCheckConstraint("CK_profile_revision", "\"Revision\" ~ '^[a-f0-9]{32}$'");
+                table.HasCheckConstraint("CK_profile_contact_state", "(\"ContactEmailState\" = 0 AND \"ContactEmail\" IS NULL) OR (\"ContactEmailState\" IN (1, 2) AND \"ContactEmail\" IS NOT NULL)");
+            });
+            entity.HasKey(x => x.UserId);
+            entity.Property(x => x.UserId).HasMaxLength(450);
+            entity.HasOne<PandaUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            entity.Property(x => x.DisplayName).HasMaxLength(80);
+            entity.Property(x => x.Biography).HasMaxLength(1000);
+            entity.Property(x => x.ContactEmail).HasMaxLength(256);
+            entity.Property(x => x.Revision).HasMaxLength(32).IsConcurrencyToken();
+        });
+        builder.Entity<ProfileAvatar>(entity =>
+        {
+            entity.ToTable("panda_profile_avatars", table =>
+            {
+                table.HasCheckConstraint("CK_profile_avatar_bytes", "octet_length(\"Bytes\") BETWEEN 1 AND 262144");
+                table.HasCheckConstraint("CK_profile_avatar_dimensions", "\"Width\" BETWEEN 1 AND 512 AND \"Height\" BETWEEN 1 AND 512");
+            });
+            entity.HasKey(x => x.UserId);
+            entity.Property(x => x.UserId).HasMaxLength(450);
+            entity.HasOne<UserProfile>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
         builder.Entity<PandaRole>(entity =>
         {

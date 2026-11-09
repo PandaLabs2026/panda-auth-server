@@ -849,6 +849,35 @@ namespace PandaAuth.Server.Migrations
                     b.ToTable("panda_password_reset_requests", (string)null);
                 });
 
+            modelBuilder.Entity("PandaAuth.Server.Domain.ProfileAvatar", b =>
+                {
+                    b.Property<string>("UserId")
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.Property<byte[]>("Bytes")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<int>("Height")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Width")
+                        .HasColumnType("integer");
+
+                    b.HasKey("UserId");
+
+                    b.ToTable("panda_profile_avatars", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_profile_avatar_bytes", "octet_length(\"Bytes\") BETWEEN 1 AND 262144");
+
+                            t.HasCheckConstraint("CK_profile_avatar_dimensions", "\"Width\" BETWEEN 1 AND 512 AND \"Height\" BETWEEN 1 AND 512");
+                        });
+                });
+
             modelBuilder.Entity("PandaAuth.Server.Domain.SecurityEvent", b =>
                 {
                     b.Property<long>("Id")
@@ -969,6 +998,46 @@ namespace PandaAuth.Server.Migrations
                     b.ToTable("signing_keys", (string)null);
                 });
 
+            modelBuilder.Entity("PandaAuth.Server.Domain.UserProfile", b =>
+                {
+                    b.Property<string>("UserId")
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.Property<string>("Biography")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<string>("ContactEmail")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<int>("ContactEmailState")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("DisplayName")
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<string>("Revision")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("UserId");
+
+                    b.ToTable("panda_user_profiles", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_profile_contact_state", "(\"ContactEmailState\" = 0 AND \"ContactEmail\" IS NULL) OR (\"ContactEmailState\" IN (1, 2) AND \"ContactEmail\" IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_profile_revision", "\"Revision\" ~ '^[a-f0-9]{32}$'");
+                        });
+                });
+
             modelBuilder.Entity("OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreAuthorization", b =>
                 {
                     b.HasOne("OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreApplication", "Application")
@@ -1083,6 +1152,24 @@ namespace PandaAuth.Server.Migrations
                         .WithMany()
                         .HasForeignKey("SubjectId")
                         .OnDelete(DeleteBehavior.SetNull);
+                });
+
+            modelBuilder.Entity("PandaAuth.Server.Domain.ProfileAvatar", b =>
+                {
+                    b.HasOne("PandaAuth.Server.Domain.UserProfile", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PandaAuth.Server.Domain.UserProfile", b =>
+                {
+                    b.HasOne("PandaAuth.Server.Domain.PandaUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreApplication", b =>

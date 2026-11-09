@@ -72,7 +72,7 @@ public static partial class SelfProfileInput
         var count = 0;
         while (!remaining.IsEmpty)
         {
-            if (Rune.DecodeFromUtf16(remaining, out _, out var consumed) != OperationStatus.Done || ++count > max)
+            if (Rune.DecodeFromUtf16(remaining, out var rune, out var consumed) != OperationStatus.Done || rune.Value == 0 || ++count > max)
                 throw InvalidValue();
             remaining = remaining[consumed..];
         }
