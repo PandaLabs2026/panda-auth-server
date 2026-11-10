@@ -36,7 +36,8 @@ LABEL cc.pandalabs.auth.operational-protocol="1" \
       cc.pandalabs.auth.schema-floor="online-signing-v1" \
       cc.pandalabs.auth.activation-migrator="admin-resource-only-v1" \
       cc.pandalabs.auth.activation-preservation="all-protected-rows-v1"
-RUN apt-get -o Acquire::Retries=0 update \
+RUN sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get -o Acquire::Retries=0 -o Acquire::https::Timeout=30 update \
     && apt-get -o Acquire::Retries=0 install -y --no-install-recommends --only-upgrade apt=2.8.4ubuntu0.1 libapt-pkg6.0t64=2.8.4ubuntu0.1 \
     && apt-get -o Acquire::Retries=0 install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
