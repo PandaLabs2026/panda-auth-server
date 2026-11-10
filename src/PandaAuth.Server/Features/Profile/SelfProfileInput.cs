@@ -84,4 +84,32 @@ public static partial class SelfProfileInput
 
     [GeneratedRegex(@"\A""(0|[a-f0-9]{32})""\z", RegexOptions.CultureInvariant)]
     private static partial Regex RevisionPattern();
+    internal static async Task<string> ReadJsonAsync(HttpRequest request, CancellationToken ct)
+    {
+        if (!Microsoft.Net.Http.Headers.MediaTypeHeaderValue.TryParse(request.ContentType, out var media)
+            || !string.Equals(media.MediaType.Value, "application/json", StringComparison.OrdinalIgnoreCase)
+            || (media.Charset.HasValue && !string.Equals(media.Charset.Value?.Trim('"'), "utf-8", StringComparison.OrdinalIgnoreCase))
+            || request.Headers.ContentEncoding.Any(value => !string.Equals(value, "identity", StringComparison.OrdinalIgnoreCase)))
+            throw new ProfileInputException("profile_request_invalid", 415);
+        if (request.ContentLength > SelfProfileInput.MaxJsonBytes)
+            throw new ProfileInputException("profile_request_too_large", 413);
+        using var body = new MemoryStream();
+        var buffer = ArrayPool<byte>.Shared.Rent(4096);
+        try
+        {
+            while (true)
+            {
+                var count = await request.Body.ReadAsync(buffer.AsMemory(0,
+                    Math.Min(buffer.Length, SelfProfileInput.MaxJsonBytes - (int)body.Length + 1)), ct);
+                if (count == 0) break;
+                if (body.Length + count > SelfProfileInput.MaxJsonBytes)
+                    throw new ProfileInputException("profile_request_too_large", 413);
+                body.Write(buffer, 0, count);
+            }
+            try { return new UTF8Encoding(false, true).GetString(body.GetBuffer(), 0, (int)body.Length); }
+            catch (DecoderFallbackException) { throw new ProfileInputException("profile_request_invalid", 400); }
+        }
+        finally { ArrayPool<byte>.Shared.Return(buffer, clearArray: true); }
+    }
+
 }

@@ -8,6 +8,7 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
 {
     public DbSet<PandaUser> Users => Set<PandaUser>();
     public DbSet<UserProfile> UserProfiles => Set<UserProfile>();
+    public DbSet<ProfileOrganizationVisibility> ProfileOrganizationVisibilities => Set<ProfileOrganizationVisibility>();
     public DbSet<ProfileAvatar> ProfileAvatars => Set<ProfileAvatar>();
     public DbSet<ProfileContactChallenge> ProfileContactChallenges => Set<ProfileContactChallenge>();
     public DbSet<ProfileRateLimit> ProfileRateLimits => Set<ProfileRateLimit>();
@@ -75,6 +76,19 @@ public class PandaAuthDbContext(DbContextOptions<PandaAuthDbContext> options)
             entity.Property(x => x.Biography).HasMaxLength(1000);
             entity.Property(x => x.ContactEmail).HasMaxLength(256);
             entity.Property(x => x.Revision).HasMaxLength(32).IsConcurrencyToken();
+        });
+        builder.Entity<ProfileOrganizationVisibility>(entity =>
+        {
+            entity.ToTable("panda_profile_organization_visibility", table =>
+            {
+                table.HasCheckConstraint("CK_profile_organization_fields", "\"Fields\" BETWEEN 0 AND 15");
+                table.HasCheckConstraint("CK_profile_organization_revision", "\"Revision\" ~ '^[a-f0-9]{32}$'");
+                table.HasCheckConstraint("CK_profile_organization_key", "\"OrganizationKey\" <> '00000000-0000-0000-0000-000000000000'::uuid");
+            });
+            entity.HasKey(x => new { x.UserId, x.OrganizationKey });
+            entity.Property(x => x.UserId).HasMaxLength(450);
+            entity.Property(x => x.Revision).HasMaxLength(32).IsConcurrencyToken();
+            entity.HasOne<PandaUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
         builder.Entity<ProfileAvatar>(entity =>
         {
