@@ -30,14 +30,15 @@ COPY panda-auth-server/ panda-auth-server/
 RUN dotnet publish panda-auth-server/src/PandaAuth.Server -c Release -o /app --no-restore --nologo
 
 # ================= 运行阶段 =================
-# 基础镜像 digest 钉值，原 tag：mcr.microsoft.com/dotnet/aspnet:10.0（2026-10-06 解析）
-FROM mcr.microsoft.com/dotnet/aspnet:10.0.13@sha256:d5633778c754e89a386882eddf8dbee6942447a8a4b8267c19cf1e1158d0b0ac AS runtime
+# 运行时安全补丁10.0.14；与Me共用已核验的不可变基础镜像。
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.14@sha256:1a48394b6f29d3a32c79d9edecd4abda0ecbe8776d567dbfc4590ed6979c740c AS runtime
 LABEL cc.pandalabs.auth.operational-protocol="1" \
       cc.pandalabs.auth.schema-floor="online-signing-v1" \
       cc.pandalabs.auth.activation-migrator="admin-resource-only-v1" \
       cc.pandalabs.auth.activation-preservation="all-protected-rows-v1"
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+RUN apt-get -o Acquire::Retries=0 update \
+    && apt-get -o Acquire::Retries=0 install -y --no-install-recommends --only-upgrade apt=2.8.4ubuntu0.1 libapt-pkg6.0t64=2.8.4ubuntu0.1 \
+    && apt-get -o Acquire::Retries=0 install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
