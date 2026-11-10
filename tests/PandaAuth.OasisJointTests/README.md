@@ -8,6 +8,8 @@
 dotnet test tests/PandaAuth.OasisJointTests/PandaAuth.OasisJointTests.csproj --no-restore
 ```
 
-测试复用 Auth 的实际 Program、OpenIddict 和隔离 PostgreSQL 协议夹具；Oasis 使用实际 Program、核验模块与本任务 SQLite 仓储。只用 TestServer 替代套接字传输，不替换签发、introspection 或成员判定。夹具先初始化发现/introspection，再检查客户端在原有三秒预算内的调用、错误组织、成员撤销及故障后拒绝；不证明冷启动一定能在三秒内成功，也不构成真实用户、生产 TLS 或生产登记验收。
+测试复用 Auth 的实际 Program、OpenIddict 和隔离 PostgreSQL 协议夹具；Oasis 使用实际 Program、核验模块与本任务 SQLite 仓储。只用 TestServer 替代套接字传输，不替换签发、introspection 或成员判定。夹具先初始化发现/introspection，再检查客户端在原有三秒预算内的调用、错误组织、实际资料/PNG投影、用户可见性撤销、邮箱未验证、成员撤销及故障后拒绝；不证明冷启动一定能在三秒内成功，也不构成真实用户、生产 TLS 或生产登记验收。
 
 夹具 finally 删除任务数据库、SQLite 和私有凭据目录；调用者完成全部检查后另行核对并删除自己创建的测试角色。未创建容器，不能清理其他会话资源。
+
+组织选择存储的独立协议用例在普通 `PandaAuth.Tests` 中，过滤 `OrganizationProfileProtocolTests` 运行。它需要同一隔离 PostgreSQL 边界以及当前系统 PATH 上与测试数据库兼容的 `pg_dump` / `pg_restore`；仅备份本用例创建的数据库并恢复至新的任务数据库，验证并发冲突、账号隔离和级联删除，finally 删除恢复库。工具缺失视为未完成，不能使用生产数据库或凭据补验。
