@@ -15,6 +15,7 @@ public sealed class ProfileOptions
 {
     public bool Enabled { get; set; }
     public bool MeClientEnabled { get; set; }
+    public bool OrganizationsEnabled { get; set; }
     public string[] AllowedClients { get; set; } = [];
 }
 
@@ -22,7 +23,10 @@ internal static class ProfileAccess
 {
     public const string ReadPolicy = "self-profile-read";
     public const string WritePolicy = "self-profile-write";
-    public static bool IsPath(PathString path) => path.StartsWithSegments(PandaAuthProfileApi.Self, StringComparison.OrdinalIgnoreCase);
+    public static bool IsPath(PathString path) => path.StartsWithSegments(PandaAuthProfileApi.Self, StringComparison.OrdinalIgnoreCase)
+        || IsOrganizationPath(path);
+    public static bool IsOrganizationPath(PathString path) => path.StartsWithSegments(PandaAuthProfileApi.Organizations, StringComparison.OrdinalIgnoreCase)
+        || path.StartsWithSegments(PandaAuthProfileApi.SelfOrganizations, StringComparison.OrdinalIgnoreCase);
     public static string? ActorId(ClaimsPrincipal principal)
     {
         var subjects = principal.GetClaims(OpenIddictConstants.Claims.Subject);
@@ -98,6 +102,11 @@ internal static class ProfileRegistration
                 ConnectTimeout = TimeSpan.FromSeconds(3),
             });
         services.AddScoped<Oasis.OasisProfileAccessClient>();
+        services.AddScoped(provider => new OrganizationProfileService(
+            provider.GetRequiredService<PandaAuthDbContext>(), provider.GetRequiredService<SelfProfileService>(),
+            provider.GetRequiredService<SecurityEventWriter>(), provider.GetRequiredService<IOptions<ProfileOptions>>(),
+            provider.GetRequiredService<Oasis.OasisProfileOptions>(), provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<Oasis.OasisProfileAccessClient>()));
         services.AddScoped<SelfProfileService>();
         services.AddScoped<ProfileContactService>();
         services.AddSingleton<ProfileAvatarDecoder>();

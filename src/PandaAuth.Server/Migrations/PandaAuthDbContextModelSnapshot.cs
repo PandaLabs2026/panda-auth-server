@@ -939,6 +939,39 @@ namespace PandaAuth.Server.Migrations
                         });
                 });
 
+            modelBuilder.Entity("PandaAuth.Server.Domain.ProfileOrganizationVisibility", b =>
+                {
+                    b.Property<string>("UserId")
+                        .HasMaxLength(450)
+                        .HasColumnType("character varying(450)");
+
+                    b.Property<Guid>("OrganizationKey")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Fields")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Revision")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("UserId", "OrganizationKey");
+
+                    b.ToTable("panda_profile_organization_visibility", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_profile_organization_fields", "\"Fields\" BETWEEN 0 AND 15");
+
+                            t.HasCheckConstraint("CK_profile_organization_key", "\"OrganizationKey\" <> '00000000-0000-0000-0000-000000000000'::uuid");
+
+                            t.HasCheckConstraint("CK_profile_organization_revision", "\"Revision\" ~ '^[a-f0-9]{32}$'");
+                        });
+                });
+
             modelBuilder.Entity("PandaAuth.Server.Domain.ProfileRateLimit", b =>
                 {
                     b.Property<string>("UserId")
@@ -1266,6 +1299,15 @@ namespace PandaAuth.Server.Migrations
             modelBuilder.Entity("PandaAuth.Server.Domain.ProfileContactChallenge", b =>
                 {
                     b.HasOne("PandaAuth.Server.Domain.UserProfile", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PandaAuth.Server.Domain.ProfileOrganizationVisibility", b =>
+                {
+                    b.HasOne("PandaAuth.Server.Domain.PandaUser", null)
                         .WithMany()
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)

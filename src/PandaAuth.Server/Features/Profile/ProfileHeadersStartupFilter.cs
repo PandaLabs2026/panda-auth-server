@@ -6,7 +6,7 @@ using PandaAuth.Shared;
 namespace PandaAuth.Server.Features.Profile;
 
 /// <summary>Outer pipeline placement covers bearer rejection and exceptions as well as controller responses.</summary>
-internal sealed class ProfileHeadersStartupFilter(IOptions<ProfileOptions> options) : IStartupFilter
+internal sealed class ProfileHeadersStartupFilter(IOptions<ProfileOptions> options, Oasis.OasisProfileOptions oasis) : IStartupFilter
 {
     public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
     {
@@ -19,7 +19,8 @@ internal sealed class ProfileHeadersStartupFilter(IOptions<ProfileOptions> optio
                     context.Response.Headers.CacheControl = "no-store";
                     return Task.CompletedTask;
                 });
-                if (!options.Value.Enabled)
+                if (!options.Value.Enabled || (ProfileAccess.IsOrganizationPath(context.Request.Path)
+                    && (!options.Value.OrganizationsEnabled || !oasis.Enabled)))
                 {
                     context.Response.StatusCode = 404;
                     await context.Response.WriteAsJsonAsync(new ProfileErrorDto("profile_unavailable", context.TraceIdentifier), context.RequestAborted);

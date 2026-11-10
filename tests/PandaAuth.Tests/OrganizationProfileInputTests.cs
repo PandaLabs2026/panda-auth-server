@@ -47,6 +47,16 @@ public sealed class OrganizationProfileInputTests
         Assert.Null(OrganizationProfileInput.Project(self, Array.Empty<string>(), new[] { "avatar" }, new[] { "avatar" }));
     }
 
+    [Fact]
+    public void Missing_values_cannot_produce_an_empty_successful_projection()
+    {
+        var self = new SelfProfileDto(null, null, false, new(null, ProfileContactEmailState.None), "\"0\"");
+        string[] fields = [ProfileFields.DisplayName, ProfileFields.Biography];
+        Assert.Null(OrganizationProfileInput.Project(self, fields, fields, fields));
+        string[] avatar = [ProfileFields.Avatar];
+        Assert.Equal("{\"avatar\":false}", JsonSerializer.Serialize(OrganizationProfileInput.Project(self, avatar, avatar, avatar)));
+    }
+
     [Theory]
     [InlineData(ProfileContactEmailState.None)]
     [InlineData(ProfileContactEmailState.Pending)]

@@ -56,6 +56,8 @@ internal static class OrganizationProfileInput
         var visible = selected.Intersect(allowed, StringComparer.Ordinal).Intersect(requested, StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
         if (profile.ContactEmail.State != ProfileContactEmailState.Verified || profile.ContactEmail.Address is null)
             visible.Remove(ProfileFields.ContactEmail);
+        if (profile.DisplayName is null) visible.Remove(ProfileFields.DisplayName);
+        if (profile.Biography is null) visible.Remove(ProfileFields.Biography);
         if (visible.Count == 0) return null;
         return new(
             visible.Contains(ProfileFields.DisplayName) ? profile.DisplayName : null,

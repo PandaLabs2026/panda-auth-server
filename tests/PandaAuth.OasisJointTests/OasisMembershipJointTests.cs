@@ -35,7 +35,7 @@ namespace PandaAuth.Tests;
 public sealed class OasisMembershipJointTests
 {
     [Fact]
-    public async Task Actual_auth_issuer_and_oasis_owner_bind_and_revoke_without_cached_permission()
+    public async Task Actual_organization_projection_obeys_consent_email_avatar_and_membership_revocation()
     {
         Assert.False(string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PANDA_AUTH_TEST_POSTGRES")),
             "An explicitly isolated PostgreSQL test endpoint is required.");
@@ -61,7 +61,7 @@ public sealed class OasisMembershipJointTests
         {
             var settings = new Dictionary<string, string>
             {
-                ["Auth:Issuer"] = issuer, ["Profile:Enabled"] = "true", ["Profile:AllowedClients:0"] = humanClient,
+                ["Auth:Issuer"] = issuer, ["Profile:Enabled"] = "true", ["Profile:OrganizationsEnabled"] = "true", ["Profile:AllowedClients:0"] = humanClient,
                 ["Profile:Oasis:Enabled"] = "true", ["Profile:Oasis:Issuer"] = issuer,
                 ["Profile:Oasis:Endpoint"] = origin.TrimEnd('/') + ProfileAccessContract.Route,
                 ["Profile:Oasis:ClientId"] = callerClient, ["Profile:Oasis:ClientSecretFile"] = serviceFile,
@@ -107,6 +107,14 @@ public sealed class OasisMembershipJointTests
                 });
                 var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
                 db.Users.Add(new PandaUser { Id = "joint-target" });
+                db.UserProfiles.Add(new UserProfile { UserId = "joint-target", DisplayName = "Visible target", Biography = "Must stay private",
+                    ContactEmail = "visible@example.invalid", ContactEmailState = ProfileContactEmailState.Verified, Revision = new string('a', 32) });
+                db.ProfileOrganizationVisibilities.Add(new ProfileOrganizationVisibility { UserId = "joint-target", OrganizationKey = organization,
+                    Fields = 11, Revision = new string('b', 32), UpdatedAt = DateTimeOffset.UtcNow });
+                var image = File.ReadAllBytes(Path.GetFullPath("../../../../../tests/PandaAuth.Tests/Fixtures/ProfileAvatar/seed.png", AppContext.BaseDirectory));
+                db.ProfileAvatars.Add(new ProfileAvatar { UserId = "joint-target", Bytes = image,
+                    Width = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(image.AsSpan(16, 4)),
+                    Height = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(image.AsSpan(20, 4)) });
                 await db.SaveChangesAsync();
             }
             var ownerSettings = new Dictionary<string, string?>
@@ -200,6 +208,45 @@ public sealed class OasisMembershipJointTests
             Assert.NotNull(proof);
             Assert.Equal("joint-target", proof.TargetId);
             Assert.Null(await consumer.ResolveAsync(context, Guid.NewGuid(), member, new[] { "avatar" }));
+            var memberPath = PandaAuthProfileApi.OrganizationMember
+                .Replace("{organizationKey}", organization.ToString("D"), StringComparison.Ordinal)
+                .Replace("{memberKey}", member.ToString("D"), StringComparison.Ordinal);
+            var readPath = memberPath + "?fields=displayName,biography,avatar,contactEmail";
+            using (var projected = await browser.GetAsync(readPath))
+            {
+                Assert.Equal(HttpStatusCode.OK, projected.StatusCode);
+                Assert.True(projected.Headers.CacheControl?.NoStore);
+                using var dto = JsonDocument.Parse(await projected.Content.ReadAsStringAsync());
+                Assert.Equal("Visible target", dto.RootElement.GetProperty("displayName").GetString());
+                Assert.Equal("visible@example.invalid", dto.RootElement.GetProperty("contactEmail").GetString());
+                Assert.True(dto.RootElement.GetProperty("avatar").GetBoolean());
+                Assert.Equal(3, dto.RootElement.EnumerateObject().Count());
+                Assert.False(dto.RootElement.TryGetProperty("biography", out _));
+                Assert.Null(projected.Headers.ETag);
+            }
+            using (var avatar = await browser.GetAsync(memberPath + "/avatar"))
+            {
+                Assert.Equal(HttpStatusCode.OK, avatar.StatusCode);
+                Assert.Equal("image/png", avatar.Content.Headers.ContentType?.MediaType);
+                Assert.True(avatar.Headers.CacheControl?.NoStore);
+            }
+            using (var scope = auth.Host.Services.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+                await db.ProfileOrganizationVisibilities.Where(v => v.UserId == "joint-target" && v.OrganizationKey == organization)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(v => v.Fields, 0));
+            }
+            using (var hidden = await browser.GetAsync(readPath)) Assert.Equal(HttpStatusCode.NotFound, hidden.StatusCode);
+            using (var hiddenImage = await browser.GetAsync(memberPath + "/avatar")) Assert.Equal(HttpStatusCode.NotFound, hiddenImage.StatusCode);
+            using (var scope = auth.Host.Services.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+                await db.ProfileOrganizationVisibilities.Where(v => v.UserId == "joint-target" && v.OrganizationKey == organization)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(v => v.Fields, 11));
+                await db.UserProfiles.Where(v => v.UserId == "joint-target")
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(v => v.ContactEmailState, ProfileContactEmailState.Pending));
+            }
+            using (var pending = await browser.GetAsync(memberPath + "?fields=contactEmail")) Assert.Equal(HttpStatusCode.NotFound, pending.StatusCode);
             using (var scope = owner.Services.CreateScope())
             {
                 var session = scope.ServiceProvider.GetRequiredService<IOasisDataSession>();
@@ -208,8 +255,10 @@ public sealed class OasisMembershipJointTests
                 await command.ExecuteNonQueryAsync();
             }
             Assert.Null(await consumer.ResolveAsync(context, organization, member, new[] { "avatar" }));
+            using (var revoked = await browser.GetAsync(readPath)) Assert.Equal(HttpStatusCode.NotFound, revoked.StatusCode);
             unavailable = true;
             Assert.Null(await consumer.ResolveAsync(context, organization, member, new[] { "avatar" }));
+            using (var failure = await browser.GetAsync(readPath)) Assert.Equal(HttpStatusCode.NotFound, failure.StatusCode);
         }
         finally
         {
