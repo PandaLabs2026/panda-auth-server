@@ -25,15 +25,16 @@ public class MfaOperationGrantTests
         var (user, secret) = await SeedTotpUserAsync(provider);
         var grants = TestGrants.Create(provider);
         var parameters = new Dictionary<string, string?> { ["roles"] = "admin,member" };
+        var code = TotpCode(secret);
 
         var (issued, error) = await grants.IssueAsync(user.Id, MfaOperations.AdminUpdateRoles, "user-2",
-            parameters, TotpCode(secret), "Strong!Pass123", CancellationToken.None);
+            parameters, code, "Strong!Pass123", CancellationToken.None);
         Assert.Equal(MfaGrantIssueError.None, error);
         Assert.NotNull(issued);
 
         // TOTP timestep 已被消费：同一验证码不得反复签发授权（防重放）。
         var (replayed, replayError) = await grants.IssueAsync(user.Id, MfaOperations.AdminUpdateRoles, "user-2",
-            parameters, TotpCode(secret), "Strong!Pass123", CancellationToken.None);
+            parameters, code, "Strong!Pass123", CancellationToken.None);
         Assert.Equal(MfaGrantIssueError.InvalidCode, replayError);
         Assert.Null(replayed);
     }
