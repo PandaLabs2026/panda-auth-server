@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using PandaAuth.Server.Features.Profile;
 using Xunit;
 
@@ -12,6 +13,23 @@ public sealed class AvatarLinuxFactAttribute : FactAttribute
 
 public sealed class ProfileAvatarProcessTests
 {
+    [Fact]
+    public void Decoder_worker_requires_only_Core_runtime_and_no_web_or_database_dependencies()
+    {
+        var executable = typeof(ProfileAvatarWorker).Assembly.Location;
+        using var runtime = JsonDocument.Parse(File.ReadAllText(Path.ChangeExtension(executable, ".runtimeconfig.json")));
+        var options = runtime.RootElement.GetProperty("runtimeOptions");
+        var frameworks = options.TryGetProperty("frameworks", out var multiple)
+            ? multiple.EnumerateArray().Select(value => value.GetProperty("name").GetString()!).ToArray()
+            : [options.GetProperty("framework").GetProperty("name").GetString()!];
+        Assert.Equal(new[] { "Microsoft.NETCore.App" }, frameworks);
+        using var dependencies = JsonDocument.Parse(File.ReadAllText(Path.ChangeExtension(executable, ".deps.json")));
+        Assert.DoesNotContain(dependencies.RootElement.GetProperty("libraries").EnumerateObject(), library =>
+            library.Name.StartsWith("Microsoft.AspNetCore.", StringComparison.Ordinal)
+            || library.Name.StartsWith("Microsoft.EntityFrameworkCore", StringComparison.Ordinal)
+            || library.Name.StartsWith("PandaAuth.Server/", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task Real_worker_process_returns_normalized_png()
     {
