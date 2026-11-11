@@ -31,7 +31,7 @@ RUN dotnet publish panda-auth-server/src/PandaAuth.Server -c Release -o /app --n
 
 # ================= 运行阶段 =================
 # 运行时安全补丁10.0.14；与Me共用已核验的不可变基础镜像。
-FROM mcr.microsoft.com/dotnet/aspnet:10.0.14@sha256:1a48394b6f29d3a32c79d9edecd4abda0ecbe8776d567dbfc4590ed6979c740c AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.15@sha256:bfd912c83295ce66d4b706ebb8541b9f14259b0e76fbb88b2751f58ce2399d2e AS runtime
 LABEL cc.pandalabs.auth.operational-protocol="1" \
       cc.pandalabs.auth.schema-floor="online-signing-v1" \
       cc.pandalabs.auth.activation-migrator="admin-resource-only-v1" \
