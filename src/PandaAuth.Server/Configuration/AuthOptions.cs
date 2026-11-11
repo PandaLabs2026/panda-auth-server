@@ -20,6 +20,9 @@ public sealed class AuthOptions
     /// </summary>
     public CookieSecurePolicy CookieSecure { get; set; } = CookieSecurePolicy.SameAsRequest;
 
+    /// <summary>Opt-in bounded password work for hosts with an explicitly qualified memory budget.</summary>
+    public bool PasswordWorkLimitEnabled { get; set; }
+
     public RateLimitOptions RateLimit { get; set; } = new();
 
     public AuditOptions Audit { get; set; } = new();

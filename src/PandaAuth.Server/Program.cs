@@ -30,419 +30,427 @@ if (args is ["--profile-avatar-decode"])
     return;
 }
 
-if (ProfileMeRegistrationCommand.IsRequested(args))
-{
-    var commandBuilder = WebApplication.CreateBuilder([]);
-    Environment.ExitCode = await ProfileMeRegistrationCommand.RunAsync(args, commandBuilder.Configuration, commandBuilder.Environment, Console.Out);
-    return;
-}
+await RunServerAsync(args);
 
-if (AdminResourceMigrationCommand.IsRequested(args))
+// Keep Web startup out of the decode entry point so its JIT does not resolve the hosting graph.
+static async Task RunServerAsync(string[] args)
 {
-    var commandBuilder = WebApplication.CreateBuilder([]);
-    Environment.ExitCode = await AdminResourceMigrationCommand.RunAsync(args, commandBuilder.Configuration, commandBuilder.Environment, Console.Out);
-    return;
-}
-
-if (OperationalCommand.IsRequested(args))
-{
-    var commandBuilder = WebApplication.CreateBuilder([]);
-    Environment.ExitCode = await OperationalCommand.RunAsync(args, commandBuilder.Configuration, commandBuilder.Environment, Console.Out);
-    return;
-}
-
-if (args.Length == 1 && args[0] == "--migrate-pandamade")
-{
-    var migrationBuilder = WebApplication.CreateBuilder([]);
-    Environment.ExitCode = await PandaAuth.Server.Features.PandaMade.PandaMadeRegistration.MigrateAsync(
-        migrationBuilder.Configuration, migrationBuilder.Environment.EnvironmentName, Console.Out, Console.Error);
-    return;
-}
-
-if (args.Length == 1 && args[0] == "--register-pandamade-clients")
-{
-    // ADR-089 批次 3：独立实例注册通道已退役（cloud auth 实例经 DbSeeder 播种）。
-    // 旧入口保留 fail-closed 拒绝，防止误用参数落入正常 Web 启动路径。
-    Console.Error.WriteLine("pandamade-registration-closed");
-    Environment.ExitCode = 1;
-    return;
-}
-
-if (args.Length == 1 && args[0] == "--register-website-admin")
-{
-    var registrationBuilder = WebApplication.CreateBuilder([]);
-    Environment.ExitCode = await PandaAuth.Server.Features.WebsiteAdmin.WebsiteAdminClientCommand.RunAsync(registrationBuilder.Configuration);
-    return;
-}
-
-var commandMode = PortalClientCommand.Mode(args);
-if (commandMode < 0)
-{
-    Console.Error.WriteLine("portal-client-command-closed");
-    Environment.ExitCode = 1;
-    return;
-}
-var builder = WebApplication.CreateBuilder(commandMode > 0 ? [] : args);
-if (commandMode > 0)
-{
-    Environment.ExitCode = await PortalClientCommand.RunAsync(commandMode == 2, builder.Configuration, Console.Out, Console.Error, verify: commandMode == 3);
-    return;
-}
-
-builder.Services.Configure<ForwardedHeadersOptions>(options =>
-{
-    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-    options.ForwardLimit = 1;
-    TenantForwardedHeaders.Configure(options, builder.Configuration);
-});
-
-var isMigrateCommand = args.Contains("--migrate", StringComparer.Ordinal);
-var startupConfiguration = StartupConfiguration.Validate(builder.Configuration, builder.Environment, isMigrateCommand);
-if (!startupConfiguration.Valid)
-{
-    OperationalCommand.Write(Console.Error, startupConfiguration);
-    Environment.ExitCode = 2;
-    return;
-}
-var connectionStringName = isMigrateCommand ? "Migration" : "Default";
-var connectionString = builder.Configuration.GetConnectionString(connectionStringName)
-    ?? throw new InvalidOperationException($"缺少连接字符串 ConnectionStrings:{connectionStringName}。");
-
-// Management API 是部署面开关：启动时一次性读取，未启用时管理控制器整体不进路由模型
-// （对外等效不存在，路由 404 且不进 ApiExplorer）；运行期改开关需重启进程。
-var mgmtApiEnabled = builder.Configuration.GetValue("Auth:Mgmt:Enabled", false);
-var profileEnabled = builder.Configuration.GetValue("Profile:Enabled", false);
-builder.Services.AddSelfProfiles(builder.Configuration);
-builder.Services.AddControllersWithViews(o =>
+    if (ProfileMeRegistrationCommand.IsRequested(args))
     {
-        if (!mgmtApiEnabled)
-        {
-            o.Conventions.Add(new MgmtRoutesDisabledConvention());
-        }
-        if (!profileEnabled) o.Conventions.Add(new ProfileRoutesDisabledConvention());
-        // Admin API 错误码：title → 稳定码注册表注入 ProblemDetails.extensions.code
-        // （ADR 2026-10-11-admin-error-codes；前端按 code 走 i18n，未登记 title 降级 detail）。
-        o.Filters.Add<AdminErrorCodeFilter>();
-        o.Filters.Add<BusinessInputLimitFilter>();
-    });
-
-builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
-var authOptions = builder.Configuration.GetSection(AuthOptions.SectionName).Get<AuthOptions>() ?? new AuthOptions();
-builder.Services.AddSingleton(authOptions.TenantRouting);
-builder.Services.AddSingleton<ITenantHostResolver, TenantHostResolver>();
-builder.Services.AddSingleton<TenantRedirectPolicy>();
-builder.Services.AddScoped<TenantContextAccessor>();
-builder.Services.AddScoped<ITenantContextAccessor>(services => services.GetRequiredService<TenantContextAccessor>());
-// 安全配置已在任何数据库访问之前由集中预检校验。
-
-builder.Services.AddDbContext<PandaAuthDbContext>(options =>
-{
-    options.UseNpgsql(connectionString);
-    options.UseOpenIddict();
-});
-
-builder.Services.AddUserStore(authOptions.CookieSecure);
-
-// 防伪 cookie Secure 按环境分层（与 admin/me 仓同款）：非 Development 恒 Always——网关终止
-// TLS 回源 http 时 SameAsRequest 会丢掉 Secure。Development 用 SameAsRequest：Antiforgery 的
-// CheckSSLConfig 对非 SSL 请求抛 InvalidOperationException，恒 Always 会让 http 测试宿主/
-// 本地直连的登录页 500、表单拿不到令牌（协议级测试实测；真实浏览器对 localhost http 虽接受
-// Secure cookie，服务端检查不买账）。
-builder.Services.AddAntiforgery(options =>
-    options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
-        ? Microsoft.AspNetCore.Http.CookieSecurePolicy.SameAsRequest
-        : Microsoft.AspNetCore.Http.CookieSecurePolicy.Always);
-
-builder.Services.AddScoped<IPasswordHasher, Argon2idPasswordHasher>();
-
-if (authOptions.DataProtectionKeyPath.Length > 0)
-{
-    // 路径必须已存在：生产由 compose 命名卷挂载保证；不存在即说明「配置路径与卷挂载点不一致」，
-    // 此时绝不能静默创建到容器临时层（密钥随容器重建即丢），必须失败关闭。
-    // PersistKeysToFileSystem 自身会静默创建缺失目录且不告警，故守卫必须显式。
-    if (!Directory.Exists(authOptions.DataProtectionKeyPath))
-    {
-        throw new InvalidOperationException(
-            $"DataProtection 密钥目录不存在：{authOptions.DataProtectionKeyPath}（生产应由 compose 命名卷挂载到该路径）");
+        var commandBuilder = WebApplication.CreateBuilder([]);
+        Environment.ExitCode = await ProfileMeRegistrationCommand.RunAsync(args, commandBuilder.Configuration, commandBuilder.Environment, Console.Out);
+        return;
     }
 
-    builder.Services
-        .AddDataProtection()
-        .PersistKeysToFileSystem(new DirectoryInfo(authOptions.DataProtectionKeyPath))
-        .SetApplicationName("PandaAuth");
-}
-
-// OpenIddict Core 也用于迁移后执行应用/客户端种子数据。
-var openIddict = builder.Services
-    .AddOpenIddict()
-    .AddCore(options => options.UseEntityFrameworkCore().UseDbContext<PandaAuthDbContext>());
-
-// 一次性迁移模式：docker compose run --rm auth-server --migrate（使用独立 DDL 账号）。
-if (isMigrateCommand)
-{
-    using var migrateApp = builder.Build();
-    using var migrateScope = migrateApp.Services.CreateScope();
-    // 每库单一迁移租约：同库并发首启（竞态部署/重复 compose run）时迁移+种子整体串行，
-    // 消除「查-生成-写」交错（fleet-control-plane.md 第六节 co-tenancy 审计的宿主侧落地）。
-    await using var migrationLease = await DatabaseLease.AcquireAsync(connectionString);
-    await migrateScope.ServiceProvider.GetRequiredService<PandaAuthDbContext>().Database.MigrateAsync();
-    await DbSeeder.SeedAsync(migrateScope.ServiceProvider);
-    migrateApp.Logger.LogInformation("数据库迁移与种子数据初始化完成。");
-    return;
-}
-
-// Initialize the live key ring under the database lease; runtime handlers use refreshed snapshots.
-var signingKeyRing = new SigningKeyRing(connectionString, authOptions.Keys, TimeProvider.System);
-await signingKeyRing.RefreshAsync();
-builder.Services.AddSingleton(signingKeyRing);
-builder.Services.AddHostedService<SigningKeyRefreshService>();
-
-openIddict.AddServer(options =>
+    if (AdminResourceMigrationCommand.IsRequested(args))
     {
-        options
-            .AllowAuthorizationCodeFlow()
-            .RequireProofKeyForCodeExchange()
-            .AllowClientCredentialsFlow()
-            .AllowRefreshTokenFlow();
+        var commandBuilder = WebApplication.CreateBuilder([]);
+        Environment.ExitCode = await AdminResourceMigrationCommand.RunAsync(args, commandBuilder.Configuration, commandBuilder.Environment, Console.Out);
+        return;
+    }
 
-        // 端点路径统一取自 PandaAuth 契约常量（share 仓 PandaAuthEndpoints），避免服务端与契约双源。
-        options.SetAuthorizationEndpointUris(PandaAuthEndpoints.Authorization)
-            .SetTokenEndpointUris(PandaAuthEndpoints.Token)
-            .SetUserInfoEndpointUris(PandaAuthEndpoints.Userinfo)
-            .SetEndSessionEndpointUris(PandaAuthEndpoints.Logout)
-            .SetIntrospectionEndpointUris(PandaAuthEndpoints.Introspection)
-            .SetRevocationEndpointUris(PandaAuthEndpoints.Revocation)
-            // JWKS 路径显式化：此前依赖 OpenIddict 默认值（同为 /.well-known/jwks），行为不变，契约成为单一事实源。
-            .SetJsonWebKeySetEndpointUris(PandaAuthEndpoints.JsonWebKeySet);
-
-        // 文档门禁：AccessToken 10 分钟；RefreshToken 可吊销。
-        options.SetAccessTokenLifetime(TimeSpan.FromMinutes(10))
-            .SetRefreshTokenLifetime(TimeSpan.FromDays(14))
-            .SetAuthorizationCodeLifetime(TimeSpan.FromMinutes(5));
-        options.Configure(RefreshTokenPolicy.Configure);
-        options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ProcessAuthenticationContext>(handler =>
-            handler.UseScopedHandler<RejectRevokedSsoSession>().SetOrder(int.MaxValue));
-
-        options.RegisterScopes(
-            OpenIddictConstants.Scopes.OpenId,
-            OpenIddictConstants.Scopes.Email,
-            OpenIddictConstants.Scopes.Profile,
-            OpenIddictConstants.Scopes.Roles,
-            OpenIddictConstants.Scopes.OfflineAccess,
-            "api",
-            PandaAuthSessionApi.Scope,
-            PandaAuthAdminApi.Scope);
-        // 控制面七 scope 单一事实源在 Share（PandaAuthScopes.FleetAll），注册与 seed 共用。
-        options.RegisterScopes([.. PandaAuthScopes.FleetAll]);
-        if (authOptions.Seed.CloudConfig.Enabled)
-            options.RegisterScopes([.. CloudConfigScopes.All]);
-
-        // Issuer 全部来自配置（平台级生产 https://auth.appliket.com/，租户级 https://t####-auth.sNNN.pandalabs.cn/，改环境变量即可，零代码切换）。
-        options.SetIssuer(IssuerUri());
-
-        foreach (var key in signingKeyRing.Snapshot.Keys)
-        {
-            if (key.Use == KeyUse.Signing)
-            {
-                options.AddSigningKey(key.PrivateKey);
-            }
-            else
-            {
-                options.AddEncryptionKey(key.PrivateKey);
-            }
-        }
-        options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.GenerateTokenContext>(handler =>
-            handler.UseSingletonHandler<SelectLiveSigningKey>().SetOrder(int.MinValue + 100_500));
-        options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ValidateTokenContext>(handler =>
-            handler.UseSingletonHandler<LiveServerVerificationKeys>().SetOrder(int.MinValue + 100_500));
-        options.RemoveEventHandler(OpenIddict.Server.OpenIddictServerHandlers.Discovery.AttachSigningKeys.Descriptor);
-        options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.HandleJsonWebKeySetRequestContext>(handler =>
-            handler.UseSingletonHandler<PublishLiveSigningKeys>().SetOrder(int.MinValue + 100_500));
-
-        options.UseAspNetCore()
-            .EnableAuthorizationEndpointPassthrough()
-            .EnableTokenEndpointPassthrough()
-            .EnableUserInfoEndpointPassthrough()
-            .EnableEndSessionEndpointPassthrough();
-
-        if (!authOptions.HttpsRequired)
-        {
-            options.UseAspNetCore().DisableTransportSecurityRequirement();
-        }
-    })
-    // 自定义 API（/admin-api/*）的 Bearer 验证用 Validation 方案，而非 Server 方案——
-    // Server 方案只对它管理的端点（/connect/*，如 userinfo）提取身份，自定义端点会抛
-    // 「An identity cannot be extracted from this request」（2026-09-19 生产实测）。
-    // UseLocalServer：同进程导入 Server 的签名/加密凭据与配置——缺它时认证中间件惰性解析
-    // options 即抛「server configuration or an issuer URI must be registered」（2026-09-19 生产实测，
-    // 连 /healthz 都 500，因认证中间件对每个请求都会探测已注册的 handler）。
-    .AddValidation(options =>
+    if (OperationalCommand.IsRequested(args))
     {
-        options.UseLocalServer();
-        options.UseAspNetCore();
-        // Make TokenRevocationService effective for API requests: revoked token entries
-        // must not continue to authenticate merely because the token is self-contained.
-        options.EnableTokenEntryValidation();
-        options.AddEventHandler<OpenIddict.Validation.OpenIddictValidationEvents.ValidateTokenContext>(handler =>
-            handler.UseSingletonHandler<LiveLocalVerificationKeys>().SetOrder(int.MinValue + 100_500));
-        options.AddEventHandler<OpenIddict.Validation.OpenIddictValidationEvents.ProcessAuthenticationContext>(handler =>
-            handler.UseScopedHandler<RejectRevokedSsoBearer>().SetOrder(int.MaxValue));
+        var commandBuilder = WebApplication.CreateBuilder([]);
+        Environment.ExitCode = await OperationalCommand.RunAsync(args, commandBuilder.Configuration, commandBuilder.Environment, Console.Out);
+        return;
+    }
+
+    if (args.Length == 1 && args[0] == "--migrate-pandamade")
+    {
+        var migrationBuilder = WebApplication.CreateBuilder([]);
+        Environment.ExitCode = await PandaAuth.Server.Features.PandaMade.PandaMadeRegistration.MigrateAsync(
+            migrationBuilder.Configuration, migrationBuilder.Environment.EnvironmentName, Console.Out, Console.Error);
+        return;
+    }
+
+    if (args.Length == 1 && args[0] == "--register-pandamade-clients")
+    {
+        // ADR-089 批次 3：独立实例注册通道已退役（cloud auth 实例经 DbSeeder 播种）。
+        // 旧入口保留 fail-closed 拒绝，防止误用参数落入正常 Web 启动路径。
+        Console.Error.WriteLine("pandamade-registration-closed");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    if (args.Length == 1 && args[0] == "--register-website-admin")
+    {
+        var registrationBuilder = WebApplication.CreateBuilder([]);
+        Environment.ExitCode = await PandaAuth.Server.Features.WebsiteAdmin.WebsiteAdminClientCommand.RunAsync(registrationBuilder.Configuration);
+        return;
+    }
+
+    var commandMode = PortalClientCommand.Mode(args);
+    if (commandMode < 0)
+    {
+        Console.Error.WriteLine("portal-client-command-closed");
+        Environment.ExitCode = 1;
+        return;
+    }
+    var builder = WebApplication.CreateBuilder(commandMode > 0 ? [] : args);
+    if (commandMode > 0)
+    {
+        Environment.ExitCode = await PortalClientCommand.RunAsync(commandMode == 2, builder.Configuration, Console.Out, Console.Error, verify: commandMode == 3);
+        return;
+    }
+
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+        options.ForwardLimit = 1;
+        TenantForwardedHeaders.Configure(options, builder.Configuration);
     });
 
-// Admin API 角色门禁：按 claim 短名（"role"）断言而非 Roles=——后者走 IsInRole，
-// 依赖 identity 的 RoleClaimType 映射（validation 方案默认是 ASP.NET 长名 URI），会静默 403。
-// Resource scope/audience/presenter, human identity and current active account are mandatory.
-// Passkey 退役后（AUTH-DELIVERY-002）：主策略还要求操作者已绑定已确认 TOTP；
-// 写操作在控制器动作内按风险分级检查：普通写操作要求八小时内任一 MFA，
-// 高风险/特敏感操作要求单次操作绑定 TOTP 授权（MfaOperationGrantService/Gate）。
-builder.Services.AddScoped<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, AdminResourceHandler>();
-builder.Services.AddAuthorization(options =>
-{
-    options.AddPolicy(AdminApiAuthorization.PolicyName, policy =>
-        policy.RequireAuthenticatedUser().AddRequirements(new AdminResourceRequirement()));
-    options.AddPolicy(AdminApiAuthorization.SessionPolicyName, policy => policy.RequireAuthenticatedUser());
-});
-
-// Management API 作用域门禁（M0）：audience + scope 双条件，缺一拒绝；M2M 主体无角色、无 MFA step-up，
-// 替代控制是专用机密客户端、最小 scope、部署面总开关、速率限制与写审计。
-builder.Services.AddAuthorization(options =>
-{
-    options.AddPolicy(SessionStateAuthorization.PolicyName, policy =>
-        policy.RequireAssertion(context => SessionStateAuthorization.HasAudienceAndScope(context.User)));
-    options.AddPolicy(MgmtApiAuthorization.ClientsReadPolicy, MgmtApiAuthorization.RequireScope(MgmtApiAuthorization.ClientsReadScope));
-    options.AddPolicy(MgmtApiAuthorization.ClientsWritePolicy, MgmtApiAuthorization.RequireScope(MgmtApiAuthorization.ClientsWriteScope));
-    options.AddPolicy(MgmtApiAuthorization.UsersReadPolicy, MgmtApiAuthorization.RequireScope(MgmtApiAuthorization.UsersReadScope));
-});
-
-// 登录限流器条目承载在内存缓存上并按 TTL 回收（见 LoginRateLimiter）。
-builder.Services.AddMemoryCache();
-// challenge 状态在数据库（panda_mfa_challenges），随 DbContext 作用域；换实现见 MfaChallengeStore。
-// 同表复用承载操作授权行（Purpose=op-grant:*，AUTH-DELIVERY-002）。
-builder.Services.AddScoped<MfaChallengeStore>();
-builder.Services.AddScoped<MfaOperationGrantService>();
-builder.Services.AddSingleton(serviceProvider => new TotpSecretProtector(
-    authOptions.Mfa.GetEncryptionKey(builder.Environment.IsProduction()), authOptions.Mfa.TotpKeyVersion));
-builder.Services.AddScoped<TotpFactorService>();
-builder.Services.AddScoped<MfaService>();
-// 登录路径 MFA 挑战的 pending cookie（自包含受保护载荷，Auth:LoginMfa 默认关闭）。
-builder.Services.AddScoped<LoginMfaChallengeService>();
-builder.Services.AddSingleton<LoginRateLimiter>();
-// Management API 限流与登录限流共用 FixedWindowLimiterCache 机械；桶配置见 Auth:Mgmt:RateLimit。
-builder.Services.AddSingleton<ManagementRateLimiter>();
-// 泄露密码检测（HIBP k-anonymity，Auth:Hibp 默认关闭）：只外呼 SHA1 前缀；超时/故障按失败策略处理。
-builder.Services.AddHttpClient<IPwnedPasswordChecker, PwnedPasswordChecker>((sp, client) =>
-    client.Timeout = TimeSpan.FromMilliseconds(sp.GetRequiredService<IOptions<AuthOptions>>().Value.Hibp.TimeoutMs));
-builder.Services.AddScoped<LoginAuditWriter>();
-builder.Services.AddScoped<AdminAuditWriter>();
-builder.Services.AddScoped<SecurityEventWriter>();
-builder.Services.AddScoped<ClaimsPolicyService>();
-builder.Services.AddScoped<ExternalIdentityService>();
-builder.Services.AddScoped<SessionSecurityService>();
-builder.Services.AddScoped<SessionRevocationService>();
-builder.Services.AddHostedService<SessionRevocationCleanupService>();
-// 接口注册：Admin 控制器以 ITokenRevoker 依赖（测试可替换；实现不变）。
-builder.Services.AddScoped<ITokenRevoker, TokenRevocationService>();
-// 登录时间侧信道拉平用的 dummy 哈希：必须单例（只算一次哈希），校验仍用 scoped hasher。
-builder.Services.AddSingleton<DummyPasswordHash>();
-
-// ---- 邮件通道（Resend direct / panda-notify）----
-// P1 transport-first: Email:Transport=Notify keeps the existing product templates but
-// routes delivery through the shared gateway (outbox/retry/audit). Resend remains the
-// explicit break-glass path. Development still uses DevEmailSender.
-// 注意：注册在 builder 阶段做环境判断用 builder.Environment（app 变量此时尚未创建）。
-var emailTransport = builder.Configuration["Email:Transport"] ?? "Resend";
-builder.Services.AddOptions<EmailOptions>()
-    .Bind(builder.Configuration.GetSection(EmailOptions.SectionName))
-    .Validate(options => StartupConfiguration.EmailIsValid(options, builder.Environment.IsProduction()),
-        "生产环境邮件通道配置不完整。")
-    .ValidateOnStart();
-if (builder.Environment.IsProduction())
-{
-    if (emailTransport.Equals("Notify", StringComparison.OrdinalIgnoreCase))
+    var isMigrateCommand = args.Contains("--migrate", StringComparer.Ordinal);
+    var startupConfiguration = StartupConfiguration.Validate(builder.Configuration, builder.Environment, isMigrateCommand);
+    if (!startupConfiguration.Valid)
     {
+        OperationalCommand.Write(Console.Error, startupConfiguration);
+        Environment.ExitCode = 2;
+        return;
+    }
+    var connectionStringName = isMigrateCommand ? "Migration" : "Default";
+    var connectionString = builder.Configuration.GetConnectionString(connectionStringName)
+        ?? throw new InvalidOperationException($"缺少连接字符串 ConnectionStrings:{connectionStringName}。");
+
+    // Management API 是部署面开关：启动时一次性读取，未启用时管理控制器整体不进路由模型
+    // （对外等效不存在，路由 404 且不进 ApiExplorer）；运行期改开关需重启进程。
+    var mgmtApiEnabled = builder.Configuration.GetValue("Auth:Mgmt:Enabled", false);
+    var profileEnabled = builder.Configuration.GetValue("Profile:Enabled", false);
+    builder.Services.AddSelfProfiles(builder.Configuration);
+    builder.Services.AddControllersWithViews(o =>
+        {
+            if (!mgmtApiEnabled)
+            {
+                o.Conventions.Add(new MgmtRoutesDisabledConvention());
+            }
+            if (!profileEnabled) o.Conventions.Add(new ProfileRoutesDisabledConvention());
+            // Admin API 错误码：title → 稳定码注册表注入 ProblemDetails.extensions.code
+            // （ADR 2026-10-11-admin-error-codes；前端按 code 走 i18n，未登记 title 降级 detail）。
+            o.Filters.Add<AdminErrorCodeFilter>();
+            o.Filters.Add<BusinessInputLimitFilter>();
+            o.Filters.Add<PasswordHashBusyExceptionFilter>();
+        });
+
+    builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
+    var authOptions = builder.Configuration.GetSection(AuthOptions.SectionName).Get<AuthOptions>() ?? new AuthOptions();
+    builder.Services.AddSingleton(authOptions.TenantRouting);
+    builder.Services.AddSingleton<ITenantHostResolver, TenantHostResolver>();
+    builder.Services.AddSingleton<TenantRedirectPolicy>();
+    builder.Services.AddScoped<TenantContextAccessor>();
+    builder.Services.AddScoped<ITenantContextAccessor>(services => services.GetRequiredService<TenantContextAccessor>());
+    // 安全配置已在任何数据库访问之前由集中预检校验。
+
+    builder.Services.AddDbContext<PandaAuthDbContext>(options =>
+    {
+        options.UseNpgsql(connectionString);
+        options.UseOpenIddict();
+    });
+
+    builder.Services.AddUserStore(authOptions.CookieSecure, authOptions.PasswordWorkLimitEnabled);
+
+    // 防伪 cookie Secure 按环境分层（与 admin/me 仓同款）：非 Development 恒 Always——网关终止
+    // TLS 回源 http 时 SameAsRequest 会丢掉 Secure。Development 用 SameAsRequest：Antiforgery 的
+    // CheckSSLConfig 对非 SSL 请求抛 InvalidOperationException，恒 Always 会让 http 测试宿主/
+    // 本地直连的登录页 500、表单拿不到令牌（协议级测试实测；真实浏览器对 localhost http 虽接受
+    // Secure cookie，服务端检查不买账）。
+    builder.Services.AddAntiforgery(options =>
+        options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
+            ? Microsoft.AspNetCore.Http.CookieSecurePolicy.SameAsRequest
+            : Microsoft.AspNetCore.Http.CookieSecurePolicy.Always);
+
+    builder.Services.AddScoped<IPasswordHasher, Argon2idPasswordHasher>();
+
+    if (authOptions.DataProtectionKeyPath.Length > 0)
+    {
+        // 路径必须已存在：生产由 compose 命名卷挂载保证；不存在即说明「配置路径与卷挂载点不一致」，
+        // 此时绝不能静默创建到容器临时层（密钥随容器重建即丢），必须失败关闭。
+        // PersistKeysToFileSystem 自身会静默创建缺失目录且不告警，故守卫必须显式。
+        if (!Directory.Exists(authOptions.DataProtectionKeyPath))
+        {
+            throw new InvalidOperationException(
+                $"DataProtection 密钥目录不存在：{authOptions.DataProtectionKeyPath}（生产应由 compose 命名卷挂载到该路径）");
+        }
+
         builder.Services
-            .AddHttpClient<IEmailSender, NotifyEmailSender>(client => client.Timeout = TimeSpan.FromSeconds(15))
-            .ConfigurePrimaryHttpMessageHandler(services =>
-            {
-                var options = services.GetRequiredService<IOptions<EmailOptions>>().Value;
-                return NotifyTransportHandler.Create(options);
-            });
+            .AddDataProtection()
+            .PersistKeysToFileSystem(new DirectoryInfo(authOptions.DataProtectionKeyPath))
+            .SetApplicationName("PandaAuth");
     }
-    else if (emailTransport.Equals("Resend", StringComparison.OrdinalIgnoreCase))
+
+    // OpenIddict Core 也用于迁移后执行应用/客户端种子数据。
+    var openIddict = builder.Services
+        .AddOpenIddict()
+        .AddCore(options => options.UseEntityFrameworkCore().UseDbContext<PandaAuthDbContext>());
+
+    // 一次性迁移模式：docker compose run --rm auth-server --migrate（使用独立 DDL 账号）。
+    if (isMigrateCommand)
     {
-        builder.Services.AddHttpClient<IEmailSender, ResendEmailSender>();
+        using var migrateApp = builder.Build();
+        using var migrateScope = migrateApp.Services.CreateScope();
+        // 每库单一迁移租约：同库并发首启（竞态部署/重复 compose run）时迁移+种子整体串行，
+        // 消除「查-生成-写」交错（fleet-control-plane.md 第六节 co-tenancy 审计的宿主侧落地）。
+        await using var migrationLease = await DatabaseLease.AcquireAsync(connectionString);
+        await migrateScope.ServiceProvider.GetRequiredService<PandaAuthDbContext>().Database.MigrateAsync();
+        await DbSeeder.SeedAsync(migrateScope.ServiceProvider);
+        migrateApp.Logger.LogInformation("数据库迁移与种子数据初始化完成。");
+        return;
+    }
+
+    // Initialize the live key ring under the database lease; runtime handlers use refreshed snapshots.
+    var signingKeyRing = new SigningKeyRing(connectionString, authOptions.Keys, TimeProvider.System);
+    await signingKeyRing.RefreshAsync();
+    builder.Services.AddSingleton(signingKeyRing);
+    builder.Services.AddHostedService<SigningKeyRefreshService>();
+
+    openIddict.AddServer(options =>
+        {
+            options
+                .AllowAuthorizationCodeFlow()
+                .RequireProofKeyForCodeExchange()
+                .AllowClientCredentialsFlow()
+                .AllowRefreshTokenFlow();
+
+            // 端点路径统一取自 PandaAuth 契约常量（share 仓 PandaAuthEndpoints），避免服务端与契约双源。
+            options.SetAuthorizationEndpointUris(PandaAuthEndpoints.Authorization)
+                .SetTokenEndpointUris(PandaAuthEndpoints.Token)
+                .SetUserInfoEndpointUris(PandaAuthEndpoints.Userinfo)
+                .SetEndSessionEndpointUris(PandaAuthEndpoints.Logout)
+                .SetIntrospectionEndpointUris(PandaAuthEndpoints.Introspection)
+                .SetRevocationEndpointUris(PandaAuthEndpoints.Revocation)
+                // JWKS 路径显式化：此前依赖 OpenIddict 默认值（同为 /.well-known/jwks），行为不变，契约成为单一事实源。
+                .SetJsonWebKeySetEndpointUris(PandaAuthEndpoints.JsonWebKeySet);
+
+            // 文档门禁：AccessToken 10 分钟；RefreshToken 可吊销。
+            options.SetAccessTokenLifetime(TimeSpan.FromMinutes(10))
+                .SetRefreshTokenLifetime(TimeSpan.FromDays(14))
+                .SetAuthorizationCodeLifetime(TimeSpan.FromMinutes(5));
+            options.Configure(RefreshTokenPolicy.Configure);
+            options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ProcessAuthenticationContext>(handler =>
+                handler.UseScopedHandler<RejectRevokedSsoSession>().SetOrder(int.MaxValue));
+
+            options.RegisterScopes(
+                OpenIddictConstants.Scopes.OpenId,
+                OpenIddictConstants.Scopes.Email,
+                OpenIddictConstants.Scopes.Profile,
+                OpenIddictConstants.Scopes.Roles,
+                OpenIddictConstants.Scopes.OfflineAccess,
+                "api",
+                PandaAuthSessionApi.Scope,
+                PandaAuthAdminApi.Scope);
+            // 控制面七 scope 单一事实源在 Share（PandaAuthScopes.FleetAll），注册与 seed 共用。
+            options.RegisterScopes([.. PandaAuthScopes.FleetAll]);
+            if (authOptions.Seed.CloudConfig.Enabled)
+                options.RegisterScopes([.. CloudConfigScopes.All]);
+
+            // Issuer 全部来自配置（平台级生产 https://auth.appliket.com/，租户级 https://t####-auth.sNNN.pandalabs.cn/，改环境变量即可，零代码切换）。
+            options.SetIssuer(IssuerUri());
+
+            foreach (var key in signingKeyRing.Snapshot.Keys)
+            {
+                if (key.Use == KeyUse.Signing)
+                {
+                    options.AddSigningKey(key.PrivateKey);
+                }
+                else
+                {
+                    options.AddEncryptionKey(key.PrivateKey);
+                }
+            }
+            options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.GenerateTokenContext>(handler =>
+                handler.UseSingletonHandler<SelectLiveSigningKey>().SetOrder(int.MinValue + 100_500));
+            options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ValidateTokenContext>(handler =>
+                handler.UseSingletonHandler<LiveServerVerificationKeys>().SetOrder(int.MinValue + 100_500));
+            options.RemoveEventHandler(OpenIddict.Server.OpenIddictServerHandlers.Discovery.AttachSigningKeys.Descriptor);
+            options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.HandleJsonWebKeySetRequestContext>(handler =>
+                handler.UseSingletonHandler<PublishLiveSigningKeys>().SetOrder(int.MinValue + 100_500));
+
+            options.UseAspNetCore()
+                .EnableAuthorizationEndpointPassthrough()
+                .EnableTokenEndpointPassthrough()
+                .EnableUserInfoEndpointPassthrough()
+                .EnableEndSessionEndpointPassthrough();
+
+            if (!authOptions.HttpsRequired)
+            {
+                options.UseAspNetCore().DisableTransportSecurityRequirement();
+            }
+        })
+        // 自定义 API（/admin-api/*）的 Bearer 验证用 Validation 方案，而非 Server 方案——
+        // Server 方案只对它管理的端点（/connect/*，如 userinfo）提取身份，自定义端点会抛
+        // 「An identity cannot be extracted from this request」（2026-09-19 生产实测）。
+        // UseLocalServer：同进程导入 Server 的签名/加密凭据与配置——缺它时认证中间件惰性解析
+        // options 即抛「server configuration or an issuer URI must be registered」（2026-09-19 生产实测，
+        // 连 /healthz 都 500，因认证中间件对每个请求都会探测已注册的 handler）。
+        .AddValidation(options =>
+        {
+            options.UseLocalServer();
+            options.UseAspNetCore();
+            // Make TokenRevocationService effective for API requests: revoked token entries
+            // must not continue to authenticate merely because the token is self-contained.
+            options.EnableTokenEntryValidation();
+            options.AddEventHandler<OpenIddict.Validation.OpenIddictValidationEvents.ValidateTokenContext>(handler =>
+                handler.UseSingletonHandler<LiveLocalVerificationKeys>().SetOrder(int.MinValue + 100_500));
+            options.AddEventHandler<OpenIddict.Validation.OpenIddictValidationEvents.ProcessAuthenticationContext>(handler =>
+                handler.UseScopedHandler<RejectRevokedSsoBearer>().SetOrder(int.MaxValue));
+        });
+
+    // Admin API 角色门禁：按 claim 短名（"role"）断言而非 Roles=——后者走 IsInRole，
+    // 依赖 identity 的 RoleClaimType 映射（validation 方案默认是 ASP.NET 长名 URI），会静默 403。
+    // Resource scope/audience/presenter, human identity and current active account are mandatory.
+    // Passkey 退役后（AUTH-DELIVERY-002）：主策略还要求操作者已绑定已确认 TOTP；
+    // 写操作在控制器动作内按风险分级检查：普通写操作要求八小时内任一 MFA，
+    // 高风险/特敏感操作要求单次操作绑定 TOTP 授权（MfaOperationGrantService/Gate）。
+    builder.Services.AddScoped<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, AdminResourceHandler>();
+    builder.Services.AddAuthorization(options =>
+    {
+        options.AddPolicy(AdminApiAuthorization.PolicyName, policy =>
+            policy.RequireAuthenticatedUser().AddRequirements(new AdminResourceRequirement()));
+        options.AddPolicy(AdminApiAuthorization.SessionPolicyName, policy => policy.RequireAuthenticatedUser());
+    });
+
+    // Management API 作用域门禁（M0）：audience + scope 双条件，缺一拒绝；M2M 主体无角色、无 MFA step-up，
+    // 替代控制是专用机密客户端、最小 scope、部署面总开关、速率限制与写审计。
+    builder.Services.AddAuthorization(options =>
+    {
+        options.AddPolicy(SessionStateAuthorization.PolicyName, policy =>
+            policy.RequireAssertion(context => SessionStateAuthorization.HasAudienceAndScope(context.User)));
+        options.AddPolicy(MgmtApiAuthorization.ClientsReadPolicy, MgmtApiAuthorization.RequireScope(MgmtApiAuthorization.ClientsReadScope));
+        options.AddPolicy(MgmtApiAuthorization.ClientsWritePolicy, MgmtApiAuthorization.RequireScope(MgmtApiAuthorization.ClientsWriteScope));
+        options.AddPolicy(MgmtApiAuthorization.UsersReadPolicy, MgmtApiAuthorization.RequireScope(MgmtApiAuthorization.UsersReadScope));
+    });
+
+    // 登录限流器条目承载在内存缓存上并按 TTL 回收（见 LoginRateLimiter）。
+    builder.Services.AddMemoryCache();
+    // challenge 状态在数据库（panda_mfa_challenges），随 DbContext 作用域；换实现见 MfaChallengeStore。
+    // 同表复用承载操作授权行（Purpose=op-grant:*，AUTH-DELIVERY-002）。
+    builder.Services.AddScoped<MfaChallengeStore>();
+    builder.Services.AddScoped<MfaOperationGrantService>();
+    builder.Services.AddSingleton(serviceProvider => new TotpSecretProtector(
+        authOptions.Mfa.GetEncryptionKey(builder.Environment.IsProduction()), authOptions.Mfa.TotpKeyVersion));
+    builder.Services.AddScoped<TotpFactorService>();
+    builder.Services.AddScoped<MfaService>();
+    // 登录路径 MFA 挑战的 pending cookie（自包含受保护载荷，Auth:LoginMfa 默认关闭）。
+    builder.Services.AddScoped<LoginMfaChallengeService>();
+    builder.Services.AddSingleton<LoginRateLimiter>();
+    // Management API 限流与登录限流共用 FixedWindowLimiterCache 机械；桶配置见 Auth:Mgmt:RateLimit。
+    builder.Services.AddSingleton<ManagementRateLimiter>();
+    // 泄露密码检测（HIBP k-anonymity，Auth:Hibp 默认关闭）：只外呼 SHA1 前缀；超时/故障按失败策略处理。
+    builder.Services.AddHttpClient<IPwnedPasswordChecker, PwnedPasswordChecker>((sp, client) =>
+        client.Timeout = TimeSpan.FromMilliseconds(sp.GetRequiredService<IOptions<AuthOptions>>().Value.Hibp.TimeoutMs));
+    builder.Services.AddScoped<LoginAuditWriter>();
+    builder.Services.AddScoped<AdminAuditWriter>();
+    builder.Services.AddScoped<SecurityEventWriter>();
+    builder.Services.AddScoped<ClaimsPolicyService>();
+    builder.Services.AddScoped<ExternalIdentityService>();
+    builder.Services.AddScoped<SessionSecurityService>();
+    builder.Services.AddScoped<SessionRevocationService>();
+    builder.Services.AddHostedService<SessionRevocationCleanupService>();
+    // 接口注册：Admin 控制器以 ITokenRevoker 依赖（测试可替换；实现不变）。
+    builder.Services.AddScoped<ITokenRevoker, TokenRevocationService>();
+    // 登录时间侧信道拉平用的 dummy 哈希：必须单例（只算一次哈希），校验仍用 scoped hasher。
+    builder.Services.AddSingleton<DummyPasswordHash>();
+
+    // ---- 邮件通道（Resend direct / panda-notify）----
+    // P1 transport-first: Email:Transport=Notify keeps the existing product templates but
+    // routes delivery through the shared gateway (outbox/retry/audit). Resend remains the
+    // explicit break-glass path. Development still uses DevEmailSender.
+    // 注意：注册在 builder 阶段做环境判断用 builder.Environment（app 变量此时尚未创建）。
+    var emailTransport = builder.Configuration["Email:Transport"] ?? "Resend";
+    builder.Services.AddOptions<EmailOptions>()
+        .Bind(builder.Configuration.GetSection(EmailOptions.SectionName))
+        .Validate(options => StartupConfiguration.EmailIsValid(options, builder.Environment.IsProduction()),
+            "生产环境邮件通道配置不完整。")
+        .ValidateOnStart();
+    if (builder.Environment.IsProduction())
+    {
+        if (emailTransport.Equals("Notify", StringComparison.OrdinalIgnoreCase))
+        {
+            builder.Services
+                .AddHttpClient<IEmailSender, NotifyEmailSender>(client => client.Timeout = TimeSpan.FromSeconds(15))
+                .ConfigurePrimaryHttpMessageHandler(services =>
+                {
+                    var options = services.GetRequiredService<IOptions<EmailOptions>>().Value;
+                    return NotifyTransportHandler.Create(options);
+                });
+        }
+        else if (emailTransport.Equals("Resend", StringComparison.OrdinalIgnoreCase))
+        {
+            builder.Services.AddHttpClient<IEmailSender, ResendEmailSender>();
+        }
+        else
+        {
+            throw new InvalidOperationException($"Unsupported Email:Transport '{emailTransport}'.");
+        }
     }
     else
     {
-        throw new InvalidOperationException($"Unsupported Email:Transport '{emailTransport}'.");
+        builder.Services.AddSingleton<IEmailSender, DevEmailSender>();
     }
-}
-else
-{
-    builder.Services.AddSingleton<IEmailSender, DevEmailSender>();
-}
 
-builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddScoped<AccountVerificationService>();
-// login_logs / admin_audit_logs 保留策略：后台按天删除超期审计记录（Auth:Audit:RetentionDays，默认 90 天）。
-builder.Services.AddHostedService<LoginLogRetentionService>();
-builder.Services.AddHostedService<SecurityDataRetentionService>();
-// /healthz 必须反映核心依赖：空检查会对「数据库停摆」假绿（门户状态页据此渲染组件状态）。
-// DbContextCheck 执行 CanConnectAsync，库不可达时健康端点转为 503。
-builder.Services.AddHealthChecks().AddDbContextCheck<PandaAuthDbContext>().AddCheck<SigningKeyHealthCheck>("signing-keys");
+    builder.Services.AddSingleton(TimeProvider.System);
+    builder.Services.AddScoped<AccountVerificationService>();
+    // login_logs / admin_audit_logs 保留策略：后台按天删除超期审计记录（Auth:Audit:RetentionDays，默认 90 天）。
+    builder.Services.AddHostedService<LoginLogRetentionService>();
+    builder.Services.AddHostedService<SecurityDataRetentionService>();
+    // /healthz 必须反映核心依赖：空检查会对「数据库停摆」假绿（门户状态页据此渲染组件状态）。
+    // DbContextCheck 执行 CanConnectAsync，库不可达时健康端点转为 503。
+    builder.Services.AddHealthChecks().AddDbContextCheck<PandaAuthDbContext>().AddCheck<SigningKeyHealthCheck>("signing-keys");
 
-var app = builder.Build();
+    var app = builder.Build();
 
-// Legacy host-network runtime trusts loopback. Tenant bridge runtime replaces that list with its exact Docker gateway.
-// ForwardLimit=1 only consumes the immediate Caddy hop; a sibling container on the same /24 remains untrusted.
-//
-// ⚠️ 本注册只覆盖「管线末端」的端点（控制器、静态文件等）。最小托管会把 UseAuthentication()
-//    自动插到管线最前端，而 OpenIddict 的 discovery / connect 端点由认证中间件提供——它们在本行
-//    之前就已处理请求，因此这里还原不了它们的 Scheme。这些端点依赖 compose 中的宿主级
-//    ASPNETCORE_FORWARDEDHEADERS_ENABLED=true（更靠前，默认策略同为「仅信任回环 + ForwardLimit=1」）。
-//    2026-09-16 实测：删掉该环境变量后，公网 discovery 的 authorization_endpoint 退化为 http://。
-//    两者是分工而非重复，勿单独删除任何一个。
-app.UseForwardedHeaders(app.Services.GetRequiredService<IOptions<ForwardedHeadersOptions>>().Value);
+    // Legacy host-network runtime trusts loopback. Tenant bridge runtime replaces that list with its exact Docker gateway.
+    // ForwardLimit=1 only consumes the immediate Caddy hop; a sibling container on the same /24 remains untrusted.
+    //
+    // ⚠️ 本注册只覆盖「管线末端」的端点（控制器、静态文件等）。最小托管会把 UseAuthentication()
+    //    自动插到管线最前端，而 OpenIddict 的 discovery / connect 端点由认证中间件提供——它们在本行
+    //    之前就已处理请求，因此这里还原不了它们的 Scheme。这些端点依赖 compose 中的宿主级
+    //    ASPNETCORE_FORWARDEDHEADERS_ENABLED=true（更靠前，默认策略同为「仅信任回环 + ForwardLimit=1」）。
+    //    2026-09-16 实测：删掉该环境变量后，公网 discovery 的 authorization_endpoint 退化为 http://。
+    //    两者是分工而非重复，勿单独删除任何一个。
+    app.UseForwardedHeaders(app.Services.GetRequiredService<IOptions<ForwardedHeadersOptions>>().Value);
 
-app.UseMiddleware<TenantHostMiddleware>();
+    app.UseMiddleware<TenantHostMiddleware>();
 
-app.UseMiddleware<SecurityHeadersMiddleware>();
+    app.UseMiddleware<SecurityHeadersMiddleware>();
 
-// 品牌静态资源（wwwroot/brand/：登录页 favicon 与 mark），安全头之后挂载使 CSP 等头部同样覆盖静态响应。
-app.UseStaticFiles();
+    // 品牌静态资源（wwwroot/brand/：登录页 favicon 与 mark），安全头之后挂载使 CSP 等头部同样覆盖静态响应。
+    app.UseStaticFiles();
 
-// 公网形态（反向代理同域分流）只把 /connect/*、/account/*、/.well-known/*、
-// /healthz 分给 IDP：登录视图引用的 /brand/* 在公网会落到门户 catch-all 而 404（曾实测
-// logo 404、破图）。故把 wwwroot/brand 以 /account/brand 前缀再挂一份——路径天然落在 IDP 的路由表内，
-// 视图改引 /account/brand/*，不动 Caddy。本地直连 9004 时两种路径都可用。
-app.UseStaticFiles(new StaticFileOptions
-{
-    RequestPath = "/account/brand",
-    FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(
-        Path.Combine(app.Environment.WebRootPath ?? "wwwroot", "brand")),
-});
-
-if (app.Environment.IsDevelopment())
-{
-    // 开发环境：启动时幂等执行种子数据（生产通过 --migrate 显式执行）。
-    using var seedScope = app.Services.CreateScope();
-    await DbSeeder.SeedAsync(seedScope.ServiceProvider);
-}
-
-app.MapControllers();
-app.MapHealthChecks("/healthz");
-
-app.Run();
-
-Uri IssuerUri()
-{
-    if (string.IsNullOrWhiteSpace(authOptions.Issuer))
+    // 公网形态（反向代理同域分流）只把 /connect/*、/account/*、/.well-known/*、
+    // /healthz 分给 IDP：登录视图引用的 /brand/* 在公网会落到门户 catch-all 而 404（曾实测
+    // logo 404、破图）。故把 wwwroot/brand 以 /account/brand 前缀再挂一份——路径天然落在 IDP 的路由表内，
+    // 视图改引 /account/brand/*，不动 Caddy。本地直连 9004 时两种路径都可用。
+    app.UseStaticFiles(new StaticFileOptions
     {
-        throw new InvalidOperationException(
-            "缺少 Auth:Issuer 配置。生产示例（平台级）：Auth__Issuer=https://auth.appliket.com/");
+        RequestPath = "/account/brand",
+        FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(
+            Path.Combine(app.Environment.WebRootPath ?? "wwwroot", "brand")),
+    });
+
+    if (app.Environment.IsDevelopment())
+    {
+        // 开发环境：启动时幂等执行种子数据（生产通过 --migrate 显式执行）。
+        using var seedScope = app.Services.CreateScope();
+        await DbSeeder.SeedAsync(seedScope.ServiceProvider);
     }
 
-    return new Uri(authOptions.Issuer.EndsWith('/') ? authOptions.Issuer : authOptions.Issuer + "/", UriKind.Absolute);
+    app.MapControllers();
+    app.MapHealthChecks("/healthz");
+
+    app.Run();
+
+    Uri IssuerUri()
+    {
+        if (string.IsNullOrWhiteSpace(authOptions.Issuer))
+        {
+            throw new InvalidOperationException(
+                "缺少 Auth:Issuer 配置。生产示例（平台级）：Auth__Issuer=https://auth.appliket.com/");
+        }
+
+        return new Uri(authOptions.Issuer.EndsWith('/') ? authOptions.Issuer : authOptions.Issuer + "/", UriKind.Absolute);
+    }
+
 }
 
 // 供后续集成测试（WebApplicationFactory）使用。

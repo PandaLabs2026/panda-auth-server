@@ -82,7 +82,7 @@ public sealed class AccountController(
             // 用户可见文案与「用户名或密码错误」完全一致：区分文案（冻结/锁定/口令）等于免费向
             // 撞库者确认账号存在。真实原因只落 login_logs（运维可辨），响应耗时仍与「用户不存在」
             // 一样支付一次等价哈希代价，避免各分支形成可枚举的耗时指纹。
-            passwordHasher.Verify(dummyPasswordHash.Value, model.Password);
+            await passwordHasher.VerifyAsync(dummyPasswordHash.Value, model.Password, cancellationToken);
             await loginAudit.RecordAsync(BuildLog(), cancellationToken);
             return ViewWithError("用户名或密码错误。");
         }
@@ -119,7 +119,7 @@ public sealed class AccountController(
         {
             // 时间侧信道拉平：用户不存在时同样付出一次 Argon2 代价（对固定 dummy 哈希校验一次），
             // 使两条路径耗时接近。否则「不存在的用户名」明显更快返回，响应内容再一致也可枚举账号。
-            passwordHasher.Verify(dummyPasswordHash.Value, model.Password);
+            await passwordHasher.VerifyAsync(dummyPasswordHash.Value, model.Password, cancellationToken);
         }
 
         await loginAudit.RecordAsync(BuildLog(), cancellationToken);

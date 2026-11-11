@@ -1,5 +1,4 @@
 using Microsoft.Extensions.DependencyInjection;
-using PandaAuth.Server.Domain;
 
 namespace PandaAuth.Server.Infrastructure.Security;
 
@@ -21,18 +20,28 @@ public sealed class DummyPasswordHash
     /// <summary>dummy 哈希的源密码，与任何真实账号无关。</summary>
     private const string SourcePassword = "panda-auth-timing-equalization-dummy-password";
 
-    private readonly Lazy<string> _hash;
+    private readonly Func<string> createHash;
+    private readonly object gate = new();
+    private string? hash;
 
     public DummyPasswordHash(IServiceScopeFactory scopeFactory)
     {
-        _hash = new Lazy<string>(() =>
+        createHash = () =>
         {
             using var scope = scopeFactory.CreateScope();
             var hasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
             return hasher.Hash(SourcePassword);
-        }, LazyThreadSafetyMode.ExecutionAndPublication);
+        };
     }
 
     /// <summary>固定 dummy 哈希（PHC 字符串），首次访问时计算一次。</summary>
-    public string Value => _hash.Value;
+    public string Value
+    {
+        get
+        {
+            // Cache only a successful computation. A canceled or capacity-limited first request
+            // must not permanently disable the unknown-account timing equalization path.
+            lock (gate) return hash ??= createHash();
+        }
+    }
 }
