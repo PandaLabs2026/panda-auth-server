@@ -20,10 +20,24 @@ public interface IPasswordHasher
     string Hash(string password);
 
     PasswordVerificationOutcome Verify(string? hashedPassword, string providedPassword);
+
+    Task<string> HashAsync(string password, CancellationToken cancellationToken = default)
+        => Task.FromResult(Hash(password));
+
+    Task<PasswordVerificationOutcome> VerifyAsync(string? hashedPassword, string providedPassword, CancellationToken cancellationToken = default)
+        => Task.FromResult(Verify(hashedPassword, providedPassword));
 }
 
 public sealed class Argon2idPasswordHasher : IPasswordHasher
 {
+    private readonly PasswordHashWorkLimiter? workLimiter;
+    public Argon2idPasswordHasher() { }
+    public Argon2idPasswordHasher(PasswordHashWorkLimiter workLimiter)
+    {
+        ArgumentNullException.ThrowIfNull(workLimiter);
+        this.workLimiter = workLimiter;
+    }
+
     public const int MemorySizeKib = 19456;
     public const int Iterations = 2;
     public const int Parallelism = 1;
@@ -31,21 +45,27 @@ public sealed class Argon2idPasswordHasher : IPasswordHasher
     private const int SaltSizeBytes = 16;
     private const int HashSizeBytes = 32;
 
-    public string Hash(string password)
+    public string Hash(string password) => HashAsync(password).GetAwaiter().GetResult();
+
+    public async Task<string> HashAsync(string password, CancellationToken cancellationToken = default)
     {
         var salt = RandomNumberGenerator.GetBytes(SaltSizeBytes);
-        var hash = Compute(password, salt, MemorySizeKib, Iterations, Parallelism);
+        var hash = await ComputeAdmittedAsync(password, salt, MemorySizeKib, Iterations, Parallelism, cancellationToken).ConfigureAwait(false);
         return Format(salt, hash, MemorySizeKib, Iterations, Parallelism);
     }
 
     public PasswordVerificationOutcome Verify(string? hashedPassword, string providedPassword)
+        => VerifyAsync(hashedPassword, providedPassword).GetAwaiter().GetResult();
+
+    public async Task<PasswordVerificationOutcome> VerifyAsync(string? hashedPassword, string providedPassword,
+        CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrEmpty(hashedPassword) || !TryParse(hashedPassword, out var parsed))
         {
             return PasswordVerificationOutcome.Failed;
         }
 
-        var expected = Compute(providedPassword, parsed.Salt, parsed.MemorySizeKib, parsed.Iterations, parsed.Parallelism);
+        var expected = await ComputeAdmittedAsync(providedPassword, parsed.Salt, parsed.MemorySizeKib, parsed.Iterations, parsed.Parallelism, cancellationToken).ConfigureAwait(false);
         if (!CryptographicOperations.FixedTimeEquals(expected, parsed.Hash))
         {
             return PasswordVerificationOutcome.Failed;
@@ -60,7 +80,18 @@ public sealed class Argon2idPasswordHasher : IPasswordHasher
     internal static string Format(byte[] salt, byte[] hash, int memorySizeKib, int iterations, int parallelism)
         => $"$argon2id$v=19$m={memorySizeKib},t={iterations},p={parallelism}${Base64(salt)}${Base64(hash)}";
 
+    private async Task<byte[]> ComputeAdmittedAsync(string password, byte[] salt, int memorySizeKib,
+        int iterations, int parallelism, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var lease = workLimiter is null ? null : await workLimiter.AcquireAsync(memorySizeKib, cancellationToken).ConfigureAwait(false);
+        return await ComputeAsync(password, salt, memorySizeKib, iterations, parallelism).ConfigureAwait(false);
+    }
+
     internal static byte[] Compute(string password, byte[] salt, int memorySizeKib, int iterations, int parallelism)
+        => ComputeAsync(password, salt, memorySizeKib, iterations, parallelism).GetAwaiter().GetResult();
+
+    private static async Task<byte[]> ComputeAsync(string password, byte[] salt, int memorySizeKib, int iterations, int parallelism)
     {
         using var hasher = new Argon2id(Encoding.UTF8.GetBytes(password))
         {
@@ -69,7 +100,7 @@ public sealed class Argon2idPasswordHasher : IPasswordHasher
             Iterations = iterations,
             DegreeOfParallelism = parallelism,
         };
-        return hasher.GetBytes(HashSizeBytes);
+        return await hasher.GetBytesAsync(HashSizeBytes).ConfigureAwait(false);
     }
 
     private static bool TryParse(string encoded, out ParsedHash parsed)

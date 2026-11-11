@@ -131,7 +131,7 @@ public sealed class MfaOperationGrantService(
             if (string.IsNullOrEmpty(user.PasswordHash)) return (null, MfaGrantIssueError.PasswordRejected);
             // 与登录路径同一 Argon2id 哈希器（IPasswordHasher）；SuccessRehashNeeded 同样放行，
             // 哈希参数升级由正常改密路径完成，不在授权签发里顺带改写。
-            var outcome = passwordHasher.Verify(user.PasswordHash, currentPassword);
+            var outcome = await passwordHasher.VerifyAsync(user.PasswordHash, currentPassword, cancellationToken);
             if (outcome == PasswordVerificationOutcome.Failed) return (null, MfaGrantIssueError.PasswordRejected);
         }
 

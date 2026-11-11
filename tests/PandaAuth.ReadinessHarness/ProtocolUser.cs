@@ -20,6 +20,11 @@ internal interface IProtocolActor : IDisposable
 internal sealed record ProtocolActorSettings(string RunId,string BaseUri,string Password,string ClientId,string ClientSecret,
     string RedirectUri,string UserName,string Workload,string Scopes="openid profile offline_access");
 
+internal sealed class LoginProtocolException(HttpStatusCode status) : InvalidOperationException
+{
+    public int Status { get; } = (int)status;
+}
+
 internal sealed class ProtocolUser : IProtocolActor
 {
     private readonly ProtocolActorSettings settings;
@@ -166,7 +171,7 @@ internal sealed class ProtocolUser : IProtocolActor
                 ["Password"] = settings.Password, ["ReturnUrl"] = authorize
             });
             using var login = await browser.PostAsync("/account/login", form, cancellation);
-            Require(login.StatusCode == HttpStatusCode.Redirect);
+            if (login.StatusCode != HttpStatusCode.Redirect) throw new LoginProtocolException(login.StatusCode);
         }
         using var authorization = await browser.GetAsync(authorize, cancellation);
         await CompleteAuthorizationAsync(authorization, verifier, state, cancellation);

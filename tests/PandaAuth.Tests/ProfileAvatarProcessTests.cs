@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using PandaAuth.Server.Features.Profile;
 using Xunit;
 
@@ -13,12 +14,41 @@ public sealed class AvatarLinuxFactAttribute : FactAttribute
 public sealed class ProfileAvatarProcessTests
 {
     [Fact]
+    public void Decoder_worker_requires_only_Core_runtime_and_no_web_or_database_dependencies()
+    {
+        var executable = typeof(ProfileAvatarWorker).Assembly.Location;
+        using var runtime = JsonDocument.Parse(File.ReadAllText(Path.ChangeExtension(executable, ".runtimeconfig.json")));
+        var options = runtime.RootElement.GetProperty("runtimeOptions");
+        var frameworks = options.TryGetProperty("frameworks", out var multiple)
+            ? multiple.EnumerateArray().Select(value => value.GetProperty("name").GetString()!).ToArray()
+            : [options.GetProperty("framework").GetProperty("name").GetString()!];
+        Assert.Equal(new[] { "Microsoft.NETCore.App" }, frameworks);
+        using var dependencies = JsonDocument.Parse(File.ReadAllText(Path.ChangeExtension(executable, ".deps.json")));
+        Assert.DoesNotContain(dependencies.RootElement.GetProperty("libraries").EnumerateObject(), library =>
+            library.Name.StartsWith("Microsoft.AspNetCore.", StringComparison.Ordinal)
+            || library.Name.StartsWith("Microsoft.EntityFrameworkCore", StringComparison.Ordinal)
+            || library.Name.StartsWith("PandaAuth.Server/", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Real_worker_process_returns_normalized_png()
     {
         using var decoder = new ProfileAvatarDecoder();
         var result = await decoder.DecodeAsync(ct => File.ReadAllBytesAsync(
             Path.Combine(AppContext.BaseDirectory, "Fixtures", "ProfileAvatar", "seed.jpg"), ct), default);
         Assert.True(result.AsSpan().StartsWith(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }));
+    }
+
+    [Fact]
+    public async Task Real_worker_rejects_malformed_input_and_releases_capacity_for_next_decode()
+    {
+        using var decoder = new ProfileAvatarDecoder();
+        var rejected = await Assert.ThrowsAsync<ProfileOperationException>(() =>
+            decoder.DecodeAsync(_ => Task.FromResult(new byte[] { 1, 2, 3, 4 }), default));
+        Assert.Equal(422, rejected.StatusCode);
+        var recovered = await decoder.DecodeAsync(ct => File.ReadAllBytesAsync(
+            Path.Combine(AppContext.BaseDirectory, "Fixtures", "ProfileAvatar", "seed.png"), ct), default);
+        Assert.NotEmpty(recovered);
     }
 
     [AvatarLinuxFact]

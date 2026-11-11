@@ -8,6 +8,7 @@ public static class HarnessProgram
     public static object DescribeFailure(Exception exception) => new
     {
         schema = 1, valid = false, error = "readiness_harness_failed", kind = exception.GetType().Name,
+        loginStatus = exception is LoginProtocolException login ? (int?)login.Status : null,
         protocol = exception is SnapshotProtocolException protocol ? new { cookieStatus = protocol.CookieStatus,
             bearerStatus = protocol.BearerStatus, refreshStatus = protocol.RefreshStatus,
             loginRedirect = protocol.LoginRedirect, refreshError = protocol.RefreshError,

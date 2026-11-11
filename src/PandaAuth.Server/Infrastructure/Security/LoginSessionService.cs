@@ -179,6 +179,10 @@ public static class UserStoreRegistration
     public static IServiceCollection AddUserStore(
         this IServiceCollection services,
         PandaAuth.Server.Configuration.CookieSecurePolicy cookieSecure = PandaAuth.Server.Configuration.CookieSecurePolicy.SameAsRequest)
+        => AddUserStore(services, cookieSecure, passwordWorkLimitEnabled: false);
+
+    public static IServiceCollection AddUserStore(this IServiceCollection services,
+        PandaAuth.Server.Configuration.CookieSecurePolicy cookieSecure, bool passwordWorkLimitEnabled)
     {
         // CookieSecure 与 HttpsRequired（OpenIddict transport requirement）解耦：网关终止 TLS 后
         // 回源为 http 的部署（fleet 控制面等，HttpsRequired=false）下，Secure 若跟随回源协议
@@ -187,6 +191,11 @@ public static class UserStoreRegistration
             ? CookieSecurePolicy.Always
             : CookieSecurePolicy.SameAsRequest;
         services.TryAddSingleton(TimeProvider.System);
+        if (passwordWorkLimitEnabled)
+        {
+            services.AddHttpContextAccessor();
+            services.TryAddSingleton<PasswordHashWorkLimiter>();
+        }
         services.TryAddScoped<IPasswordHasher, Argon2idPasswordHasher>();
         services.TryAddScoped<SessionRevocationService>();
         services.AddScoped<UserService>();

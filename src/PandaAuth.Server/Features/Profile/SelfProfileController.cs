@@ -105,14 +105,16 @@ public sealed class SelfProfileController(SelfProfileService profiles, SecurityE
             || Request.Headers.ContentEncoding.Any(value => !string.Equals(value, "identity", StringComparison.OrdinalIgnoreCase)))
             throw new ProfileInputException("profile_request_invalid", 415);
         if (Request.ContentLength > maximum) throw new ProfileInputException("profile_request_too_large", 413);
-        using var body = new MemoryStream();
+        using var body = new MemoryStream((int)(Request.ContentLength ?? 0));
         var buffer = ArrayPool<byte>.Shared.Rent(8192);
         try
         {
             while (true)
             {
                 var count = await Request.Body.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, maximum - (int)body.Length + 1)), ct);
-                if (count == 0) return body.ToArray();
+                // Exact capacity permits returning the owned buffer without another full payload copy.
+                // Actual reads still enforce the limit, including absent or inaccurate Content-Length.
+                if (count == 0) return body.Length == body.Capacity ? body.GetBuffer() : body.ToArray();
                 if (body.Length + count > maximum) throw new ProfileInputException("profile_request_too_large", 413);
                 body.Write(buffer, 0, count);
             }

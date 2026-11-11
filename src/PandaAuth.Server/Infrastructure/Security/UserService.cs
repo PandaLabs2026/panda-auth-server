@@ -50,7 +50,7 @@ public class UserService(
         {
             validation = ValidatePassword(password);
             if (!validation.Succeeded) return validation;
-            user.PasswordHash = hasher.Hash(password);
+            user.PasswordHash = await hasher.HashAsync(password);
         }
         db.Users.Add(user);
         return await SaveAsync();
@@ -115,14 +115,14 @@ public class UserService(
     {
         var result = ValidatePassword(password);
         if (!result.Succeeded) return result;
-        user.PasswordHash = hasher.Hash(password);
+        user.PasswordHash = await hasher.HashAsync(password);
         user.SecurityStamp = Guid.NewGuid().ToString();
         var update = await UpdateAsync(user);
         return update;
     }
 
-    public Task<bool> CheckPasswordAsync(PandaUser user, string password)
-        => Task.FromResult(hasher.Verify(user.PasswordHash, password) != PasswordVerificationOutcome.Failed);
+    public async Task<bool> CheckPasswordAsync(PandaUser user, string password)
+        => await hasher.VerifyAsync(user.PasswordHash, password) != PasswordVerificationOutcome.Failed;
 
     public async Task<AccountResult> UpdateSecurityStampAsync(PandaUser user)
     {
@@ -202,10 +202,17 @@ public class UserService(
 
     internal async Task<LoginOutcome> VerifyLoginAsync(PandaUser user, string password, bool lockoutOnFailure)
     {
-        // Re-verify after a conflict: a concurrent password/status update must never allow a stale login.
+        // Reuse only this request's unchanged password hash after a metadata conflict.
+        // Password changes require fresh verification; status/lockout/MFA are checked on every retry.
+        string? verifiedHash = null;
+        var verification = PasswordVerificationOutcome.Failed;
         for (var attempt = 0; attempt < 5; attempt++)
         {
-            var verification = hasher.Verify(user.PasswordHash, password);
+            if (attempt == 0 || !string.Equals(verifiedHash, user.PasswordHash, StringComparison.Ordinal))
+            {
+                verifiedHash = user.PasswordHash;
+                verification = await hasher.VerifyAsync(verifiedHash, password);
+            }
             if (user.Status != UserStatus.Active) return new(false, IsNotAllowed: true);
             if (user.LockoutEnabled && user.LockoutEnd > clock.GetUtcNow()) return new(false, IsLockedOut: true);
             var success = verification != PasswordVerificationOutcome.Failed;
@@ -215,7 +222,7 @@ public class UserService(
             {
                 user.AccessFailedCount = 0;
                 if (verification == PasswordVerificationOutcome.SuccessRehashNeeded)
-                    user.PasswordHash = hasher.Hash(password);
+                    user.PasswordHash = await hasher.HashAsync(password);
             }
             else if (lockoutOnFailure && user.LockoutEnabled)
             {
