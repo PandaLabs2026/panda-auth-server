@@ -17,7 +17,6 @@ public sealed class PasswordHashAdmissionTests
     {
         using var budget = new PasswordHashWorkLimiter(new HttpContextAccessor());
         using var first = await budget.AcquireAsync(19456);
-        using var second = await budget.AcquireAsync(19456);
         using var cancel = new CancellationTokenSource();
         IPasswordHasher hasher = new Argon2idPasswordHasher(budget);
         try

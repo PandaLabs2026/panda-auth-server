@@ -13,7 +13,7 @@ public sealed class PasswordHashWorkLimiter(IHttpContextAccessor accessor) : IDi
     private const int MemoryBudgetKiB = 65536;
     private readonly ConcurrencyLimiter workers = new(new ConcurrencyLimiterOptions
     {
-        PermitLimit = 2, QueueLimit = 32, QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+        PermitLimit = 1, QueueLimit = 32, QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
     });
     private readonly ConcurrencyLimiter memory = new(new ConcurrencyLimiterOptions
     {
