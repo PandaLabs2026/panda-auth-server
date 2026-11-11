@@ -39,6 +39,18 @@ public sealed class ProfileAvatarProcessTests
         Assert.True(result.AsSpan().StartsWith(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }));
     }
 
+    [Fact]
+    public async Task Real_worker_rejects_malformed_input_and_releases_capacity_for_next_decode()
+    {
+        using var decoder = new ProfileAvatarDecoder();
+        var rejected = await Assert.ThrowsAsync<ProfileOperationException>(() =>
+            decoder.DecodeAsync(_ => Task.FromResult(new byte[] { 1, 2, 3, 4 }), default));
+        Assert.Equal(422, rejected.StatusCode);
+        var recovered = await decoder.DecodeAsync(ct => File.ReadAllBytesAsync(
+            Path.Combine(AppContext.BaseDirectory, "Fixtures", "ProfileAvatar", "seed.png"), ct), default);
+        Assert.NotEmpty(recovered);
+    }
+
     [AvatarLinuxFact]
     public async Task Cancellation_kills_and_reaps_the_actual_process_before_returning()
     {

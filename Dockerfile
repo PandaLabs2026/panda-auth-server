@@ -19,6 +19,7 @@ COPY panda-auth-server/global.json \
      panda-auth-server/Directory.Packages.props \
      panda-auth-server/
 COPY panda-auth-server/src/PandaAuth.Server/PandaAuth.Server.csproj panda-auth-server/src/PandaAuth.Server/
+COPY panda-auth-server/src/PandaAuth.AvatarWorker/PandaAuth.AvatarWorker.csproj panda-auth-server/src/PandaAuth.AvatarWorker/
 COPY panda-auth-share/Directory.Build.props panda-auth-share/
 COPY panda-auth-share/src/PandaAuth.Shared/PandaAuth.Shared.csproj panda-auth-share/src/PandaAuth.Shared/
 RUN dotnet restore panda-auth-server/src/PandaAuth.Server/PandaAuth.Server.csproj
