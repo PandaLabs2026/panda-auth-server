@@ -67,3 +67,14 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 USER app
 
 ENTRYPOINT ["dotnet", "PandaAuth.Server.dll"]
+
+# Fleet candidate budget travels with its immutable image, including image recovery.
+FROM runtime AS fleet
+ENV DOTNET_gcServer=0 \
+    DOTNET_GCHeapHardLimit=0x5000000 \
+    DOTNET_TieredCompilation=0
+CMD ["--Auth:PasswordWorkLimitEnabled=true"]
+LABEL cc.pandalabs.auth.runtime-budget="fleet-256m-v1"
+
+# The ordinary build retains the runtime stage's defaults.
+FROM runtime AS standard
