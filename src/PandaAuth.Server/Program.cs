@@ -397,6 +397,7 @@ static async Task RunServerAsync(string[] args)
     // DbContextCheck 执行 CanConnectAsync，库不可达时健康端点转为 503。
     builder.Services.AddHealthChecks().AddDbContextCheck<PandaAuthDbContext>().AddCheck<SigningKeyHealthCheck>("signing-keys");
 
+    builder.Services.AddTransient<IStartupFilter, PandaAuth.Server.Features.Authorization.UserinfoHeadersStartupFilter>();
     var app = builder.Build();
 
     // Legacy host-network runtime trusts loopback. Tenant bridge runtime replaces that list with its exact Docker gateway.

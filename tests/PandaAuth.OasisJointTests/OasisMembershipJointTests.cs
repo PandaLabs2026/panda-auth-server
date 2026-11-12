@@ -156,8 +156,8 @@ public sealed class OasisMembershipJointTests
             {
                 var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
                 var requester = Guid.NewGuid(); var target = Guid.NewGuid();
-                await users.AddAsync(new User(requester, "requester@example.invalid", "Requester", providerSubject: auth.UserId));
-                await users.AddAsync(new User(target, "target@example.invalid", "Target", providerSubject: "joint-target"));
+                await users.AddAsync(new User(requester, "requester@example.invalid", "Requester", providerSubject: auth.UserId, providerIssuer: issuer));
+                await users.AddAsync(new User(target, "target@example.invalid", "Target", providerSubject: "joint-target", providerIssuer: issuer));
                 var session = scope.ServiceProvider.GetRequiredService<IOasisDataSession>();
                 await session.InsertAsync(new Tenant(organization, "Joint fixture", createdByUserId: requester));
                 var members = scope.ServiceProvider.GetRequiredService<ITenantMemberRepository>();

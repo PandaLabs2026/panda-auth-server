@@ -9,6 +9,7 @@ using OpenIddict.Server.AspNetCore;
 using PandaAuth.Server.Features.Authorization;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Persistence;
+using PandaAuth.Server.Infrastructure.Security;
 using PandaAuth.Shared;
 using Xunit;
 using static OpenIddict.Abstractions.OpenIddictConstants;
@@ -23,6 +24,33 @@ namespace PandaAuth.Tests;
 /// </summary>
 public class AuthorizationUserinfoTests
 {
+    [Fact]
+    public async Task Oasis_ticket_with_missing_current_security_version_is_rejected()
+    {
+        var principal = CreateAccessTokenPrincipal([], [Scopes.OpenId]);
+        principal.SetPresenters([FirstPartyClients.OasisWeb]);
+        AssertInvalidToken(await InvokeResultAsync(principal));
+    }
+
+    [Fact]
+    public async Task Oasis_ticket_with_current_security_version_is_accepted()
+    {
+        var principal = CreateAccessTokenPrincipal([], [Scopes.OpenId]);
+        principal.SetPresenters([FirstPartyClients.OasisWeb]);
+        var version = AccountSecurityVersion.From(new PandaUser { Id = "user-1", SecurityStamp = "userinfo-test-stamp" });
+        Assert.IsType<ClaimsIdentity>(principal.Identity).AddClaim(new Claim(PandaAuthClaims.SecurityVersion, version));
+        Assert.IsType<OkObjectResult>(await InvokeResultAsync(principal));
+    }
+
+    [Fact]
+    public async Task Oasis_ticket_with_stale_security_version_is_rejected()
+    {
+        var principal = CreateAccessTokenPrincipal([], [Scopes.OpenId]);
+        principal.SetPresenters([FirstPartyClients.OasisWeb]);
+        Assert.IsType<ClaimsIdentity>(principal.Identity).AddClaim(new Claim(PandaAuthClaims.SecurityVersion, "old"));
+        AssertInvalidToken(await InvokeResultAsync(principal));
+    }
+
     [Fact]
     public async Task Userinfo_WithoutRolesScope_OmitsRoleClaims()
     {
@@ -143,7 +171,7 @@ public class AuthorizationUserinfoTests
         if (seed)
         {
             var db = provider.GetRequiredService<PandaAuthDbContext>();
-            db.Users.Add(new PandaUser { Id = "user-1", UserName = "database-name", Email = "database@example.test", Nickname = "database-nickname", Status = status });
+            db.Users.Add(new PandaUser { Id = "user-1", UserName = "database-name", Email = "database@example.test", Nickname = "database-nickname", SecurityStamp = "userinfo-test-stamp", Status = status });
             await db.SaveChangesAsync();
         }
         var controller = TestUserStoreHost.CreateAuthorizationController(provider);

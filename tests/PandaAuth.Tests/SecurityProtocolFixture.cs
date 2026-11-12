@@ -135,6 +135,23 @@ internal sealed class SecurityProtocolFixture : IAsyncDisposable
             "&redirect_uri=http%3A%2F%2Flocalhost%2Fcallback&response_type=code&scope=" + Uri.EscapeDataString(scopes) +
             "&state=security-state&nonce=security-nonce&code_challenge_method=S256&code_challenge=" +
             Microsoft.IdentityModel.Tokens.Base64UrlEncoder.Encode(SHA256.HashData(Encoding.ASCII.GetBytes(Verifier)));
+        var callback = await CompleteAuthorizationAsync(browser, authorize);
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(callback.Query);
+        Assert.True(query.ContainsKey("code"), "Authorization did not return a code.");
+        if (beforeExchange is not null) await beforeExchange();
+        using var exchange = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["client_id"] = clientId, ["client_secret"] = Secret, ["grant_type"] = GrantTypes.AuthorizationCode,
+            ["code"] = query["code"].ToString(), ["redirect_uri"] = "http://localhost/callback", ["code_verifier"] = Verifier,
+        });
+        using var response = await browser.PostAsync("/connect/token", exchange);
+        Assert.Equal(expected, response.StatusCode);
+        using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return result.RootElement.Clone();
+    }
+
+    internal async Task<Uri> CompleteAuthorizationAsync(HttpClient browser, string authorize)
+    {
         using var challenge = await browser.GetAsync(authorize);
         Assert.Equal(HttpStatusCode.Redirect, challenge.StatusCode);
         using var page = await browser.GetAsync(challenge.Headers.Location!.PathAndQuery);
@@ -177,18 +194,17 @@ internal sealed class SecurityProtocolFixture : IAsyncDisposable
         }
         using var authorization = await browser.GetAsync(authorize);
         Assert.Equal(HttpStatusCode.Redirect, authorization.StatusCode);
-        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(authorization.Headers.Location!.Query);
-        Assert.True(query.ContainsKey("code"), "Authorization did not return a code.");
-        if (beforeExchange is not null) await beforeExchange();
-        using var exchange = new FormUrlEncodedContent(new Dictionary<string, string>
-        {
-            ["client_id"] = clientId, ["client_secret"] = Secret, ["grant_type"] = GrantTypes.AuthorizationCode,
-            ["code"] = query["code"].ToString(), ["redirect_uri"] = "http://localhost/callback", ["code_verifier"] = Verifier,
-        });
-        using var response = await browser.PostAsync("/connect/token", exchange);
-        Assert.Equal(expected, response.StatusCode);
-        using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        return result.RootElement.Clone();
+        return authorization.Headers.Location!;
+    }
+
+    internal string CurrentTotpCode()
+    {
+        if (mfaSecret is null) throw new InvalidOperationException("TOTP fixture is not initialized.");
+        var counter = new byte[8];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(counter, DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 30);
+        var hash = HMACSHA1.HashData(mfaSecret, counter);
+        var offset = hash[^1] & 15;
+        return ((System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(hash.AsSpan(offset, 4)) & int.MaxValue) % 1_000_000).ToString("D6");
     }
 
     internal static async Task<HttpStatusCode> ReadAdminAsync(HttpClient client, string token)

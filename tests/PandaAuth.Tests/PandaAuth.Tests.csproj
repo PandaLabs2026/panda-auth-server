@@ -29,4 +29,13 @@
   <ItemGroup>
     <None Update="Fixtures/ProfileAvatar/*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <!-- Explicit isolated joint lane; ordinary Auth profiles do not build Oasis. -->
+  <ItemGroup Condition="'$(OasisIdentityJoint)' == 'true'">
+    <ProjectReference Include="../../../panda-oasis-server/src/oasis/oasis.csproj" Aliases="OasisHost" />
+    <ProjectReference Include="../../../panda-oasis-server/tests/oasis.tests/oasis.tests.csproj" Aliases="OasisFixtures" />
+    <PackageReference Include="Microsoft.Playwright" VersionOverride="1.52.0" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(OasisIdentityJoint)' != 'true'">
+    <Compile Remove="OasisIdentityJointTests.cs" />
+  </ItemGroup>
 </Project>
