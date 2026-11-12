@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.Extensions;
 using Microsoft.AspNetCore.WebUtilities;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Server.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
@@ -171,6 +172,7 @@ public sealed class AuthorizationController(
     [Produces("application/json")]
     public async Task<IActionResult> Userinfo()
     {
+        Response.Headers.CacheControl = "no-store";
         var result = await HttpContext.AuthenticateAsync(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
         if (result is not { Succeeded: true } || result.Principal is null)
         {
@@ -197,6 +199,10 @@ public sealed class AuthorizationController(
         {
             return UserinfoError(Errors.InvalidToken);
         }
+        var presenters = principal.GetPresenters();
+        if (presenters.Contains(FirstPartyClients.OasisWeb, StringComparer.Ordinal)
+            && (presenters.Length != 1 || !AccountSecurityVersion.Matches(principal, user)))
+            return UserinfoError(Errors.InvalidToken);
         var response = new Dictionary<string, object?>
         {
             [Claims.Subject] = subjects[0].Value,
