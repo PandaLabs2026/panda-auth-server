@@ -166,11 +166,15 @@ public sealed class OasisIdentityJointTests
             Assert.True(await tickets.TryRenewAsync(sessionId, ticket));
             return refresh;
         }
+        var siblingPage = await context.NewPageAsync();
+        await siblingPage.GotoAsync(oasisProxy.Origin + "/");
         var oldRefresh = await ExpireAccessToken();
-        var checks = await page.EvaluateAsync<int[]>("async () => Promise.all(Array.from({length:8}, async () => (await fetch('/api/v1/auth/me')).status))");
-        Assert.All(checks, status => Assert.Equal(200, status));
+        const string concurrentChecks = "async () => Promise.all(Array.from({length:4}, async () => (await fetch('/api/v1/auth/me')).status))";
+        var checks = await Task.WhenAll(page.EvaluateAsync<int[]>(concurrentChecks), siblingPage.EvaluateAsync<int[]>(concurrentChecks));
+        Assert.All(checks.SelectMany(statuses => statuses), status => Assert.Equal(200, status));
         Assert.Equal(1, backchannel.RefreshRequests);
         Assert.NotEqual(oldRefresh, Microsoft.AspNetCore.Authentication.AuthenticationTokenExtensions.GetTokenValue((await tickets.RetrieveAsync(sessionId))!.Properties, "refresh_token"));
+        await siblingPage.CloseAsync();
 
         // A second real Auth identity is mirrored without an implicit membership.
         await using var otherContext = await browser.NewContextAsync(new BrowserNewContextOptions { IgnoreHTTPSErrors = true });
