@@ -13,8 +13,10 @@ internal sealed class ProtocolHostContentRoot : IDisposable
     {
         var parsed = new NpgsqlConnectionStringBuilder(connection);
         if (parsed.Host is not ("127.0.0.1" or "localhost") || parsed.Database is null ||
-            !Regex.IsMatch(parsed.Database, "^panda_(auth_registration_test|auth_portal_test|protocol_test|mgmt_e2e)_[0-9a-f]{32}$"))
+            !Regex.IsMatch(parsed.Database, "^panda_(auth_registration_test|auth_portal_test|protocol_test|mgmt_e2e|auth_quality)_[0-9a-f]{32}$"))
             throw new InvalidOperationException("Protocol content root requires an owned local test database.");
+        if (parsed.Database.StartsWith("panda_auth_quality_", StringComparison.Ordinal))
+            PostgresTestBoundary.ValidateEndpoint(parsed, PostgresTestBoundary.SharedMode);
         var baseline = System.IO.Path.GetFullPath("../../../../../src/PandaAuth.Server/appsettings.json", AppContext.BaseDirectory);
         var json = JsonNode.Parse(File.ReadAllText(baseline))!.AsObject();
         var values = new Dictionary<string, string>(settings) { ["ConnectionStrings:Default"] = connection };

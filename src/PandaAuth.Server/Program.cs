@@ -35,6 +35,12 @@ await RunServerAsync(args);
 // Keep Web startup out of the decode entry point so its JIT does not resolve the hosting graph.
 static async Task RunServerAsync(string[] args)
 {
+    if (CloudControlRegistrationCommand.IsRequested(args))
+    {
+        var commandBuilder = WebApplication.CreateBuilder([]);
+        Environment.ExitCode = await CloudControlRegistrationCommand.RunAsync(args, commandBuilder.Configuration, commandBuilder.Environment, Console.Out);
+        return;
+    }
     if (CloudConfigRegistrationCommand.IsRequested(args))
     {
         var commandBuilder = WebApplication.CreateBuilder([]);
@@ -247,6 +253,9 @@ static async Task RunServerAsync(string[] args)
                 PandaAuthAdminApi.Scope);
             // 控制面七 scope 单一事实源在 Share（PandaAuthScopes.FleetAll），注册与 seed 共用。
             options.RegisterScopes([.. PandaAuthScopes.FleetAll]);
+            CloudControlRegistration.Validate(authOptions);
+            if (authOptions.CloudControl.Enabled)
+                options.RegisterScopes([.. CloudControlScopes.All]);
             if (authOptions.Seed.CloudConfig.Enabled)
                 options.RegisterScopes([.. CloudConfigScopes.All]);
 

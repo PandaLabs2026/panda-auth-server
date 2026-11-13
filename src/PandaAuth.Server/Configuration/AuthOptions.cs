@@ -32,6 +32,9 @@ public sealed class AuthOptions
 
     public SeedOptions Seed { get; set; } = new();
 
+    /// <summary>Explicit Cloud control-plane delegated scopes; default closed, no automatic seed.</summary>
+    public CloudControlOptions CloudControl { get; set; } = new();
+
     public MfaOptions Mfa { get; set; } = new();
 
     /// <summary>公开 Management API（/mgmt/v1/*）总开关；默认关闭，未启用时管理控制器不进路由模型。</summary>
@@ -405,4 +408,9 @@ public sealed class CloudConfigSeedOptions
     public bool Enabled { get; set; }
     public bool FleetReadEnabled { get; set; }
     public string ClientSecret { get; set; } = string.Empty;
+}
+
+public sealed class CloudControlOptions
+{
+    public bool Enabled { get; set; }
 }
