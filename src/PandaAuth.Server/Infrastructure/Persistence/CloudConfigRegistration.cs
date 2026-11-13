@@ -1,3 +1,5 @@
+using System.Data;
+using Microsoft.EntityFrameworkCore;
 using OpenIddict.Abstractions;
 using PandaAuth.Server.Configuration;
 using PandaAuth.Shared;
@@ -7,6 +9,35 @@ namespace PandaAuth.Server.Infrastructure.Persistence;
 
 internal static class CloudConfigRegistration
 {
+    internal static async Task ApplyOnlyAsync(IServiceProvider services,AuthOptions options)
+    {
+        Validate(options);
+        if(!options.Seed.Enabled||!options.Seed.CloudConfig.Enabled||!options.Seed.CloudConsoleWeb.Enabled||options.Seed.CloudConfig.FleetReadEnabled)
+            throw new InvalidOperationException("CLOUD_CONFIG_REGISTRATION_CLOSED");
+        var db=services.GetRequiredService<PandaAuthDbContext>();
+        if(!db.Database.IsRelational())throw new InvalidOperationException("CLOUD_CONFIG_RELATIONAL_REQUIRED");
+        await using var transaction=await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+        var applications=services.GetRequiredService<IOpenIddictApplicationManager>();
+        var scopes=services.GetRequiredService<IOpenIddictScopeManager>();
+        var console=await applications.FindByClientIdAsync(FirstPartyClients.CloudConsoleWeb)
+            ??throw new InvalidOperationException("CLOUD_CONFIG_EXISTING_CONSOLE_REQUIRED");
+        var permissions=await applications.GetPermissionsAsync(console);
+        if(!await applications.HasClientTypeAsync(console,ClientTypes.Confidential)||
+            !permissions.Contains(Permissions.GrantTypes.AuthorizationCode)||!permissions.Contains(Permissions.GrantTypes.RefreshToken))
+            throw new InvalidOperationException("CLOUD_CONFIG_CONSOLE_DRIFT");
+        // 已有漂移拒绝/secret不轮换语义直接复用；任一失败回滚整组登记。
+        await SeedAsync(applications,scopes,options.Seed.CloudConfig);
+        var added=CloudConfigScopes.All.Select(name=>Permissions.Prefixes.Scope+name).ToArray();
+        if(added.Any(permission=>!permissions.Contains(permission)))
+        {
+            var descriptor=new OpenIddictApplicationDescriptor();await applications.PopulateAsync(descriptor,console);
+            foreach(var permission in added)descriptor.Permissions.Add(permission);
+            // 保留原存储hash、回调及所有其它属性，不走设置明文secret的重载。
+            await applications.PopulateAsync(console,descriptor);await applications.UpdateAsync(console);
+        }
+        await transaction.CommitAsync();
+    }
+
     internal static void Validate(AuthOptions options)
     {
         if (options.Seed.CloudConfig.FleetReadEnabled && (!options.Seed.CloudConfig.Enabled || !options.Seed.FleetAdminWeb.Enabled))

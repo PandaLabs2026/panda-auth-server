@@ -67,3 +67,13 @@ Production topology and release commands are maintained in the sibling meta repo
 and `PANDA_AUTH_TRUSTED_PROXY` to the allocation's exact IPv4 network gateway.
 Subnet peers and loopback are not trusted in bridge mode. The application's image defaults
 are development defaults, not production port assignments.
+
+### CloudConfig 定向身份登记
+
+`PandaAuth.Server --register-cloud-config-only` 复用既有 CloudConfig 登记组件，只登记五个原 scope、专用内省 client，并给已存在的 `FirstPartyClients.CloudConsoleWeb` 增加对应权限。不执行 Schema 迁移或全量 DbSeeder，不创建 Console/Fleet/用户/角色，不启动 Web 或密钥任务。错误参数（包括与 `--migrate` 混用）失败关闭，不落入服务启动。
+
+执行条件为已批准的正式镜像、原迁移连接与就绪 Schema，以及一次性受保护配置中显式开启 `Auth:Seed:Enabled`、`Auth:Seed:CloudConfig:Enabled`、`Auth:Seed:CloudConsoleWeb:Enabled`；issuer 必须匹配共享契约，专用 `Auth:Seed:CloudConfig:ClientSecret` 不能为空。本入口拒绝 FleetReadEnabled，避免把本批扩大到 Fleet client。配置及秘密只经服务器受保护材料供应，不在聊天、命令参数或日志中传递；生产授权、备份/恢复、镜像来源及执行入口仍按 [Auth 部署正本](../panda-auth/deploy/README.md)准备具体批次。本命令存在不授予执行权限。
+
+入口持有原数据库租约，拒绝待迁移 Schema；整个登记及 Console 权限追加在一个 Serializable 事务中完成。资源映射、内省 client 类型/权限或专用 secret 漂移即回滚；不静默轮换、不改 Console 原 secret/hash、回调或其它属性，不删原权限或改变其它客户端。重入复用同一身份。成功仅输出 `cloud-config-registration-only-v1` 脱敏结果；失败不回显连接、SQL、secret 或底层异常，不自动重试。关闭 seed 开关、撤销代码或镜像回退都不会撤销已登记权限/token，实际撤销另按精确批次处理。
+
+本入口不注册 API 目标授权、Worker/Helper、mTLS/签名身份，也不证明真实人类登录、配置消费或最终验收；这些仍在原 OrgConfig 首批部署/真实使用批次完成。
