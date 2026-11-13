@@ -110,6 +110,13 @@ public sealed class CloudControlProtocolTests
             }
             catch {await database.DisposeAsync();throw;}
         }
+        internal HttpMessageHandler Transport()=>factory.Server.CreateHandler();
+        internal async Task RevokeAsync(string client)
+        {
+            await using var scope=factory.Services.CreateAsyncScope();
+            await scope.ServiceProvider.GetRequiredService<PandaAuth.Server.Features.Tokens.ITokenRevoker>()
+                .RevokeUserTokensAsync(Subject,client);
+        }
         internal HttpClient Browser()=>factory.CreateClient(new WebApplicationFactoryClientOptions
             {BaseAddress=new Uri("https://auth.appliket.com/"),AllowAutoRedirect=false,HandleCookies=true});
         private static string Callback(string client)=>"https://fixture.invalid/"+client+"/callback";
