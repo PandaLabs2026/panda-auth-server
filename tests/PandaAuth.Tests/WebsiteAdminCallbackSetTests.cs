@@ -93,4 +93,66 @@ public sealed class WebsiteAdminCallbackSetTests
 
         Assert.Throws<InvalidOperationException>(() => WebsiteAdminCallbackSet.FromEndpoints(endpoints.RootElement));
     }
+
+    [Fact]
+    public void Migration_window_v4_derives_dual_root_pairs()
+    {
+        using var endpoints = JsonDocument.Parse("""
+            {"version":4,"adminPublicUrl":"https://operation.pandacloud.cc/","collectorPublicUrl":"https://operation.pandacloud.cc/_telemetry/","compatibilityAdminPublicUrls":["https://operation.appliket.com/"],"compatibilityCollectorPublicUrls":["https://operation.appliket.com/_telemetry/"],"siteOrigins":{"cn":"https://pandalabs.cn","global":"https://pandalabs.cc"}}
+            """);
+
+        var callbacks = WebsiteAdminCallbackSet.FromEndpoints(endpoints.RootElement);
+
+        Assert.Equal(new[]
+        {
+            new Uri("https://operation.appliket.com/signin-oidc"),
+            new Uri("https://operation.pandacloud.cc/signin-oidc")
+        }.OrderBy(uri => uri.Host), callbacks.RedirectUris.OrderBy(uri => uri.Host));
+        Assert.Equal(new[]
+        {
+            new Uri("https://operation.appliket.com/signout-callback-oidc"),
+            new Uri("https://operation.pandacloud.cc/signout-callback-oidc")
+        }.OrderBy(uri => uri.Host), callbacks.PostLogoutRedirectUris.OrderBy(uri => uri.Host));
+    }
+
+    [Theory]
+    [InlineData("https://operation.appliket.com/", "https://operation.pandacloud.cc/_telemetry/", "https://operation.appliket.com/_telemetry/")]
+    [InlineData("https://operation.pandacloud.cc/", "https://operation.pandacloud.cc/_telemetry/", "https://appliket.com/_telemetry/")]
+    [InlineData("https://operation.pandacloud.cc/operation/", "https://operation.pandacloud.cc/_telemetry/", "https://operation.appliket.com/_telemetry/")]
+    [InlineData("https://evil.example/", "https://operation.pandacloud.cc/_telemetry/", "https://operation.appliket.com/_telemetry/")]
+    public void Migration_window_v4_rejects_non_exact_or_unregistered_urls(string admin, string collector, string compatibilityCollector)
+    {
+        using var endpoints = JsonDocument.Parse(JsonSerializer.Serialize(new
+        {
+            version = 4,
+            adminPublicUrl = admin,
+            collectorPublicUrl = collector,
+            compatibilityAdminPublicUrls = new[] { "https://operation.appliket.com/" },
+            compatibilityCollectorPublicUrls = new[] { compatibilityCollector },
+            siteOrigins = new { cn = "https://pandalabs.cn", global = "https://pandalabs.cc" }
+        }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+        Assert.Throws<InvalidOperationException>(() => WebsiteAdminCallbackSet.FromEndpoints(endpoints.RootElement));
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("[\"https://operation.pandacloud.cc/\"]")]
+    [InlineData("[\"https://operation.appliket.com/\",\"https://operation.appliket.com/\"]")]
+    public void Migration_window_v4_requires_exactly_the_retiring_admin_compatibility_entry(string compatAdmin)
+    {
+        using var endpoints = JsonDocument.Parse("{\"version\":4,\"adminPublicUrl\":\"https://operation.pandacloud.cc/\",\"collectorPublicUrl\":\"https://operation.pandacloud.cc/_telemetry/\",\"compatibilityAdminPublicUrls\":" + compatAdmin + ",\"compatibilityCollectorPublicUrls\":[\"https://operation.appliket.com/_telemetry/\"],\"siteOrigins\":{\"cn\":\"https://pandalabs.cn\",\"global\":\"https://pandalabs.cc\"}}");
+
+        Assert.Throws<InvalidOperationException>(() => WebsiteAdminCallbackSet.FromEndpoints(endpoints.RootElement));
+    }
+
+    [Fact]
+    public void Migration_window_v4_rejects_root_recovery()
+    {
+        using var endpoints = JsonDocument.Parse("""
+            {"version":4,"adminPublicUrl":"https://operation.pandacloud.cc/","collectorPublicUrl":"https://operation.pandacloud.cc/_telemetry/","compatibilityAdminPublicUrls":["https://operation.appliket.com/"],"compatibilityCollectorPublicUrls":["https://operation.appliket.com/_telemetry/"],"siteOrigins":{"cn":"https://pandalabs.cn","global":"https://pandalabs.cc"}}
+            """);
+
+        Assert.Throws<InvalidOperationException>(() => WebsiteAdminCallbackSet.FromEndpoints(endpoints.RootElement).ForRootRecovery());
+    }
 }
