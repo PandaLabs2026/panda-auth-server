@@ -189,6 +189,55 @@ public sealed class WebsiteAdminClientCallbackMigrationTests
         return WebsiteAdminCallbackSet.FromEndpoints(endpoints.RootElement);
     }
 
+    private static WebsiteAdminCallbackSet WindowTarget()
+    {
+        using var endpoints = System.Text.Json.JsonDocument.Parse("""
+            {"version":4,"adminPublicUrl":"https://operation.pandacloud.cc/","collectorPublicUrl":"https://operation.pandacloud.cc/_telemetry/","compatibilityAdminPublicUrls":["https://operation.appliket.com/"],"compatibilityCollectorPublicUrls":["https://operation.appliket.com/_telemetry/"],"siteOrigins":{"cn":"https://pandalabs.cn","global":"https://pandalabs.cc"}}
+            """);
+        return WebsiteAdminCallbackSet.FromEndpoints(endpoints.RootElement);
+    }
+
+    [Fact]
+    public void Migration_window_replaces_exact_live_root_pair_preserves_properties_and_retries_noop()
+    {
+        var prior = RootTarget();
+        var descriptor = new OpenIddictApplicationDescriptor { ClientId = "cloud-operation-web", ClientSecret = "fixture-secret", ClientType = "confidential", ConsentType = "explicit", DisplayName = "fixture", Permissions = { "fixture-permission" }, Requirements = { "fixture-requirement" } };
+        descriptor.RedirectUris.UnionWith(prior.RedirectUris);
+        descriptor.PostLogoutRedirectUris.UnionWith(prior.PostLogoutRedirectUris);
+        var original = Snapshot(descriptor);
+
+        WebsiteAdminClientCallbackMigration.Apply(descriptor, prior.RedirectUris, prior.PostLogoutRedirectUris, WindowTarget());
+
+        Assert.Equal(new[]
+        {
+            new Uri("https://operation.appliket.com/signin-oidc"),
+            new Uri("https://operation.pandacloud.cc/signin-oidc")
+        }.OrderBy(uri => uri.Host), descriptor.RedirectUris.OrderBy(uri => uri.Host));
+        Assert.Equal(new[]
+        {
+            new Uri("https://operation.appliket.com/signout-callback-oidc"),
+            new Uri("https://operation.pandacloud.cc/signout-callback-oidc")
+        }.OrderBy(uri => uri.Host), descriptor.PostLogoutRedirectUris.OrderBy(uri => uri.Host));
+        Assert.Equal(original with { RedirectUris = JoinUris(descriptor.RedirectUris), PostLogoutRedirectUris = JoinUris(descriptor.PostLogoutRedirectUris) }, Snapshot(descriptor));
+        var updated = Snapshot(descriptor);
+        WebsiteAdminClientCallbackMigration.Apply(descriptor, prior.RedirectUris, prior.PostLogoutRedirectUris, WindowTarget());
+        Assert.Equal(updated, Snapshot(descriptor));
+    }
+
+    [Fact]
+    public void Migration_window_rejects_non_root_preconditions_without_mutation()
+    {
+        var prior = Target();
+        var descriptor = new OpenIddictApplicationDescriptor { ClientId = "cloud-operation-web" };
+        descriptor.RedirectUris.UnionWith(prior.RedirectUris);
+        descriptor.PostLogoutRedirectUris.UnionWith(prior.PostLogoutRedirectUris);
+        var original = Snapshot(descriptor);
+
+        Assert.Throws<InvalidOperationException>(() => WebsiteAdminClientCallbackMigration.Apply(descriptor, prior.RedirectUris, prior.PostLogoutRedirectUris, WindowTarget()));
+
+        Assert.Equal(original, Snapshot(descriptor));
+    }
+
     [Fact]
     public void Root_only_replaces_exact_live_two_pairs_preserves_every_other_property_and_retries_noop()
     {

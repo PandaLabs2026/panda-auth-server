@@ -51,8 +51,9 @@ internal static class WebsiteAdminClientCommand
             {
                 callbackSet = root.GetProperty("callbackMode").GetString() switch
                 {
-                    "root-only" => callbackSet,
-                    "restore-v2" => callbackSet.ForRootRecovery(),
+                    "root-only" when !callbackSet.IsMigrationWindow => callbackSet,
+                    "restore-v2" when callbackSet.RootProtocol && !callbackSet.IsMigrationWindow => callbackSet.ForRootRecovery(),
+                    "migration-window" when callbackSet.IsMigrationWindow => callbackSet,
                     _ => throw new InvalidOperationException()
                 };
                 if (root.GetProperty("expectedAdditionalPermissions").GetArrayLength() != 0) throw new InvalidOperationException();
