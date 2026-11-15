@@ -23,7 +23,7 @@ public sealed class TenantHostResolverTests
             }],
         });
         var context = new DefaultHttpContext();
-        context.Request.Host = new HostString("t0042-auth.s001.pandalabs.cn");
+        context.Request.Host = new HostString("t0042-auth.s001.pandacloud.cc");
 
         var tenant = resolver.Resolve(context.Request);
 
@@ -34,6 +34,7 @@ public sealed class TenantHostResolverTests
     }
 
     [Theory]
+    [InlineData("t0042-auth.s001.pandalabs.cn")] // Parse compatibility does not create an issuer/route alias.
     [InlineData("auth.pandalabs.cn")]
     [InlineData("t0042-auth.s002.pandalabs.cn")] // 异分区主机不得命中 s001 绑定
     [InlineData("t0043-auth.s001.pandalabs.cn")]
@@ -59,7 +60,7 @@ public sealed class TenantHostResolverTests
             Bindings = [new TenantRouteBindingOptions { TenantId = "t0042", Product = TenantProduct.PandaAuth, Zone = "s001", State = TenantRouteState.Draining }],
         });
         var context = new DefaultHttpContext();
-        context.Request.Host = new HostString("t0042-auth.s001.pandalabs.cn");
+        context.Request.Host = new HostString("t0042-auth.s001.pandacloud.cc");
 
         var error = Assert.Throws<TenantContextException>(() => resolver.Resolve(context.Request));
         Assert.Equal(TenantContextErrors.RouteNotReady, error.Code);
@@ -91,7 +92,7 @@ public sealed class TenantRedirectPolicyTests
     public void Allows_same_tenant_zone_product_redirect_and_rejects_other_tenant_or_zone()
     {
         var tenant = new TenantContext(TenantId.Parse("t0042"), TenantProduct.PandaAuth, "s001",
-            "t0042-auth.s001.pandalabs.cn", 1, TenantRouteState.Ready);
+            "t0042-auth.s001.pandacloud.cc", 1, TenantRouteState.Ready);
         var policy = new TenantRedirectPolicy();
 
         Assert.True(policy.IsAllowed(tenant, new Uri("https://t0042.s001.pandalabs.cn/callback/pandaauth")));

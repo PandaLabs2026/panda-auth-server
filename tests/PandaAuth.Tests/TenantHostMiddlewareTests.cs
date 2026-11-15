@@ -35,7 +35,7 @@ public sealed class TenantHostMiddlewareTests
             return Task.CompletedTask;
         });
         var context = new DefaultHttpContext();
-        context.Request.Host = new HostString("t0042-auth.s001.pandalabs.cn");
+        context.Request.Host = new HostString("t0042-auth.s001.pandacloud.cc");
 
         await middleware.InvokeAsync(context, new TenantHostResolver(options), accessor, options);
 
