@@ -91,7 +91,7 @@ public class AuthorizationTokenClaimsTests
         using var provider = TestUserStoreHost.Create();
         var accessor = (TenantContextAccessor)provider.GetRequiredService<ITenantContextAccessor>();
         accessor.Current = new TenantContext(TenantId.Parse("t0042"), TenantProduct.PandaAuth, "s001",
-            "t0042-auth.s001.pandalabs.cn", 3, TenantRouteState.Ready);
+            "t0042-auth.s001.pandacloud.cc", 3, TenantRouteState.Ready);
         var controller = TestUserStoreHost.CreateAuthorizationController(provider);
         var user = await SeedUserWithRolesAsync(provider, "user");
 
@@ -99,7 +99,7 @@ public class AuthorizationTokenClaimsTests
             await TestUserStoreHost.AuthenticatedPrincipalAsync(provider, user));
 
         Assert.Equal("t0042", principal.GetClaim(PandaAuthClaims.TenantId));
-        Assert.Equal("t0042-auth.s001.pandalabs.cn", principal.GetClaim(PandaAuthClaims.TenantHost));
+        Assert.Equal("t0042-auth.s001.pandacloud.cc", principal.GetClaim(PandaAuthClaims.TenantHost));
         foreach (var type in new[] { PandaAuthClaims.TenantId, PandaAuthClaims.TenantHost })
         {
             Assert.Contains(Destinations.IdentityToken, principal.FindFirst(type)!.GetDestinations());
