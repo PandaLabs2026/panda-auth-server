@@ -56,7 +56,7 @@ public sealed class TenantHostMiddlewareTests
             return Task.CompletedTask;
         });
         var context = new DefaultHttpContext();
-        context.Request.Host = new HostString("t0043-auth.s001.pandalabs.cn");
+        context.Request.Host = new HostString("t0043-auth.s001.pandacloud.cc");
 
         await middleware.InvokeAsync(context, new TenantHostResolver(options), accessor, options);
 
@@ -90,6 +90,7 @@ public sealed class TenantHostMiddlewareTests
     [InlineData("localhost")]
     [InlineData("auth.pandalabs.cn")]
     [InlineData("t0042.auth.pandalabs.cn")]
+    [InlineData("t0043-auth.s001.pandalabs.cn")] // F2 收口:旧后缀=非规范主机,透传无租户上下文
     public async Task NonCanonicalHost_IsNotTreatedAsTenantHost(string host)
     {
         var options = EnabledOptions();
