@@ -80,18 +80,12 @@ public sealed class TenantRedirectPolicy
 
         // Portal uses the tenant host without a product label. OpenIddict still
         // requires an exact registered redirect URI before this tenant check.
-        // ⑤平移窗口:portal 裸主机双后缀放行(F 批移出旧值)。
         if (string.Equals(redirectUri.Host, $"{context.TenantId.Value}.{context.Zone}.{TenantCanonicalHost.ZoneSuffix}",
-                StringComparison.OrdinalIgnoreCase)
-            || string.Equals(redirectUri.Host, $"{context.TenantId.Value}.{context.Zone}.{TenantCanonicalHost.RetiredZoneSuffix}",
-                StringComparison.OrdinalIgnoreCase))
+                StringComparison.OrdinalIgnoreCase)) // F2 收口:旧后缀已随旧通配删除不可达(2026-11-16)
             return true;
 
         // 同租户同分区的任一产品规范主机上的回调均放行（跨产品单点登录面）。
-        // ⑤平移窗口:产品规范主机新旧双后缀均放行(F 批移出旧值)。
         return Enum.GetValues<TenantProduct>().Any(product =>
-            string.Equals(redirectUri.Host, TenantCanonicalHost.For(context.TenantId, product, context.Zone), StringComparison.OrdinalIgnoreCase)
-            || string.Equals(redirectUri.Host, TenantCanonicalHost.For(context.TenantId, product, context.Zone)
-                .Replace(TenantCanonicalHost.ZoneSuffix, TenantCanonicalHost.RetiredZoneSuffix), StringComparison.OrdinalIgnoreCase));
+            string.Equals(redirectUri.Host, TenantCanonicalHost.For(context.TenantId, product, context.Zone), StringComparison.OrdinalIgnoreCase)); // F2 收口
     }
 }

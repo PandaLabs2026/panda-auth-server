@@ -95,7 +95,8 @@ public sealed class TenantRedirectPolicyTests
             "t0042-auth.s001.pandacloud.cc", 1, TenantRouteState.Ready);
         var policy = new TenantRedirectPolicy();
 
-        Assert.True(policy.IsAllowed(tenant, new Uri("https://t0042.s001.pandalabs.cn/callback/pandaauth")));
+        Assert.True(policy.IsAllowed(tenant, new Uri("https://t0042.s001.pandacloud.cc/callback/pandaauth")));
+        Assert.False(policy.IsAllowed(tenant, new Uri("https://t0042.s001.pandalabs.cn/callback/pandaauth"))); // F2 收口:旧后缀拒绝
         Assert.False(policy.IsAllowed(tenant, new Uri("https://t0043.s001.pandalabs.cn/callback/pandaauth")));
         Assert.False(policy.IsAllowed(tenant, new Uri("https://t0042.s002.pandalabs.cn/callback/pandaauth")));
         Assert.False(policy.IsAllowed(tenant, new Uri("https://t0042.s001.pandalabs.cn.evil.test/callback/pandaauth")));
@@ -105,7 +106,8 @@ public sealed class TenantRedirectPolicyTests
         // 非 panda scheme 或 host 不匹配仍拒绝
         Assert.False(policy.IsAllowed(tenant, new Uri("evil://callback")));
         Assert.False(policy.IsAllowed(tenant, new Uri("panda://evil")));
-        Assert.True(policy.IsAllowed(tenant, new Uri("https://t0042-asst.s001.pandalabs.cn/app/account/login")));
+        Assert.True(policy.IsAllowed(tenant, new Uri("https://t0042-asst.s001.pandacloud.cc/app/account/login")));
+        Assert.False(policy.IsAllowed(tenant, new Uri("https://t0042-asst.s001.pandalabs.cn/app/account/login"))); // F2 收口
         Assert.False(policy.IsAllowed(tenant, new Uri("https://t0043-asst.s001.pandalabs.cn/app/account/login")));
         Assert.False(policy.IsAllowed(tenant, new Uri("https://t0042-asst.s002.pandalabs.cn/app/account/login")));
         Assert.False(policy.IsAllowed(tenant, new Uri("//t0043-asst.s001.pandalabs.cn/app")));
