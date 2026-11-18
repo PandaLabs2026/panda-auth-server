@@ -110,7 +110,7 @@ internal sealed class SecurityProtocolFixture : IAsyncDisposable
 
     internal string AdminPassword => password;
 
-    internal async Task EnableTotpAsync(bool administrator = true)
+    internal async Task EnableTotpAsync(bool administrator = true, byte[]? fixtureSecret = null)
     {
         using var scope = Host.Services.CreateScope();
         var users = scope.ServiceProvider.GetRequiredService<UserService>();
@@ -118,7 +118,7 @@ internal sealed class SecurityProtocolFixture : IAsyncDisposable
         if (!administrator) Assert.True((await users.RemoveFromRoleAsync(user, PandaAuthRoles.Admin)).Succeeded);
         user.TwoFactorEnabled = true;
         Assert.True((await users.UpdateAsync(user)).Succeeded);
-        mfaSecret = RandomNumberGenerator.GetBytes(20);
+        mfaSecret = fixtureSecret?.ToArray() ?? RandomNumberGenerator.GetBytes(20);
         var id = Guid.NewGuid();
         var secret = scope.ServiceProvider.GetRequiredService<TotpSecretProtector>().Protect(user.Id, id, mfaSecret);
         var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();

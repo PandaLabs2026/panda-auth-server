@@ -75,7 +75,7 @@ public sealed class NativeLoginDesktopTlsTests
         }
     }
 
-    private static X509Certificate2 CreateAuthority(RSA key)
+    internal static X509Certificate2 CreateAuthority(RSA key)
     {
         var request = new CertificateRequest("CN=Pandesk local fixture CA", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
@@ -83,7 +83,7 @@ public sealed class NativeLoginDesktopTlsTests
         return request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-2), DateTimeOffset.UtcNow.AddHours(1));
     }
 
-    private static X509Certificate2 CreateServerCertificate(X509Certificate2 authority, RSA key)
+    internal static X509Certificate2 CreateServerCertificate(X509Certificate2 authority, RSA key)
     {
         var request = new CertificateRequest($"CN={NativeLoginRouteTests.Host}", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         var names = new SubjectAlternativeNameBuilder();
@@ -96,7 +96,7 @@ public sealed class NativeLoginDesktopTlsTests
         return certificate.CopyWithPrivateKey(key);
     }
 
-    private static X509Certificate2 ImportForSchannel(X509Certificate2 certificate)
+    internal static X509Certificate2 ImportForSchannel(X509Certificate2 certificate)
     {
         // Schannel cannot bind the in-memory ephemeral key from CertificateRequest.
         // The non-persistent user-key import is released on Dispose and never saved as a PFX file.
