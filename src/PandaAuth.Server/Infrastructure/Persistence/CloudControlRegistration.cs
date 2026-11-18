@@ -47,9 +47,12 @@ internal static class CloudControlRegistration
                 Permissions.GrantTypes.RefreshToken,Permissions.ResponseTypes.Code};
             var allowed=additions.Concat(id==FirstPartyClients.FleetAdminWeb?PandaAuthScopes.FleetAll:[])
                 .Select(name=>Permissions.Prefixes.Scope+name).ToHashSet(StringComparer.Ordinal);
+            // The existing Operation Web client introspects its own session token.
+            var unexpectedIntrospection = id != FirstPartyClients.CloudOperationWeb
+                && current.Contains(Permissions.Endpoints.Introspection);
             if(!await apps.HasClientTypeAsync(app,ClientTypes.Confidential)||required.Any(permission=>!current.Contains(permission))
                 ||!await apps.HasRequirementAsync(app,Requirements.Features.ProofKeyForCodeExchange)
-                ||current.Contains(Permissions.GrantTypes.ClientCredentials)||current.Contains(Permissions.Endpoints.Introspection)
+                ||current.Contains(Permissions.GrantTypes.ClientCredentials)||unexpectedIntrospection
                 ||current.Any(permission=>related.Contains(permission)&&!allowed.Contains(permission)))
                 throw new InvalidOperationException("CLOUD_CONTROL_WEB_DRIFT");
             clients[id]=app;permissions[id]=current;

@@ -16,7 +16,7 @@ public sealed class CloudControlRegistrationTests
 {
     private static IHostEnvironment Environment() => new HostApplicationBuilder(new HostApplicationBuilderSettings
         { EnvironmentName=Environments.Development, DisableDefaults=true }).Environment;
-    private static IConfiguration Config(string connection, bool? enabled=true, string issuer="https://auth.appliket.com/") =>
+    private static IConfiguration Config(string connection, bool? enabled=true, string issuer=PandaMadeScopes.CloudIssuer) =>
         new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>
         {
             ["ConnectionStrings:Migration"]=connection, ["Auth:Issuer"]=issuer,
@@ -35,8 +35,9 @@ public sealed class CloudControlRegistrationTests
     }
 
     [Theory]
-    [InlineData(null,"https://auth.appliket.com/")]
-    [InlineData(false,"https://auth.appliket.com/")]
+    [InlineData(null,PandaMadeScopes.CloudIssuer)]
+    [InlineData(false,PandaMadeScopes.CloudIssuer)]
+    [InlineData(true,PandaMadeScopes.RetiredCloudIssuer)]
     [InlineData(true,"https://wrong.invalid/")]
     public async Task Closed_or_wrong_issuer_refuses_without_connection_details(bool? enabled,string issuer)
     {
@@ -86,7 +87,7 @@ public sealed class CloudControlRegistrationTests
                 Assert.True(expected.Contains(name)==await apps.HasPermissionAsync(application,Permissions.Prefixes.Scope+name),
                     client+" "+name+" persisted="+after[client].Permissions!.Contains(Permissions.Prefixes.Scope+name,StringComparison.Ordinal));
             Assert.False(await apps.HasPermissionAsync(application,Permissions.GrantTypes.ClientCredentials));
-            Assert.False(await apps.HasPermissionAsync(application,Permissions.Endpoints.Introspection));
+            Assert.Equal(client==FirstPartyClients.CloudOperationWeb,await apps.HasPermissionAsync(application,Permissions.Endpoints.Introspection));
         }
         var console=await apps.FindByClientIdAsync(FirstPartyClients.CloudConsoleWeb);Assert.NotNull(console);
         foreach(var name in new[]{"fleet.server.manage","fleet.platform.operate","fleet.approve"})
@@ -172,12 +173,18 @@ public sealed class CloudControlRegistrationTests
     [PostgresFact]
     public async Task Missing_existing_clients_and_machine_Web_grants_refuse_without_creating_replacements()
     {
-        foreach(var mode in new[]{"missing-operation","missing-api","machine-grant","introspection"})
+        foreach(var mode in new[]{"missing-operation","missing-api","machine-grant","console-introspection","fleet-introspection"})
         {
             await using var fixture=await AuthQualityPostgresFixture.CreateAsync();await using var scope=fixture.Services.CreateAsyncScope();
             var services=scope.ServiceProvider;await PrepareAsync(services);var db=services.GetRequiredService<PandaAuthDbContext>();
             var apps=services.GetRequiredService<IOpenIddictApplicationManager>();
-            var id=mode=="missing-api"?FirstPartyClients.FleetApi:FirstPartyClients.CloudOperationWeb;
+            var id=mode switch
+            {
+                "missing-api"=>FirstPartyClients.FleetApi,
+                "console-introspection"=>FirstPartyClients.CloudConsoleWeb,
+                "fleet-introspection"=>FirstPartyClients.FleetAdminWeb,
+                _=>FirstPartyClients.CloudOperationWeb
+            };
             var app=(await apps.FindByClientIdAsync(id))!;
             if(mode.StartsWith("missing",StringComparison.Ordinal))await apps.DeleteAsync(app);
             else
@@ -221,14 +228,16 @@ public sealed class CloudControlRegistrationTests
         {
             var descriptor=new OpenIddictApplicationDescriptor {ClientId=client,ClientType=ClientTypes.Confidential,
                 ClientSecret="existing-fixture-secret",ConsentType=ConsentTypes.Implicit,
-                RedirectUris={new Uri("https://fixture.invalid/"+client+"/callback")},
-                PostLogoutRedirectUris={new Uri("https://fixture.invalid/"+client+"/logout")},
+                RedirectUris={client==FirstPartyClients.MeWeb?new Uri("https://fixture.invalid/"+client+"/callback"):CloudControlProtocolTests.Callback(client)},
+                PostLogoutRedirectUris={client==FirstPartyClients.MeWeb?new Uri("https://fixture.invalid/"+client+"/logout"):CloudControlProtocolTests.LogoutCallback(client)},
                 Permissions={Permissions.Endpoints.Authorization,Permissions.Endpoints.Token,Permissions.Endpoints.EndSession,Permissions.Endpoints.Revocation,
                     Permissions.GrantTypes.AuthorizationCode,Permissions.GrantTypes.RefreshToken,Permissions.ResponseTypes.Code,
                     Permissions.Scopes.Profile,Permissions.Prefixes.Scope+Scopes.OfflineAccess},
                 Requirements={Requirements.Features.ProofKeyForCodeExchange}};
             if(client==FirstPartyClients.FleetAdminWeb)
                 foreach(var name in PandaAuthScopes.FleetAll)descriptor.Permissions.Add(Permissions.Prefixes.Scope+name);
+            if(client==FirstPartyClients.CloudOperationWeb)
+                descriptor.Permissions.Add(Permissions.Endpoints.Introspection);
             await apps.CreateAsync(descriptor);
         }
     }
