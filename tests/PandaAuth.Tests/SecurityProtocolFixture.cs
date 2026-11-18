@@ -40,7 +40,8 @@ internal sealed class SecurityProtocolFixture : IAsyncDisposable
         Host = new Factory(connection, configure, settings);
     }
 
-    internal static async Task<SecurityProtocolFixture> CreateAsync(Action<IServiceCollection>? configure = null, IReadOnlyDictionary<string, string>? settings = null)
+    internal static async Task<SecurityProtocolFixture> CreateAsync(Action<IServiceCollection>? configure = null,
+        IReadOnlyDictionary<string, string>? settings = null, Action<Factory>? configureHost = null)
     {
         var builder = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("PANDA_AUTH_TEST_POSTGRES"));
         PostgresTestBoundary.ValidateEndpoint(builder, PostgresTestBoundary.SharedMode);
@@ -56,6 +57,7 @@ internal sealed class SecurityProtocolFixture : IAsyncDisposable
         var fixture = new SecurityProtocolFixture(builder.ConnectionString, configure, settings);
         try
         {
+            configureHost?.Invoke(fixture.Host);
             await using (var db = fixture.Context()) await db.Database.MigrateAsync();
             using var scope = fixture.Host.Services.CreateScope();
             var users = scope.ServiceProvider.GetRequiredService<UserService>();

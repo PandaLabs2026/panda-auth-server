@@ -20,9 +20,9 @@ namespace PandaAuth.Tests;
 public sealed class NativeLoginRouteTests
 {
     private const string Path = "/connect/native/authorize-challenge";
-    private const string ClientId = "pandesk-native-isolated";
+    internal const string ClientId = "pandesk-native-isolated";
     private const string OtherClientId = "another-public-client";
-    private static readonly string Host = TenantCanonicalHost.For(TenantId.Parse("t9876"), TenantProduct.PandaAuth, "s901");
+    internal static readonly string Host = TenantCanonicalHost.For(TenantId.Parse("t9876"), TenantProduct.PandaAuth, "s901");
     private static readonly string Issuer = $"https://{Host}/";
     private static readonly string Callback = Issuer + "connect/native/callback";
 
@@ -50,18 +50,7 @@ public sealed class NativeLoginRouteTests
     [PostgresFact]
     public async Task EnabledRoute_UsesNativeChallengeAndRealTokenEndpoint()
     {
-        await using var fixture = await SecurityProtocolFixture.CreateAsync(settings: new Dictionary<string, string>
-        {
-            ["Auth:Issuer"] = Issuer,
-            ["Auth:HttpsRequired"] = "true",
-            ["Auth:TenantRouting:Enabled"] = "true",
-            ["Auth:TenantRouting:Bindings:0:TenantId"] = "t9876",
-            ["Auth:TenantRouting:Bindings:0:Product"] = "PandaAuth",
-            ["Auth:TenantRouting:Bindings:0:Zone"] = "s901",
-            ["Auth:TenantRouting:Bindings:0:State"] = "Ready",
-            ["Auth:NativeLogin:Enabled"] = "true",
-            ["Auth:NativeLogin:ClientId"] = ClientId,
-        });
+        await using var fixture = await SecurityProtocolFixture.CreateAsync(settings: Settings());
         await RegisterAsync(fixture, ClientId);
         await RegisterAsync(fixture, OtherClientId);
         await fixture.EnableTotpAsync();
@@ -152,7 +141,20 @@ public sealed class NativeLoginRouteTests
             BaseAddress = new Uri(origin), AllowAutoRedirect = false, HandleCookies = false,
         });
 
-    private static async Task RegisterAsync(SecurityProtocolFixture fixture, string clientId)
+    internal static Dictionary<string, string> Settings() => new()
+    {
+        ["Auth:Issuer"] = Issuer,
+        ["Auth:HttpsRequired"] = "true",
+        ["Auth:TenantRouting:Enabled"] = "true",
+        ["Auth:TenantRouting:Bindings:0:TenantId"] = "t9876",
+        ["Auth:TenantRouting:Bindings:0:Product"] = "PandaAuth",
+        ["Auth:TenantRouting:Bindings:0:Zone"] = "s901",
+        ["Auth:TenantRouting:Bindings:0:State"] = "Ready",
+        ["Auth:NativeLogin:Enabled"] = "true",
+        ["Auth:NativeLogin:ClientId"] = ClientId,
+    };
+
+    internal static async Task RegisterAsync(SecurityProtocolFixture fixture, string clientId)
     {
         using var scope = fixture.Host.Services.CreateScope();
         var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
