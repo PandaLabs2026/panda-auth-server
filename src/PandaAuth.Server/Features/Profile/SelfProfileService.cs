@@ -16,17 +16,34 @@ public sealed class ProfileOperationException(string code, int statusCode) : Exc
 /// <summary>Private profile transactions. Actor IDs come from validated delegated identity, never request DTOs.</summary>
 public sealed class SelfProfileService(PandaAuthDbContext db, SecurityEventWriter audit, TimeProvider clock)
 {
-    public async Task<SelfProfileDto> ReadAsync(string actorId, CancellationToken ct = default)
+    public async Task<SelfProfileDto> ReadAsync(string actorId, CancellationToken ct = default,
+        bool includePendingVerification = false)
     {
+        var now = clock.GetUtcNow();
         var row = await (
             from user in db.Users.AsNoTracking()
             where user.Id == actorId && user.Status == UserStatus.Active
             join profile in db.UserProfiles.AsNoTracking() on user.Id equals profile.UserId into profiles
             from profile in profiles.DefaultIfEmpty()
-            select new { Profile = profile, HasAvatar = db.ProfileAvatars.Any(a => a.UserId == user.Id) }
+            select new
+            {
+                Profile = profile,
+                HasAvatar = db.ProfileAvatars.Any(a => a.UserId == user.Id),
+                Pending = includePendingVerification && profile != null
+                    && profile.ContactEmailState == ProfileContactEmailState.Pending
+                    ? db.ProfileContactChallenges.AsNoTracking()
+                        .Where(c => c.UserId == user.Id && c.Address == profile.ContactEmail
+                            && c.ExpectedRevision == profile.Revision && c.State == ProfileContactChallengeState.Delivered
+                            && c.ExpiresAt > now && c.FailedAttempts < 5)
+                        .OrderByDescending(c => c.CreatedAt).ThenBy(c => c.Id)
+                        .Select(c => new PendingContactVerificationDto(c.Id, c.ExpiresAt)).FirstOrDefault()
+                    : null,
+            }
         ).SingleOrDefaultAsync(ct);
         if (row is null) throw Denied();
-        return Projection(row.Profile, row.HasAvatar);
+        var result = Projection(row.Profile, row.HasAvatar);
+        return row.Pending is null ? result
+            : result with { ContactEmail = result.ContactEmail with { PendingVerification = row.Pending } };
     }
 
     public async Task<SelfProfileDto> PatchAsync(string actorId, string expectedRevision,

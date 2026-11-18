@@ -134,6 +134,30 @@ public sealed class ProfileContactTests
     }
 
     [PostgresFact]
+    public async Task Delivered_proof_can_be_resumed_only_by_the_owner_while_current()
+    {
+        await using var fixture = await AuthQualityPostgresFixture.CreateAsync();
+        await using var scope = fixture.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        var owner = await User(db);
+        var other = await User(db);
+        var clock = new Clock();
+        var (profiles, contacts) = Services(db, clock, new Mail());
+        var pending = await contacts.CreateAsync(owner.Id, "\"0\"", "pending@example.invalid", "test");
+        var verification = Assert.IsType<PendingContactVerificationDto>(pending.Profile.ContactEmail.PendingVerification);
+        Assert.Equal(Guid.Parse(pending.ChallengeId), verification.ChallengeId);
+        Assert.Equal(clock.GetUtcNow().AddMinutes(10), verification.ExpiresAt);
+
+        var resumed = await profiles.ReadAsync(owner.Id, includePendingVerification: true);
+        Assert.Equal(verification, resumed.ContactEmail.PendingVerification);
+        Assert.Null((await profiles.ReadAsync(owner.Id)).ContactEmail.PendingVerification);
+        Assert.Null((await profiles.ReadAsync(other.Id, includePendingVerification: true)).ContactEmail.PendingVerification);
+
+        clock.Advance(TimeSpan.FromMinutes(10));
+        Assert.Null((await profiles.ReadAsync(owner.Id, includePendingVerification: true)).ContactEmail.PendingVerification);
+    }
+
+    [PostgresFact]
     public async Task Unconfirmed_delivery_keeps_pending_and_never_verifies()
     {
         await using var fixture = await AuthQualityPostgresFixture.CreateAsync();

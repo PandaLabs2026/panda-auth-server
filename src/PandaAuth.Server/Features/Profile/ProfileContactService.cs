@@ -13,7 +13,7 @@ public sealed class ProfileContactService(PandaAuthDbContext db, SelfProfileServ
     IEmailSender email, SecurityEventWriter audit, TimeProvider clock)
 {
     public async Task<ProfileContactEmailChallengeResponse> CreateAsync(string actor, string expectedRevision,
-        string address, string correlation, CancellationToken ct = default)
+        string address, string correlation, CancellationToken ct = default, bool includePendingVerification = true)
     {
         address = SelfProfileInput.NormalizeContactAddress(address);
         var now = clock.GetUtcNow();
@@ -58,7 +58,7 @@ public sealed class ProfileContactService(PandaAuthDbContext db, SelfProfileServ
                     && c.ExpectedRevision == revision && c.State == ProfileContactChallengeState.PendingDelivery && c.ExpiresAt > clock.GetUtcNow())
                 .ExecuteUpdateAsync(setters => setters.SetProperty(c => c.State, ProfileContactChallengeState.Delivered), ct);
             if (accepted != 1) throw new ProfileOperationException("profile_revision_mismatch", 412);
-            acceptedProfile = await profiles.ReadAsync(actor, ct);
+            acceptedProfile = await profiles.ReadAsync(actor, ct, includePendingVerification);
             await transaction.CommitAsync(ct);
         }
         return new(acceptedProfile, id.ToString("D"));
