@@ -26,7 +26,18 @@ public sealed class CloudControlServiceJointTests
         await using var joint = await Joint.StartAsync(auth, browserFlow:true);
         await joint.CommandAsync("grant-platform");
         await joint.CommandAsync("assert-no-browser-check");
-        await joint.VerifyConsoleBrowserAsync(auth.Subject);
+        await joint.VerifyBrowserAsync(auth.Subject);
+    }
+
+    [CloudControlFleetBrowserJointFact]
+    public async Task Actual_Console_and_Fleet_use_one_issuer_Service_and_check_queue()
+    {
+        await using var auth = await CloudControlProtocolTests.Fixture.CreateAsync(consoleBrowser:true);
+        await using var joint = await Joint.StartAsync(auth, browserFlow:true);
+        await joint.CommandAsync("grant-platform");
+        await joint.CommandAsync("assert-no-browser-check");
+        await joint.VerifyBrowserAsync(auth.Subject);
+        await joint.VerifyBrowserAsync(auth.Subject, fleet:true);
     }
 
     [CloudControlServiceJointFact]
@@ -89,6 +100,7 @@ public sealed class CloudControlServiceJointTests
             using var key=RSA.Create(2048);var request=new CertificateRequest("CN="+host,key,HashAlgorithmName.SHA256,RSASignaturePadding.Pkcs1);
             var names=new SubjectAlternativeNameBuilder();names.AddDnsName(host);names.AddDnsName("localhost");names.AddIpAddress(IPAddress.Loopback);
             names.AddDnsName("console.pandacloud.cc");
+            names.AddDnsName("fleet.pandacloud.cc");
             request.CertificateExtensions.Add(names.Build());request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true,false,0,true));
             certificate=request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5),DateTimeOffset.UtcNow.AddHours(1));
             Write("run-id",runId);Write("certificate.pem",certificate.ExportCertificatePem());Write("key.pem",key.ExportPkcs8PrivateKeyPem());
@@ -163,30 +175,34 @@ public sealed class CloudControlServiceJointTests
             }
             catch {await joint.DisposeAsync();throw;}
         }
-        internal async Task VerifyConsoleBrowserAsync(string subject)
+        internal async Task VerifyBrowserAsync(string subject,bool fleet=false)
         {
-            var checkout=Environment.GetEnvironmentVariable("CLOUD_CONTROL_CONSOLE_BROWSER_CHECKOUT")!;
+            var application=fleet?"fleet":"console";
+            var checkout=Environment.GetEnvironmentVariable(fleet?
+                "CLOUD_CONTROL_FLEET_BROWSER_CHECKOUT":"CLOUD_CONTROL_CONSOLE_BROWSER_CHECKOUT")!;
             var output=Environment.GetEnvironmentVariable("CLOUD_CONTROL_CONSOLE_BROWSER_EVIDENCE")!;
             var temporary=Path.GetTempPath();
             if(!Path.IsPathFullyQualified(checkout)||Path.GetFullPath(checkout)!=checkout
-                ||Path.GetFileName(checkout)!="panda-cloud-console"||!Directory.Exists(checkout)
+                ||Path.GetFileName(checkout)!="panda-cloud-"+application||!Directory.Exists(checkout)
                 ||!Path.IsPathFullyQualified(output)||Path.GetDirectoryName(output)!=temporary.TrimEnd('/')
                 ||!Directory.Exists(output)||new DirectoryInfo(output).LinkTarget is not null)
-                throw new InvalidOperationException("The explicit private Console checkout and evidence directory are required.");
+                throw new InvalidOperationException("The explicit private browser checkout and evidence directory are required.");
             Write("cert.pem",certificate.ExportCertificatePem());
             var bridge=Path.Combine(root,"bridge-ready.json");
             Write("bridge-ready.json",JsonSerializer.Serialize(new
             {
-                browserApplication="console", consoleOrigin="https://console.pandacloud.cc/",
+                browserApplication=application, consoleOrigin=$"https://{application}.pandacloud.cc/",
                 issuer=PandaMadeScopes.CloudIssuer, authLoopbackPort=authUri!.Port,
-                proxyPort=service!.BaseAddress!.Port, certificateSha256=certificate.GetCertHashString(HashAlgorithmName.SHA256),subject
+                proxyPort=service!.BaseAddress!.Port, certificateSha256=certificate.GetCertHashString(HashAlgorithmName.SHA256),subject,
+                tenantId=fleet?"t0001":null,endpointId=fleet?"30000000-0000-4000-8000-000000000053":null
             }));
             var start=new ProcessStartInfo("/usr/bin/node")
             {
                 WorkingDirectory=checkout,UseShellExecute=false,
                 RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true
             };
-            start.ArgumentList.Add(Path.Combine(checkout,"scripts/verify-resources-current-auth-browser.mjs"));
+            start.ArgumentList.Add(Path.Combine(checkout,fleet?"tests/browser/tenant-resources-current-auth.mjs":
+                "scripts/verify-resources-current-auth-browser.mjs"));
             start.ArgumentList.Add(bridge);
             foreach(var name in new[]{"PANDA_AUTH_TEST_POSTGRES","PANDA_AUTH_TEST_SHARED_POSTGRES","FLEET_TEST_DATABASE"})
                 start.Environment.Remove(name);
@@ -195,15 +211,16 @@ public sealed class CloudControlServiceJointTests
             try
             {
                 var signal=await browser.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(90));
-                if(signal!="CONSOLE_BROWSER_CHECK_COMPLETED")
-                    throw new InvalidOperationException("Console browser did not complete the fresh check: "+await errors);
-                await CommandAsync("assert-one-browser-check");
-                await CommandAsync("revoke-platform");
-                await browser.StandardInput.WriteLineAsync("platform-grant-revoked");
+                if(signal!=(fleet?"FLEET_BROWSER_CHECK_COMPLETED":"CONSOLE_BROWSER_CHECK_COMPLETED"))
+                    throw new InvalidOperationException(application+" browser did not complete the fresh check: "+await errors);
+                await CommandAsync(fleet?"assert-two-browser-checks":"assert-one-browser-check");
+                await CommandAsync(fleet?"revoke-tenant":"revoke-platform");
+                await browser.StandardInput.WriteLineAsync(fleet?"tenant-grant-revoked":"platform-grant-revoked");
                 await browser.StandardInput.FlushAsync();
                 await browser.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(45));
-                if(browser.ExitCode!=0)throw new InvalidOperationException("Console browser refused: "+await errors);
-                File.Copy(Path.Combine(root,"console-auth-browser.json"),Path.Combine(output,"console-auth-browser.json"));
+                if(browser.ExitCode!=0)throw new InvalidOperationException(application+" browser refused: "+await errors);
+                var receipt=application+"-auth-browser.json";
+                File.Copy(Path.Combine(root,receipt),Path.Combine(output,receipt));
             }
             finally
             {
@@ -265,12 +282,22 @@ internal class CloudControlServiceJointFactAttribute : FactAttribute
     }
 }
 
-internal sealed class CloudControlConsoleBrowserJointFactAttribute : CloudControlServiceJointFactAttribute
+internal class CloudControlConsoleBrowserJointFactAttribute : CloudControlServiceJointFactAttribute
 {
     public CloudControlConsoleBrowserJointFactAttribute()
     {
         if(Skip is null && (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("CLOUD_CONTROL_CONSOLE_BROWSER_CHECKOUT"))
             ||string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("CLOUD_CONTROL_CONSOLE_BROWSER_EVIDENCE"))))
             Skip="Explicit isolated Console browser inputs are required.";
+    }
+}
+
+internal sealed class CloudControlFleetBrowserJointFactAttribute : CloudControlConsoleBrowserJointFactAttribute
+{
+    public CloudControlFleetBrowserJointFactAttribute()
+    {
+        if(Skip is null && (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("CLOUD_CONTROL_FLEET_BROWSER_CHECKOUT"))
+            ||string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("FLEET_PLAYWRIGHT_MODULE"))))
+            Skip="Explicit isolated Fleet browser inputs are required.";
     }
 }
