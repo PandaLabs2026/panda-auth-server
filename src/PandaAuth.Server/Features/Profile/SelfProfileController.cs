@@ -3,7 +3,9 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using OpenIddict.Abstractions;
 using OpenIddict.Validation.AspNetCore;
+using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
 using PandaAuth.Shared;
 
@@ -16,7 +18,7 @@ public sealed class SelfProfileController(SelfProfileService profiles, SecurityE
     [HttpGet, Authorize(Policy = ProfileAccess.ReadPolicy)]
     public async Task<IActionResult> Read(CancellationToken ct)
     {
-        try { return Profile(await profiles.ReadAsync(ProfileAccess.ActorId(User)!, ct)); }
+        try { return Profile(await profiles.ReadAsync(ProfileAccess.ActorId(User)!, ct, MayResumeContact())); }
         catch (ProfileOperationException e) { return Error(e.Code, e.StatusCode); }
     }
 
@@ -40,7 +42,7 @@ public sealed class SelfProfileController(SelfProfileService profiles, SecurityE
         {
             var revision = RequiredRevision();
             var values = await ContactFieldsAsync(["address"], ct);
-            var result = await contacts.CreateAsync(ProfileAccess.ActorId(User)!, revision, values["address"], HttpContext.TraceIdentifier, ct);
+            var result = await contacts.CreateAsync(ProfileAccess.ActorId(User)!, revision, values["address"], HttpContext.TraceIdentifier, ct, MayResumeContact());
             Response.Headers.ETag = result.Profile.Revision;
             return StatusCode(202, result);
         }
@@ -150,6 +152,9 @@ public sealed class SelfProfileController(SelfProfileService profiles, SecurityE
     }
 
     private Task<string> ReadJsonAsync(CancellationToken ct) => SelfProfileInput.ReadJsonAsync(Request, ct);
+
+    private bool MayResumeContact() =>
+        User.GetPresenters() is [FirstPartyClients.MeWeb] && User.HasScope(ProfileScopes.Write);
 
     private OkObjectResult Profile(SelfProfileDto profile)
     {

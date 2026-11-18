@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -18,6 +19,7 @@ internal sealed class OasisProfileAccessClient(OasisProfileOptions options, IAut
     internal const string Route = "/api/integrations/panda-auth/v1/profile-access";
     internal const string Audience = "oasis-profile-access-api";
     internal const string Scope = "profile.membership.resolve";
+    private static readonly TimeSpan OwnerDeadline = TimeSpan.FromSeconds(3);
     private static readonly UTF8Encoding Utf8 = new(false, true);
 
     public async Task<OasisMembershipProof?> ResolveAsync(HttpContext caller, Guid organizationKey,
@@ -39,11 +41,12 @@ internal sealed class OasisProfileAccessClient(OasisProfileOptions options, IAut
         {
             if (!(await authorization.AuthorizeAsync(caller.User, caller, ProfileAccess.ReadPolicy)).Succeeded) return null;
             // One deadline covers both outbound operations and bounded reads. No authorization/token cache.
-            cancellation.CancelAfter(TimeSpan.FromSeconds(3));
+            var started = Stopwatch.GetTimestamp();
+            cancellation.CancelAfter(OwnerDeadline);
             var ct = cancellation.Token;
             using var client = clients.CreateClient("oasis-profile-access");
             var token = await TokenAsync(client, ct);
-            if (token is null) return await FinishAsync(null);
+            if (token is null || Stopwatch.GetElapsedTime(started) >= OwnerDeadline) return await FinishAsync(null);
             var requestId = Guid.NewGuid();
             var payload = JsonSerializer.SerializeToUtf8Bytes(new
             {
@@ -59,7 +62,8 @@ internal sealed class OasisProfileAccessClient(OasisProfileOptions options, IAut
             using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
             using var json = await ReadJsonAsync(response, 8192, ct);
             ct.ThrowIfCancellationRequested();
-            if (json is null) return await FinishAsync(null);
+            // Cancellation callbacks can lag behind a completed response under scheduler load.
+            if (json is null || Stopwatch.GetElapsedTime(started) >= OwnerDeadline) return await FinishAsync(null);
             var root = json.RootElement;
             if (!Shape(root, "requestId", "organizationKey", "targetMemberKey", "target", "allowedFields")
                 || !BoundGuid(root, "requestId", requestId) || !BoundGuid(root, "organizationKey", organizationKey)

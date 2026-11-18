@@ -201,9 +201,9 @@ public sealed class OasisProfileAccessClientTests
     public async Task Late_owner_output_cannot_grant_after_deadline_or_caller_cancellation(bool callerCancels)
     {
         await using var fixture = new Fixture();
-        fixture.Transport.LateOwner = TimeSpan.FromMilliseconds(callerCancels ? 150 : 3200);
         using var cancellation = new CancellationTokenSource();
-        if (callerCancels) cancellation.CancelAfter(TimeSpan.FromMilliseconds(50));
+        if (callerCancels) fixture.Transport.BeforeOwnerResponse = cancellation.Cancel;
+        else fixture.Transport.LateOwner = TimeSpan.FromMilliseconds(3200);
         var call = fixture.Client.ResolveAsync(fixture.Caller, fixture.Organization, fixture.Member,
             new[] { "avatar" }, cancellation.Token);
         if (callerCancels) await Assert.ThrowsAnyAsync<OperationCanceledException>(() => call);
@@ -275,6 +275,7 @@ public sealed class OasisProfileAccessClientTests
         internal string TokenMode = "";
         internal TimeSpan Delay;
         internal TimeSpan LateOwner;
+        internal Action? BeforeOwnerResponse;
         internal string? LastRequestId;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -346,6 +347,7 @@ public sealed class OasisProfileAccessClientTests
                 case "encoded": response.Content.Headers.ContentEncoding.Add("gzip"); break;
                 case "mediaType": response.Content.Headers.ContentType = new("text/plain"); break;
             }
+            BeforeOwnerResponse?.Invoke();
             return response;
         }
         private static HttpResponseMessage Json(string value)
