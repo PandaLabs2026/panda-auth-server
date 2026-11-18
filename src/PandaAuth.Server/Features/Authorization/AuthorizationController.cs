@@ -26,6 +26,7 @@ public sealed class AuthorizationController(
     ClaimsPolicyService claimsPolicy,
     IOpenIddictScopeManager scopeManager,
     ITenantContextAccessor tenantContextAccessor,
+    PandeskNativePolicy pandeskNativePolicy,
     TenantRedirectPolicy tenantRedirectPolicy,
     TimeProvider clock,
     LoginMfaChallengeService? challenges = null) : Controller
@@ -39,9 +40,13 @@ public sealed class AuthorizationController(
         var request = HttpContext.GetOpenIddictServerRequest()
             ?? throw new InvalidOperationException("无法解析 OIDC 授权请求。");
 
-        if (tenantContextAccessor.Current is { } tenant
-            && (!Uri.TryCreate(request.RedirectUri, UriKind.Absolute, out var redirectUri)
-                || !tenantRedirectPolicy.IsAllowed(tenant, redirectUri)))
+        var tenant = tenantContextAccessor.Current;
+        var redirectDenied = string.Equals(request.ClientId, PandeskNativeIdentity.ClientId, StringComparison.Ordinal)
+            ? !pandeskNativePolicy.AllowsHost(tenant, Request) || !PandeskNativePolicy.IsLoopbackCallback(request.RedirectUri)
+                || request.CodeChallengeMethod != CodeChallengeMethods.Sha256 || string.IsNullOrEmpty(request.CodeChallenge)
+            : tenant is not null && (!Uri.TryCreate(request.RedirectUri, UriKind.Absolute, out var redirectUri)
+                || !tenantRedirectPolicy.IsAllowed(tenant, redirectUri));
+        if (redirectDenied)
         {
             return Forbid(new AuthenticationProperties(new Dictionary<string, string?>
             {
@@ -120,6 +125,13 @@ public sealed class AuthorizationController(
     {
         var request = HttpContext.GetOpenIddictServerRequest()
             ?? throw new InvalidOperationException("无法解析 OIDC Token 请求。");
+
+        if (string.Equals(request.ClientId, PandeskNativeIdentity.ClientId, StringComparison.Ordinal)
+            && (!pandeskNativePolicy.AllowsHost(tenantContextAccessor.Current, Request)
+                || !(request.IsAuthorizationCodeGrantType() || request.IsRefreshTokenGrantType())))
+        {
+            return InvalidGrant("Pandesk authorization is unavailable for this issuer.");
+        }
 
         if (request.IsClientCredentialsGrantType())
         {

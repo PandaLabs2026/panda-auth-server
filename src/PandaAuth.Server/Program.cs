@@ -150,6 +150,7 @@ static async Task RunServerAsync(string[] args)
     builder.Services.AddSingleton(authOptions.TenantRouting);
     builder.Services.AddSingleton<ITenantHostResolver, TenantHostResolver>();
     builder.Services.AddSingleton<TenantRedirectPolicy>();
+    builder.Services.AddSingleton<PandeskNativePolicy>();
     builder.Services.AddScoped<TenantContextAccessor>();
     builder.Services.AddScoped<ITenantContextAccessor>(services => services.GetRequiredService<TenantContextAccessor>());
     // 安全配置已在任何数据库访问之前由集中预检校验。

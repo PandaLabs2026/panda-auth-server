@@ -3,6 +3,7 @@ using Npgsql;
 using PandaAuth.Server.Infrastructure.Messaging;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Shared;
 
 namespace PandaAuth.Server.Configuration;
 
@@ -33,6 +34,12 @@ public static class StartupConfiguration
         });
         if (options is null) return new(1, false, errors.ToArray());
         var production = environment.IsProduction();
+        if (options.PandeskNative.Enabled && (!environment.IsDevelopment() || !options.TenantRouting.Enabled
+            || !Uri.TryCreate(options.Issuer, UriKind.Absolute, out var nativeIssuer)
+            || nativeIssuer.Scheme != Uri.UriSchemeHttps || nativeIssuer.AbsolutePath != "/"
+            || !TenantCanonicalHost.TryParse(nativeIssuer.Host, out _, out var product, out _)
+            || product != TenantProduct.PandaAuth))
+            errors.Add(new("Auth:PandeskNative:Enabled", "pandesk_native_requires_development_tenant_issuer"));
         Check("Auth:Issuer", "issuer_invalid", () =>
         {
             if (!Uri.TryCreate(options.Issuer, UriKind.Absolute, out var issuer) || string.IsNullOrWhiteSpace(issuer.Host) ||
