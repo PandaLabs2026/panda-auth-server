@@ -140,7 +140,7 @@ public sealed class PandeskNativeProtocolTests
         Assert.False(revoked.RootElement.GetProperty("active").GetBoolean());
     }
 
-    private static async Task RegisterAsync(SecurityProtocolFixture fixture, string secret)
+    internal static async Task RegisterAsync(SecurityProtocolFixture fixture, string secret)
     {
         using (var scope = fixture.Host.Services.CreateScope())
         {
@@ -204,14 +204,14 @@ public sealed class PandeskNativeProtocolTests
 
     private static string Host(string tenant) => $"{tenant}-auth.s001.pandacloud.cc";
 
-    private static Uri LoopbackIssuer(string tenant)
+    internal static Uri LoopbackIssuer(string tenant)
     {
         using var reservation = new TcpListener(IPAddress.Loopback, 0);
         reservation.Start();
         return new Uri($"https://{Host(tenant)}:{((IPEndPoint)reservation.LocalEndpoint).Port}/");
     }
 
-    private static X509Certificate2 MakeCertificate(string tenant)
+    internal static X509Certificate2 MakeCertificate(string tenant)
     {
         using var key = RSA.Create(2048);
         var request = new CertificateRequest($"CN={Host(tenant)}", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
@@ -222,7 +222,7 @@ public sealed class PandeskNativeProtocolTests
         return request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddHours(1));
     }
 
-    private static Task<SecurityProtocolFixture> CreateIssuerAsync(string tenant, Uri issuer, X509Certificate2 certificate)
+    internal static Task<SecurityProtocolFixture> CreateIssuerAsync(string tenant, Uri issuer, X509Certificate2 certificate)
         => SecurityProtocolFixture.CreateAsync(settings: new Dictionary<string, string>
         {
             ["Auth:Issuer"] = issuer.AbsoluteUri, ["Auth:TenantRouting:Enabled"] = "true",
@@ -232,7 +232,7 @@ public sealed class PandeskNativeProtocolTests
         }, configureHost: host => host.UseKestrel(options =>
             options.Listen(IPAddress.Loopback, issuer.Port, listen => listen.UseHttps(certificate))));
 
-    private static HttpClient CreateBrowser(Uri issuer, X509Certificate2 certificate)
+    internal static HttpClient CreateBrowser(Uri issuer, X509Certificate2 certificate)
     {
         var handler = new SocketsHttpHandler
         {
@@ -261,7 +261,7 @@ public sealed class PandeskNativeProtocolTests
         return new HttpClient(handler) { BaseAddress = issuer };
     }
 
-    private static async Task AssertDiscoveryAsync(HttpClient browser, Uri issuer)
+    internal static async Task AssertDiscoveryAsync(HttpClient browser, Uri issuer)
     {
         using var response = await browser.GetAsync("/.well-known/openid-configuration");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
