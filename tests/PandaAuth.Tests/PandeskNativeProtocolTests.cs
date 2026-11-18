@@ -144,6 +144,60 @@ public sealed class PandeskNativeProtocolTests
     }
 
     [PostgresFact]
+    public async Task AuthorizationRejectsAnUnregisteredCallbackAndAnUnpermittedScope()
+    {
+        const string tenant = "t9841";
+        using var certificate = MakeCertificate(tenant);
+        var issuer = LoopbackIssuer(tenant);
+        await using var fixture = await CreateIssuerAsync(tenant, issuer, certificate);
+        await RegisterAsync(fixture, RandomUrlSafeValue());
+        const string otherScope = "test.unpermitted";
+        using (var scope = fixture.Host.Services.CreateScope())
+        {
+            var scopes = scope.ServiceProvider.GetRequiredService<IOpenIddictScopeManager>();
+            await scopes.CreateAsync(new OpenIddictScopeDescriptor { Name = otherScope });
+        }
+        using var browser = CreateBrowser(issuer, certificate);
+
+        var verifier = RandomUrlSafeValue();
+        var state = RandomUrlSafeValue();
+        using (var denied = await browser.GetAsync(AuthorizationRequest(verifier, state,
+            redirectUri: "http://127.0.0.1:43824/unregistered")))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, denied.StatusCode);
+            Assert.Null(denied.Headers.Location);
+        }
+
+        using var deniedScope = await browser.GetAsync(AuthorizationRequest(verifier, state, scope: $"{ReadScope} {otherScope}"));
+        Assert.Equal(HttpStatusCode.BadRequest, deniedScope.StatusCode);
+        Assert.Null(deniedScope.Headers.Location);
+        Assert.Contains("not allowed to use the specified scope", await deniedScope.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+
+        using var allowed = await browser.GetAsync(AuthorizationRequest(verifier, state));
+        Assert.Equal(HttpStatusCode.Redirect, allowed.StatusCode);
+        var login = new Uri(issuer, Assert.IsType<Uri>(allowed.Headers.Location));
+        Assert.Equal("/account/login", login.AbsolutePath);
+    }
+
+    [PostgresFact]
+    public async Task TokenExchangeRejectsAnIncorrectPkceVerifier()
+    {
+        const string tenant = "t9841";
+        using var certificate = MakeCertificate(tenant);
+        var issuer = LoopbackIssuer(tenant);
+        await using var fixture = await CreateIssuerAsync(tenant, issuer, certificate);
+        await fixture.EnableTotpAsync(administrator: false);
+        await RegisterAsync(fixture, RandomUrlSafeValue());
+        using var browser = CreateBrowser(issuer, certificate);
+
+        var verifier = RandomUrlSafeValue();
+        var code = await GetCodeAsync(fixture, browser, verifier);
+        using var form = new FormUrlEncodedContent(CodeRequest(code, RandomUrlSafeValue()));
+        using var denied = await browser.PostAsync(PandaAuthEndpoints.Token, form);
+        await AssertInvalidGrantAsync(denied);
+    }
+
+    [PostgresFact]
     public async Task RefreshReplayOutsideRetryWindowInvalidatesTheRotatedAccessToken()
     {
         const string tenant = "t9841";
@@ -228,6 +282,11 @@ public sealed class PandeskNativeProtocolTests
     {
         using var form = new FormUrlEncodedContent(RefreshRequest(token));
         using var reply = await browser.PostAsync(PandaAuthEndpoints.Token, form);
+        await AssertInvalidGrantAsync(reply);
+    }
+
+    private static async Task AssertInvalidGrantAsync(HttpResponseMessage reply)
+    {
         Assert.Equal(HttpStatusCode.BadRequest, reply.StatusCode);
         using var error = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
         Assert.Equal(Errors.InvalidGrant, error.RootElement.GetProperty("error").GetString());
@@ -272,28 +331,39 @@ public sealed class PandeskNativeProtocolTests
 
     private static async Task<JsonDocument> IssueAsync(SecurityProtocolFixture fixture, HttpClient browser)
     {
-        var verifier = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
-        var state = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(24));
-        var callback = await fixture.CompleteAuthorizationAsync(browser, QueryHelpers.AddQueryString(PandaAuthEndpoints.Authorization,
-            new Dictionary<string, string?>
-            {
-                ["client_id"] = NativeClient, ["redirect_uri"] = Callback, ["response_type"] = "code",
-                ["scope"] = $"openid offline_access {ReadScope}", ["state"] = state,
-                ["nonce"] = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(24)),
-                ["code_challenge_method"] = "S256",
-                ["code_challenge"] = Base64UrlEncoder.Encode(SHA256.HashData(Encoding.ASCII.GetBytes(verifier))),
-            }));
+        var verifier = RandomUrlSafeValue();
+        var code = await GetCodeAsync(fixture, browser, verifier);
+        return await PostAsync(browser, PandaAuthEndpoints.Token, CodeRequest(code, verifier));
+    }
+
+    private static string RandomUrlSafeValue() => Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
+
+    private static string AuthorizationRequest(string verifier, string state, string redirectUri = Callback, string? scope = null)
+        => QueryHelpers.AddQueryString(PandaAuthEndpoints.Authorization, new Dictionary<string, string?>
+        {
+            ["client_id"] = NativeClient, ["redirect_uri"] = redirectUri, ["response_type"] = ResponseTypes.Code,
+            ["scope"] = scope ?? $"openid offline_access {ReadScope}", ["state"] = state,
+            ["nonce"] = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(24)),
+            ["code_challenge_method"] = CodeChallengeMethods.Sha256,
+            ["code_challenge"] = Base64UrlEncoder.Encode(SHA256.HashData(Encoding.ASCII.GetBytes(verifier))),
+        });
+
+    private static async Task<string> GetCodeAsync(SecurityProtocolFixture fixture, HttpClient browser, string verifier)
+    {
+        var state = RandomUrlSafeValue();
+        var callback = await fixture.CompleteAuthorizationAsync(browser, AuthorizationRequest(verifier, state));
         Assert.Equal(Callback, callback.GetLeftPart(UriPartial.Path));
         var values = QueryHelpers.ParseQuery(callback.Query);
         Assert.True(values.TryGetValue("code", out var code));
         Assert.Equal(state, values["state"].ToString());
-
-        return await PostAsync(browser, PandaAuthEndpoints.Token, new()
-        {
-            ["client_id"] = NativeClient, ["redirect_uri"] = Callback, ["grant_type"] = GrantTypes.AuthorizationCode,
-            ["code"] = code.ToString(), ["code_verifier"] = verifier,
-        });
+        return code.ToString();
     }
+
+    private static Dictionary<string, string> CodeRequest(string code, string verifier) => new()
+    {
+        ["client_id"] = NativeClient, ["redirect_uri"] = Callback, ["grant_type"] = GrantTypes.AuthorizationCode,
+        ["code"] = code, ["code_verifier"] = verifier,
+    };
 
     private static string Host(string tenant) => $"{tenant}-auth.s001.pandacloud.cc";
 
