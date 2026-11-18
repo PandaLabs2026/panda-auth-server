@@ -104,6 +104,7 @@ internal static class TestUserStoreHost
             provider.GetRequiredService<ClaimsPolicyService>(),
             provider.GetRequiredService<IOpenIddictScopeManager>(),
             provider.GetRequiredService<ITenantContextAccessor>(),
+            new PandeskNativePolicy(provider.GetRequiredService<IOptions<AuthOptions>>(), new Microsoft.Extensions.Hosting.Internal.HostingEnvironment()),
             new TenantRedirectPolicy(),
             provider.GetRequiredService<TimeProvider>(),
             provider.GetRequiredService<LoginMfaChallengeService>())
