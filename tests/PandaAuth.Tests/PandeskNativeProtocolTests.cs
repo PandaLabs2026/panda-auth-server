@@ -7,9 +7,14 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using PandaAuth.Server.Configuration;
+using PandaAuth.Server.Features.Admin;
+using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Server.Infrastructure.Security.Mfa;
 using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
 using PandaAuth.Shared;
@@ -58,7 +63,7 @@ public sealed class PandeskNativeProtocolTests
     }
 
     [PostgresFact]
-    public async Task PublicPkce_ActualIntrospection_ReturnsHumanReadToken_AndRevocationMakesItInactive()
+    public async Task PublicPkce_ActualIntrospection_ReturnsHumanReadToken_AndRevokesBothTokens()
     {
         using var certA = MakeCertificate("t9841");
         using var certB = MakeCertificate("t9842");
@@ -109,10 +114,7 @@ public sealed class PandeskNativeProtocolTests
             Assert.DoesNotContain("api", token.GetProperty("scope").GetString()!.Split(' '));
         }
 
-        using var refreshed = await PostAsync(browser, PandaAuthEndpoints.Token, new()
-        {
-            ["client_id"] = NativeClient, ["grant_type"] = GrantTypes.RefreshToken, ["refresh_token"] = refresh,
-        });
+        using var refreshed = await PostAsync(browser, PandaAuthEndpoints.Token, RefreshRequest(refresh));
         Assert.True(!string.Equals(refresh, refreshed.RootElement.GetProperty("refresh_token").GetString(), StringComparison.Ordinal),
             "The refresh token must rotate.");
         access = refreshed.RootElement.GetProperty("access_token").GetString()!;
@@ -130,14 +132,105 @@ public sealed class PandeskNativeProtocolTests
         using var forbidden = await browser.PostAsync(PandaAuthEndpoints.Token, forbiddenGrant);
         Assert.Equal(HttpStatusCode.BadRequest, forbidden.StatusCode);
 
-        using var revokeForm = new FormUrlEncodedContent(new Dictionary<string, string>
-        {
-            ["client_id"] = NativeClient, ["token"] = access, ["token_type_hint"] = "access_token",
-        });
-        using var revoke = await browser.PostAsync(PandaAuthEndpoints.Revocation, revokeForm);
-        Assert.Equal(HttpStatusCode.OK, revoke.StatusCode);
+        var currentRefresh = refreshed.RootElement.GetProperty("refresh_token").GetString()!;
+        await RevokeAsync(browser, access, TokenTypeHints.AccessToken);
+        await RevokeAsync(browser, currentRefresh, TokenTypeHints.RefreshToken);
         using var revoked = await IntrospectAsync(browser, secret, access);
         Assert.False(revoked.RootElement.GetProperty("active").GetBoolean());
+        await AssertRefreshRejectedAsync(browser, currentRefresh);
+
+        using var unaffected = await IntrospectAsync(otherBrowser, otherSecret, otherAccess);
+        Assert.True(unaffected.RootElement.GetProperty("active").GetBoolean());
+    }
+
+    [PostgresFact]
+    public async Task RefreshReplayOutsideRetryWindowInvalidatesTheRotatedAccessToken()
+    {
+        const string tenant = "t9841";
+        using var certificate = MakeCertificate(tenant);
+        var issuer = LoopbackIssuer(tenant);
+        await using var fixture = await CreateIssuerAsync(tenant, issuer, certificate);
+        await fixture.EnableTotpAsync(administrator: false);
+        var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        await RegisterAsync(fixture, secret);
+        using var browser = CreateBrowser(issuer, certificate);
+        using var issued = await IssueAsync(fixture, browser);
+        var originalRefresh = issued.RootElement.GetProperty("refresh_token").GetString()!;
+        using var rotated = await PostAsync(browser, PandaAuthEndpoints.Token, RefreshRequest(originalRefresh));
+        var rotatedAccess = rotated.RootElement.GetProperty("access_token").GetString()!;
+        var rotatedRefresh = rotated.RootElement.GetProperty("refresh_token").GetString()!;
+        using (var active = await IntrospectAsync(browser, secret, rotatedAccess))
+            Assert.True(active.RootElement.GetProperty("active").GetBoolean());
+
+        await Task.Delay(RefreshTokenPolicy.ReuseLeeway + TimeSpan.FromSeconds(1));
+        await AssertRefreshRejectedAsync(browser, originalRefresh);
+        using var afterReplay = await IntrospectAsync(browser, secret, rotatedAccess);
+        Assert.False(afterReplay.RootElement.GetProperty("active").GetBoolean());
+        await AssertRefreshRejectedAsync(browser, rotatedRefresh);
+    }
+
+    [PostgresFact]
+    public async Task AccountFreezeInvalidatesTokensOnTheFirstIntrospection()
+    {
+        const string tenant = "t9841";
+        using var certificate = MakeCertificate(tenant);
+        var issuer = LoopbackIssuer(tenant);
+        await using var fixture = await CreateIssuerAsync(tenant, issuer, certificate);
+        await fixture.EnableTotpAsync(administrator: false);
+        var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        await RegisterAsync(fixture, secret);
+        using var browser = CreateBrowser(issuer, certificate);
+        using var issued = await IssueAsync(fixture, browser);
+        var access = issued.RootElement.GetProperty("access_token").GetString()!;
+        var refresh = issued.RootElement.GetProperty("refresh_token").GetString()!;
+        using (var active = await IntrospectAsync(browser, secret, access))
+            Assert.True(active.RootElement.GetProperty("active").GetBoolean());
+
+        await using (var scope = fixture.Host.Services.CreateAsyncScope())
+        {
+            var services = scope.ServiceProvider;
+            var controller = ActivatorUtilities.CreateInstance<AdminUsersController>(services);
+            controller.ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext { RequestServices = services },
+            };
+            await TestGrants.AuthorizeAsync(services, controller, MfaOperations.AdminSetStatus, fixture.UserId,
+                TestGrants.Status(UserStatus.Frozen));
+            var result = await controller.SetStatus(fixture.UserId, new AdminUserStatusRequest(UserStatus.Frozen),
+                CancellationToken.None);
+            var response = Assert.IsType<OkObjectResult>(result);
+            Assert.Equal(UserStatus.Frozen, Assert.IsType<AdminUserSummary>(response.Value).Status);
+        }
+
+        using var afterFreeze = await IntrospectAsync(browser, secret, access);
+        Assert.False(afterFreeze.RootElement.GetProperty("active").GetBoolean());
+        await AssertRefreshRejectedAsync(browser, refresh);
+    }
+
+    private static async Task RevokeAsync(HttpClient browser, string token, string hint)
+    {
+        using var form = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["client_id"] = NativeClient, ["token"] = token, ["token_type_hint"] = hint,
+        });
+        using var reply = await browser.PostAsync(PandaAuthEndpoints.Revocation, form);
+        Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
+    }
+
+    private static Dictionary<string, string> RefreshRequest(string token) => new()
+    {
+        ["client_id"] = NativeClient,
+        ["grant_type"] = GrantTypes.RefreshToken,
+        ["refresh_token"] = token,
+    };
+
+    private static async Task AssertRefreshRejectedAsync(HttpClient browser, string token)
+    {
+        using var form = new FormUrlEncodedContent(RefreshRequest(token));
+        using var reply = await browser.PostAsync(PandaAuthEndpoints.Token, form);
+        Assert.Equal(HttpStatusCode.BadRequest, reply.StatusCode);
+        using var error = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
+        Assert.Equal(Errors.InvalidGrant, error.RootElement.GetProperty("error").GetString());
     }
 
     internal static async Task RegisterAsync(SecurityProtocolFixture fixture, string secret)
