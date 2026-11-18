@@ -79,7 +79,7 @@ public sealed class NativeAuthorizationCodeCompatibilityTests
     }
 
     [PostgresFact]
-    public async Task CancelledOrExpiredChallenge_CannotIssueAnAuthorizationCode()
+    public async Task CancelledExpiredOrStaleChallenge_CannotIssueAnAuthorizationCode()
     {
         var clock = new ChallengeClock();
         await using var fixture = await SecurityProtocolFixture.CreateAsync(services =>
@@ -107,6 +107,17 @@ public sealed class NativeAuthorizationCodeCompatibilityTests
         clock.Advance(TimeSpan.FromMinutes(1));
         await PostChallengeAsync(client, pkce, HttpStatusCode.Conflict,
             ("step", "totp"), ("challenge", expiring), ("otp", fixture.CurrentTotpCode()));
+
+        var stale = await StartChallengeAsync(client, pkce, fixture.AdminPassword);
+        using (var scope = fixture.Host.Services.CreateScope())
+        {
+            var users = scope.ServiceProvider.GetRequiredService<UserService>();
+            var user = Assert.IsType<PandaUser>(await users.FindByIdAsync(fixture.UserId));
+            user.SecurityStamp = Guid.NewGuid().ToString("N");
+            Assert.True((await users.UpdateAsync(user)).Succeeded);
+        }
+        await PostChallengeAsync(client, pkce, HttpStatusCode.Conflict,
+            ("step", "totp"), ("challenge", stale), ("otp", fixture.CurrentTotpCode()));
     }
 
     private static async Task<string> StartChallengeAsync(HttpClient client, string pkce, string password)
@@ -302,74 +313,50 @@ public sealed class NativeAuthorizationCodeCompatibilityTests
     private static async Task<PandaUser?> HandleFixtureChallengeAsync(
         OpenIddictServerEvents.HandleAuthorizationRequestContext context, HttpRequest request, ChallengeClock clock)
     {
-        const string purpose = "pandesk-test-http-login";
         var ct = request.HttpContext.RequestAborted;
         var services = request.HttpContext.RequestServices;
-        var users = services.GetRequiredService<UserService>();
-        var mfa = services.GetRequiredService<MfaService>();
-        var limiter = services.GetRequiredService<LoginRateLimiter>();
+        var response = request.HttpContext.Response;
+        var authorization = context.Request;
+        if (authorization.CodeChallengeMethod != CodeChallengeMethods.Sha256 || authorization.CodeChallenge is not { } pkce)
+            return await ReplyAsync(400, new { error = "invalid_request" });
+
+        var binding = new NativeLoginBinding(TenantId.Parse("t9876"), context.Options.Issuer!, authorization.ClientId!,
+            pkce, authorization.Scope, authorization.GetResources(), authorization.RedirectUri);
         var store = new MfaChallengeStore(services.GetRequiredService<PandaAuthDbContext>(), clock);
-        var binding = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new[]
-        {
-            context.Options.Issuer?.AbsoluteUri, context.Request.ClientId, context.Request.CodeChallenge,
-            context.Request.Scope, context.Request.RedirectUri,
-        })));
+        var flow = ActivatorUtilities.CreateInstance<NativeLoginChallengeService>(services, store, clock);
         var form = await request.ReadFormAsync(ct);
         var step = form["step"].ToString();
         var remoteIp = request.HttpContext.Connection.RemoteIpAddress?.ToString();
-        var response = request.HttpContext.Response;
-        if (context.Request.CodeChallengeMethod != CodeChallengeMethods.Sha256)
-            return await ReplyAsync(400, new { error = "invalid_request" });
-
+        NativeLoginResult result;
         if (step == "password")
         {
-            var username = form["username"].ToString().Trim();
-            using var ipLease = limiter.AttemptByIp(remoteIp);
-            using var accountLease = limiter.AttemptByAccount(username);
-            if (!ipLease.IsAcquired || !accountLease.IsAcquired) return await RateLimitedAsync();
-
-            var password = form["password"].ToString();
-            var account = await users.FindByNameAsync(username);
-            if (account is not { Status: UserStatus.Active })
-            {
-                var dummy = services.GetRequiredService<DummyPasswordHash>();
-                await services.GetRequiredService<IPasswordHasher>().VerifyAsync(dummy.Value, password, ct);
-                return await ReplyAsync(401, new { error = "invalid_credentials" });
-            }
-
-            var sessions = services.GetRequiredService<LoginSessionService>();
-            var verified = await sessions.CheckPasswordSignInAsync(account, password, lockoutOnFailure: true);
-            if (verified.User is not { EmailConfirmed: true } user || (!verified.Succeeded && !verified.RequiresMfaReconfiguration)
-                || !(await mfa.ListFactorsAsync(user.Id, ct)).Any(factor => factor.Type == "totp"))
-                return await ReplyAsync(401, new { error = "invalid_credentials" });
-
-            var value = JsonSerializer.SerializeToUtf8Bytes(new PasswordChallenge(user.Id, AccountSecurityVersion.From(user)));
-            var challenge = await store.CreateAsync(purpose, binding, value, TimeSpan.FromMinutes(5), ct);
-            return await ReplyAsync(202, new { next_step = "totp", challenge = challenge.ToString("N") });
+            result = await flow.StartAsync(binding, form["username"].ToString(), form["password"].ToString(),
+                remoteIp, request.Headers.UserAgent.ToString(), ct);
+        }
+        else if (step is ("totp" or "cancel") && Guid.TryParseExact(form["challenge"].ToString(), "N", out var handle))
+        {
+            result = step == "cancel"
+                ? await flow.CancelAsync(binding, handle, remoteIp, ct)
+                : await flow.VerifyTotpAsync(binding, handle, form["otp"].ToString(), remoteIp, ct);
+        }
+        else
+        {
+            return await ReplyAsync(400, new { error = "invalid_request" });
         }
 
-        if (step is not ("totp" or "cancel") || !Guid.TryParseExact(form["challenge"].ToString(), "N", out var handle))
-            return await ReplyAsync(400, new { error = "invalid_request" });
-
-        using var mfaIpLease = limiter.AttemptMfaChallengeByIp(remoteIp);
-        if (!mfaIpLease.IsAcquired) return await RateLimitedAsync();
-        var consumed = await store.ConsumeAsync(handle, purpose, binding, ct);
-        if (consumed is null) return await ReplyAsync(409, new { error = "invalid_challenge" });
-        if (step == "cancel") return await ReplyAsync(200, new { status = "cancelled" });
-
-        var pending = JsonSerializer.Deserialize<PasswordChallenge>(consumed.Value)!;
-        using var mfaUserLease = limiter.AttemptMfaChallengeByUser(pending.UserId);
-        if (!mfaUserLease.IsAcquired) return await RateLimitedAsync();
-        var current = await users.FindByIdAsync(pending.UserId);
-        if (current is not { Status: UserStatus.Active, EmailConfirmed: true }
-            || AccountSecurityVersion.From(current) != pending.SecurityVersion)
-            return await ReplyAsync(409, new { error = "invalid_challenge" });
-
-        if (await mfa.VerifyAsync(current.Id, form["otp"].ToString(), ct)) return current;
-        var remaining = consumed.ExpiresAt - clock.GetUtcNow();
-        if (remaining <= TimeSpan.Zero) return await ReplyAsync(409, new { error = "invalid_challenge" });
-        var retry = await store.CreateAsync(purpose, binding, consumed.Value, remaining, ct);
-        return await ReplyAsync(401, new { error = "invalid_credentials", challenge = retry.ToString("N") });
+        return result switch
+        {
+            { Status: NativeLoginStatus.TotpRequired, Challenge: { } next } =>
+                await ReplyAsync(202, new { next_step = "totp", challenge = next.ToString("N") }),
+            { Status: NativeLoginStatus.InvalidCredentials, Challenge: { } retry } =>
+                await ReplyAsync(401, new { error = "invalid_credentials", challenge = retry.ToString("N") }),
+            { Status: NativeLoginStatus.InvalidCredentials } => await ReplyAsync(401, new { error = "invalid_credentials" }),
+            { Status: NativeLoginStatus.InvalidChallenge } => await ReplyAsync(409, new { error = "invalid_challenge" }),
+            { Status: NativeLoginStatus.Cancelled } => await ReplyAsync(200, new { status = "cancelled" }),
+            { Status: NativeLoginStatus.RateLimited } => await RateLimitedAsync(),
+            { Status: NativeLoginStatus.Verified, User: { } user } => user,
+            _ => throw new InvalidOperationException("Unexpected native login result."),
+        };
 
         Task<PandaUser?> RateLimitedAsync()
         {
@@ -386,6 +373,4 @@ public sealed class NativeAuthorizationCodeCompatibilityTests
             return null;
         }
     }
-
-    private sealed record PasswordChallenge(string UserId, string SecurityVersion);
 }

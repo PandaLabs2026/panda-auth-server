@@ -76,7 +76,33 @@ public class MfaChallengeStoreTests
         Assert.Null(await store.ConsumeAsync(id, "assert", "user-1", CancellationToken.None));
     }
 
+    [Fact]
+    public async Task ReplacementChallenge_UsesTheOriginalAbsoluteDeadline()
+    {
+        await using var db = CreateDb();
+        var deadline = new DateTimeOffset(2026, 11, 18, 12, 0, 0, TimeSpan.Zero);
+        var ct = CancellationToken.None;
+        var beforeExpiry = new MfaChallengeStore(db, new FixedClock(deadline.AddSeconds(-1)));
+
+        var replacement = await beforeExpiry.TryCreateUntilAsync("assert", "user-1", [1], deadline, ct);
+
+        Assert.NotNull(replacement);
+        var challenge = await db.MfaChallenges.SingleAsync(ct);
+        Assert.Equal(replacement, challenge.Id);
+        Assert.Equal(deadline, challenge.ExpiresAt);
+
+        var atExpiry = new MfaChallengeStore(db, new FixedClock(deadline));
+        Assert.Null(await atExpiry.TryCreateUntilAsync("assert", "user-1", [1], deadline, ct));
+        Assert.Null(await atExpiry.ConsumeAsync(challenge.Id, "assert", "user-1", ct));
+        Assert.Single(await db.MfaChallenges.ToListAsync(ct));
+    }
+
     private static PandaAuthDbContext CreateDb()
         => new(new DbContextOptionsBuilder<PandaAuthDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
+
+    private sealed class FixedClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
 }
