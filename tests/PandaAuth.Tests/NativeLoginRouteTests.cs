@@ -22,7 +22,7 @@ public sealed class NativeLoginRouteTests
     private const string Path = "/connect/native/authorize-challenge";
     internal const string ClientId = "pandesk-native-isolated";
     private const string OtherClientId = "another-public-client";
-    internal static readonly string Host = TenantCanonicalHost.For(TenantId.Parse("t9876"), TenantProduct.PandaAuth, "s901");
+    internal static readonly string Host = FixtureHost("t9876");
     private static readonly string Issuer = $"https://{Host}/";
     private static readonly string Callback = Issuer + "connect/native/callback";
 
@@ -141,12 +141,15 @@ public sealed class NativeLoginRouteTests
             BaseAddress = new Uri(origin), AllowAutoRedirect = false, HandleCookies = false,
         });
 
-    internal static Dictionary<string, string> Settings() => new()
+    internal static string FixtureHost(string tenant) =>
+        TenantCanonicalHost.For(TenantId.Parse(tenant), TenantProduct.PandaAuth, "s901");
+
+    internal static Dictionary<string, string> Settings(string tenant = "t9876") => new()
     {
-        ["Auth:Issuer"] = Issuer,
+        ["Auth:Issuer"] = $"https://{FixtureHost(tenant)}/",
         ["Auth:HttpsRequired"] = "true",
         ["Auth:TenantRouting:Enabled"] = "true",
-        ["Auth:TenantRouting:Bindings:0:TenantId"] = "t9876",
+        ["Auth:TenantRouting:Bindings:0:TenantId"] = tenant,
         ["Auth:TenantRouting:Bindings:0:Product"] = "PandaAuth",
         ["Auth:TenantRouting:Bindings:0:Zone"] = "s901",
         ["Auth:TenantRouting:Bindings:0:State"] = "Ready",
@@ -154,7 +157,7 @@ public sealed class NativeLoginRouteTests
         ["Auth:NativeLogin:ClientId"] = ClientId,
     };
 
-    internal static async Task RegisterAsync(SecurityProtocolFixture fixture, string clientId)
+    internal static async Task RegisterAsync(SecurityProtocolFixture fixture, string clientId, string tenant = "t9876")
     {
         using var scope = fixture.Host.Services.CreateScope();
         var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
@@ -163,7 +166,7 @@ public sealed class NativeLoginRouteTests
             ClientId = clientId,
             ClientType = ClientTypes.Public,
             ConsentType = ConsentTypes.Implicit,
-            RedirectUris = { new Uri(Callback) },
+            RedirectUris = { new Uri($"https://{FixtureHost(tenant)}/connect/native/callback") },
             Permissions = { Permissions.Endpoints.Authorization, Permissions.Endpoints.Token,
                 Permissions.GrantTypes.AuthorizationCode, Permissions.ResponseTypes.Code },
             Requirements = { Requirements.Features.ProofKeyForCodeExchange },

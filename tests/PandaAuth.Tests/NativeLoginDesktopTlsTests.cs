@@ -17,9 +17,6 @@ public sealed class NativeLoginDesktopTlsTests
     [DesktopTlsFact]
     public async Task RustTransport_CompletesNativeAuthenticationThroughKestrelOverTls()
     {
-        var executable = Environment.GetEnvironmentVariable("PANDESK_AUTH_CLIENT_TEST_EXE")!;
-        Assert.True(Path.IsPathFullyQualified(executable) && File.Exists(executable));
-        Assert.Equal("pandesk-auth-client-test.exe", Path.GetFileName(executable));
         using var authorityKey = RSA.Create(2048);
         using var serverKey = RSA.Create(2048);
         using var authority = CreateAuthority(authorityKey);
@@ -33,46 +30,120 @@ public sealed class NativeLoginDesktopTlsTests
             configureHost: factory => factory.UseKestrel(options => options.Listen(IPAddress.Loopback, 0, listener => listener.UseHttps(server))));
         await NativeLoginRouteTests.RegisterAsync(fixture, NativeLoginRouteTests.ClientId);
         await fixture.EnableTotpAsync();
-        var listener = fixture.Host.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!;
-        var endpoint = new Uri(Assert.Single(listener.Addresses));
-        Assert.Equal(Uri.UriSchemeHttps, endpoint.Scheme);
-        Assert.Equal("127.0.0.1", endpoint.Host);
+        var port = GetPort(fixture);
 
         var directory = Directory.CreateTempSubdirectory("pandesk-auth-tls-");
         var certificate = Path.Combine(directory.FullName, "fixture-ca.cer");
         try
         {
             await File.WriteAllBytesAsync(certificate, authority.Export(X509ContentType.Cert));
-            var start = new ProcessStartInfo(executable)
-            {
-                UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
-            };
-            start.ArgumentList.Add("native_auth::tests::isolated_https_roundtrip");
-            start.ArgumentList.Add("--exact");
-            start.ArgumentList.Add("--ignored");
-            start.Environment["PANDESK_FIXTURE_CERT"] = certificate;
-            start.Environment["PANDESK_FIXTURE_PORT"] = endpoint.Port.ToString(CultureInfo.InvariantCulture);
-            start.Environment["PANDESK_FIXTURE_PASSWORD"] = fixture.AdminPassword;
-            start.Environment["PANDESK_FIXTURE_OTP"] = fixture.CurrentTotpCode();
-            start.Environment.Remove("PANDA_AUTH_TEST_POSTGRES");
-            using var child = Process.Start(start) ?? throw new InvalidOperationException("Cannot start the Pandesk transport test.");
-            var stdout = child.StandardOutput.ReadToEndAsync();
-            var stderr = child.StandardError.ReadToEndAsync();
-            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-            try { await child.WaitForExitAsync(deadline.Token); }
-            finally { if (!child.HasExited) { child.Kill(entireProcessTree: true); await child.WaitForExitAsync(); } }
-            var output = await stdout;
-            var error = await stderr;
-            Assert.True(child.ExitCode == 0, output + error);
-            Assert.Contains("1 passed", output);
+            var start = CreateDesktopTest("isolated_https_roundtrip");
+            SetDesktopFixture(start, "PANDESK_FIXTURE", certificate, port, fixture);
+            await RunDesktopTestAsync(start);
             if (Environment.GetEnvironmentVariable("PANDESK_AUTH_GUI_EXE") is { Length: > 0 } windowExe)
-                await VerifyNativeWindowAsync(windowExe, certificate, endpoint.Port);
+                await VerifyNativeWindowAsync(windowExe, certificate, port);
         }
         finally
         {
             File.Delete(certificate);
             directory.Delete();
         }
+    }
+
+    [DesktopTlsFact]
+    public async Task RustTransport_SeparatesSameEmailAccountsAcrossTwoNativeIssuers()
+    {
+        const string secondTenant = "t9877";
+        using var firstAuthorityKey = RSA.Create(2048);
+        using var secondAuthorityKey = RSA.Create(2048);
+        using var firstServerKey = RSA.Create(2048);
+        using var secondServerKey = RSA.Create(2048);
+        using var firstAuthority = CreateAuthority(firstAuthorityKey);
+        using var secondAuthority = CreateAuthority(secondAuthorityKey);
+        using var firstGenerated = CreateServerCertificate(firstAuthority, firstServerKey);
+        using var secondGenerated = CreateServerCertificate(secondAuthority, secondServerKey, NativeLoginRouteTests.FixtureHost(secondTenant));
+        using var firstServer = ImportForSchannel(firstGenerated);
+        using var secondServer = ImportForSchannel(secondGenerated);
+        await using var first = await SecurityProtocolFixture.CreateAsync(
+            settings: NativeLoginRouteTests.Settings(),
+            configureHost: factory => factory.UseKestrel(options => options.Listen(IPAddress.Loopback, 0, listener => listener.UseHttps(firstServer))));
+        await using var second = await SecurityProtocolFixture.CreateAsync(
+            settings: NativeLoginRouteTests.Settings(secondTenant),
+            configureHost: factory => factory.UseKestrel(options => options.Listen(IPAddress.Loopback, 0, listener => listener.UseHttps(secondServer))));
+        Assert.NotEqual(first.UserId, second.UserId);
+        await NativeLoginRouteTests.RegisterAsync(first, NativeLoginRouteTests.ClientId);
+        await NativeLoginRouteTests.RegisterAsync(second, NativeLoginRouteTests.ClientId, secondTenant);
+        await first.EnableTotpAsync(administrator: false);
+        await second.EnableTotpAsync(administrator: false);
+        var firstPort = GetPort(first);
+        var secondPort = GetPort(second);
+        Assert.NotEqual(firstPort, secondPort);
+
+        var directory = Directory.CreateTempSubdirectory("pandesk-dual-issuer-");
+        var firstCertificate = Path.Combine(directory.FullName, "first-ca.cer");
+        var secondCertificate = Path.Combine(directory.FullName, "second-ca.cer");
+        try
+        {
+            await File.WriteAllBytesAsync(firstCertificate, firstAuthority.Export(X509ContentType.Cert));
+            await File.WriteAllBytesAsync(secondCertificate, secondAuthority.Export(X509ContentType.Cert));
+            var start = CreateDesktopTest("isolated_dual_issuer_roundtrip");
+            SetDesktopFixture(start, "PANDESK_FIXTURE", firstCertificate, firstPort, first);
+            SetDesktopFixture(start, "PANDESK_FIXTURE_SECOND", secondCertificate, secondPort, second);
+            await RunDesktopTestAsync(start);
+            if (Environment.GetEnvironmentVariable("PANDESK_AUTH_GUI_EXE") is { Length: > 0 } windowExe)
+                await VerifyNativeWindowAsync(windowExe, firstCertificate, firstPort, secondCertificate, secondPort);
+        }
+        finally
+        {
+            File.Delete(firstCertificate);
+            File.Delete(secondCertificate);
+            directory.Delete();
+        }
+    }
+
+    private static int GetPort(SecurityProtocolFixture fixture)
+    {
+        var listener = fixture.Host.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!;
+        var endpoint = new Uri(Assert.Single(listener.Addresses));
+        Assert.Equal(Uri.UriSchemeHttps, endpoint.Scheme);
+        Assert.Equal("127.0.0.1", endpoint.Host);
+        return endpoint.Port;
+    }
+
+    private static ProcessStartInfo CreateDesktopTest(string test)
+    {
+        var executable = Environment.GetEnvironmentVariable("PANDESK_AUTH_CLIENT_TEST_EXE")!;
+        Assert.True(Path.IsPathFullyQualified(executable) && File.Exists(executable));
+        Assert.Equal("pandesk-auth-client-test.exe", Path.GetFileName(executable));
+        var start = new ProcessStartInfo(executable)
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
+        };
+        start.ArgumentList.Add($"native_auth::tests::{test}");
+        start.ArgumentList.Add("--exact");
+        start.ArgumentList.Add("--ignored");
+        start.Environment.Remove("PANDA_AUTH_TEST_POSTGRES");
+        return start;
+    }
+
+    private static void SetDesktopFixture(ProcessStartInfo start, string prefix, string certificate, int port, SecurityProtocolFixture fixture)
+    {
+        start.Environment[$"{prefix}_CERT"] = certificate;
+        start.Environment[$"{prefix}_PORT"] = port.ToString(CultureInfo.InvariantCulture);
+        start.Environment[$"{prefix}_PASSWORD"] = fixture.AdminPassword;
+        start.Environment[$"{prefix}_OTP"] = fixture.CurrentTotpCode();
+    }
+
+    private static async Task RunDesktopTestAsync(ProcessStartInfo start)
+    {
+        using var child = Process.Start(start) ?? throw new InvalidOperationException("Cannot start the Pandesk transport test.");
+        var stdout = child.StandardOutput.ReadToEndAsync();
+        var stderr = child.StandardError.ReadToEndAsync();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        try { await child.WaitForExitAsync(deadline.Token); }
+        finally { if (!child.HasExited) { child.Kill(entireProcessTree: true); await child.WaitForExitAsync(); } }
+        Assert.True(child.ExitCode == 0, await stdout + await stderr);
+        Assert.Contains("1 passed", await stdout);
     }
 
     internal static X509Certificate2 CreateAuthority(RSA key)
@@ -83,11 +154,12 @@ public sealed class NativeLoginDesktopTlsTests
         return request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-2), DateTimeOffset.UtcNow.AddHours(1));
     }
 
-    internal static X509Certificate2 CreateServerCertificate(X509Certificate2 authority, RSA key)
+    internal static X509Certificate2 CreateServerCertificate(X509Certificate2 authority, RSA key, string? host = null)
     {
-        var request = new CertificateRequest($"CN={NativeLoginRouteTests.Host}", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        host ??= NativeLoginRouteTests.Host;
+        var request = new CertificateRequest($"CN={host}", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         var names = new SubjectAlternativeNameBuilder();
-        names.AddDnsName(NativeLoginRouteTests.Host);
+        names.AddDnsName(host);
         request.CertificateExtensions.Add(names.Build());
         request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
         request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
@@ -106,7 +178,7 @@ public sealed class NativeLoginDesktopTlsTests
         finally { CryptographicOperations.ZeroMemory(pfx); }
     }
 
-    private static async Task VerifyNativeWindowAsync(string executable, string certificate, int port)
+    private static async Task VerifyNativeWindowAsync(string executable, string certificate, int port, string? secondCertificate = null, int secondPort = 0)
     {
         Assert.True(Path.IsPathFullyQualified(executable) && File.Exists(executable));
         Assert.Equal("pandesk-auth-isolated.exe", Path.GetFileName(executable));
@@ -114,6 +186,11 @@ public sealed class NativeLoginDesktopTlsTests
         start.ArgumentList.Add("--auth-isolated");
         start.ArgumentList.Add(certificate);
         start.ArgumentList.Add(port.ToString(CultureInfo.InvariantCulture));
+        if (secondCertificate is not null)
+        {
+            start.ArgumentList.Add(secondCertificate);
+            start.ArgumentList.Add(secondPort.ToString(CultureInfo.InvariantCulture));
+        }
         start.Environment.Remove("PANDA_AUTH_TEST_POSTGRES");
         using var window = Process.Start(start) ?? throw new InvalidOperationException("Cannot start the Pandesk window.");
         try
