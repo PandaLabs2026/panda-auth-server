@@ -16,12 +16,29 @@ using PandaAuth.Server.Configuration;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
+using PandaAuth.Shared;
 using Xunit;
 
 namespace PandaAuth.Tests;
 
 public sealed class CloudControlProtocolTests
 {
+    internal static Uri Callback(string client) => client switch
+    {
+        FirstPartyClients.CloudConsoleWeb => new("https://console.pandacloud.cc/callback/pandaauth"),
+        FirstPartyClients.FleetAdminWeb => new("https://fleet.pandacloud.cc/callback/pandaauth"),
+        FirstPartyClients.CloudOperationWeb => new("https://operation.pandacloud.cc/signin-oidc"),
+        _ => throw new ArgumentOutOfRangeException(nameof(client))
+    };
+
+    internal static Uri LogoutCallback(string client) => client switch
+    {
+        FirstPartyClients.CloudConsoleWeb => new("https://console.pandacloud.cc/callback/logout/pandaauth"),
+        FirstPartyClients.FleetAdminWeb => new("https://fleet.pandacloud.cc/callback/logout/pandaauth"),
+        FirstPartyClients.CloudOperationWeb => new("https://operation.pandacloud.cc/signout-callback-oidc"),
+        _ => throw new ArgumentOutOfRangeException(nameof(client))
+    };
+
     [PostgresFact]
     public async Task Real_PKCE_encrypted_tokens_refresh_and_introspection_keep_each_existing_Web_profile_separate()
     {
@@ -41,6 +58,12 @@ public sealed class CloudControlProtocolTests
             Assert.Equal(5,token.Access.Split('.').Length);
             var claims=await fixture.InspectAsync(browser,token.Access);
             AssertIdentity(claims,client,fixture.Subject,allowed);
+            if(client==FirstPartyClients.CloudOperationWeb)
+            {
+                var session = await fixture.InspectAsync(browser,token.Access,client);
+                Assert.True(session.GetProperty("active").GetBoolean());
+                Assert.Equal(fixture.Subject,session.GetProperty("sub").GetString());
+            }
             var time=claims.GetProperty("auth_time").GetInt64();
             using var response=await browser.PostAsync("/connect/token",new FormUrlEncodedContent(new Dictionary<string,string>
             {
@@ -65,12 +88,17 @@ public sealed class CloudControlProtocolTests
             Assert.Equal(HttpStatusCode.BadRequest,machine.StatusCode);
             Assert.Contains("unauthorized_client",await machine.Content.ReadAsStringAsync(),StringComparison.Ordinal);
         }
+
+        using var retiredCallback = await browser.GetAsync(Fixture.AuthorizationRequest(
+            FirstPartyClients.FleetAdminWeb, ["fleet.read"], new Uri("https://fleet.pandacloud.cc/admin/callback/pandaauth")));
+        Assert.Equal(HttpStatusCode.BadRequest, retiredCallback.StatusCode);
+        Assert.Null(retiredCallback.Headers.Location);
     }
 
     private static void AssertIdentity(JsonElement claims,string client,string subject,string[] allowed)
     {
         Assert.True(claims.GetProperty("active").GetBoolean());
-        Assert.Equal("https://auth.appliket.com/",claims.GetProperty("iss").GetString());
+        Assert.Equal(PandaMadeScopes.CloudIssuer,claims.GetProperty("iss").GetString());
         Assert.Equal(client,claims.GetProperty("client_id").GetString());
         Assert.Equal(subject,claims.GetProperty("sub").GetString());
         Assert.Equal("human",claims.GetProperty("subject_type").GetString());
@@ -100,7 +128,7 @@ public sealed class CloudControlProtocolTests
                 await CloudControlRegistrationTests.PrepareAsync(scope.ServiceProvider);
                 var db=scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();var connection=db.Database.GetConnectionString()!;
                 await CloudControlRegistration.ApplyOnlyAsync(scope.ServiceProvider,new AuthOptions
-                    {Issuer="https://auth.appliket.com/",CloudControl=new(){Enabled=true}});
+                    {Issuer=PandaMadeScopes.CloudIssuer,CloudControl=new(){Enabled=true}});
                 var users=new ServiceCollection().AddLogging();users.AddSingleton(Options.Create(new AuthOptions()));
                 users.AddDbContext<PandaAuthDbContext>(options=>options.UseNpgsql(connection).UseOpenIddict());users.AddUserStore();
                 await using var userProvider=users.BuildServiceProvider();
@@ -118,10 +146,9 @@ public sealed class CloudControlProtocolTests
                 .RevokeUserTokensAsync(Subject,client);
         }
         internal HttpClient Browser()=>factory.CreateClient(new WebApplicationFactoryClientOptions
-            {BaseAddress=new Uri("https://auth.appliket.com/"),AllowAutoRedirect=false,HandleCookies=true});
-        private static string Callback(string client)=>"https://fixture.invalid/"+client+"/callback";
-        internal static string AuthorizationRequest(string client,IEnumerable<string> scopes)=>
-            "/connect/authorize?client_id="+client+"&redirect_uri="+Uri.EscapeDataString(Callback(client))+
+            {BaseAddress=new Uri(PandaMadeScopes.CloudIssuer),AllowAutoRedirect=false,HandleCookies=true});
+        internal static string AuthorizationRequest(string client,IEnumerable<string> scopes,Uri? callback=null)=>
+            "/connect/authorize?client_id="+client+"&redirect_uri="+Uri.EscapeDataString((callback??Callback(client)).AbsoluteUri)+
             "&response_type=code&scope="+Uri.EscapeDataString("openid profile offline_access "+string.Join(' ',scopes))+
             "&state=cloud-control-state&nonce=cloud-control-nonce&code_challenge_method=S256&code_challenge="+
             Microsoft.IdentityModel.Tokens.Base64UrlEncoder.Encode(SHA256.HashData(Encoding.ASCII.GetBytes(Verifier)));
@@ -145,21 +172,22 @@ public sealed class CloudControlProtocolTests
                 using var authorized=await browser.GetAsync(authorize);Assert.Equal(HttpStatusCode.Redirect,authorized.StatusCode);
                 location=authorized.Headers.Location!;
             }
+            Assert.Equal(Callback(client), new Uri(location.GetLeftPart(UriPartial.Path)));
             var query=QueryHelpers.ParseQuery(location.Query);Assert.Equal("cloud-control-state",query["state"].ToString());
             Assert.True(query.ContainsKey("code"));
             using var exchange=await browser.PostAsync("/connect/token",new FormUrlEncodedContent(new Dictionary<string,string>
             {
                 ["client_id"]=client,["client_secret"]="existing-fixture-secret",["grant_type"]="authorization_code",
-                ["code"]=query["code"].ToString(),["redirect_uri"]=Callback(client),["code_verifier"]=Verifier
+                ["code"]=query["code"].ToString(),["redirect_uri"]=Callback(client).AbsoluteUri,["code_verifier"]=Verifier
             }));
             Assert.Equal(HttpStatusCode.OK,exchange.StatusCode);
             using var json=JsonDocument.Parse(await exchange.Content.ReadAsStringAsync());
             return (json.RootElement.GetProperty("access_token").GetString()!,json.RootElement.GetProperty("refresh_token").GetString()!);
         }
-        internal async Task<JsonElement> InspectAsync(HttpClient browser,string token)
+        internal async Task<JsonElement> InspectAsync(HttpClient browser,string token,string clientId="fleet-api")
         {
             using var response=await browser.PostAsync("/connect/introspect",new FormUrlEncodedContent(new Dictionary<string,string>
-                {["client_id"]="fleet-api",["client_secret"]="api-fixture-secret",["token"]=token}));
+                {["client_id"]=clientId,["client_secret"]=clientId=="fleet-api"?"api-fixture-secret":"existing-fixture-secret",["token"]=token}));
             Assert.Equal(HttpStatusCode.OK,response.StatusCode);using var json=JsonDocument.Parse(await response.Content.ReadAsStringAsync());
             return json.RootElement.Clone();
         }
@@ -169,7 +197,7 @@ public sealed class CloudControlProtocolTests
     {
         private readonly ProtocolHostContentRoot root=new(connection,new Dictionary<string,string>
         {
-            ["Auth:Issuer"]="https://auth.appliket.com/",["Auth:HttpsRequired"]="false",["Auth:Seed:Enabled"]="false",
+            ["Auth:Issuer"]=PandaMadeScopes.CloudIssuer,["Auth:HttpsRequired"]="false",["Auth:Seed:Enabled"]="false",
             ["Auth:CloudControl:Enabled"]="true"
         });
         protected override void ConfigureWebHost(IWebHostBuilder builder)

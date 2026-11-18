@@ -10,6 +10,8 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using PandaAuth.Server.Infrastructure.Persistence;
+using PandaAuth.Shared;
 using Xunit;
 
 namespace PandaAuth.Tests;
@@ -22,6 +24,7 @@ public sealed class CloudControlServiceJointTests
         await using var auth=await CloudControlProtocolTests.Fixture.CreateAsync();using var browser=auth.Browser();
         await using var joint=await Joint.StartAsync(auth);
         var console=(await auth.TokenAsync(browser,"cloud-console-web",["cloud.resources.read","cloud.resources.manage","fleet.approve"])).Access;
+        Assert.False((await auth.InspectAsync(browser,console,FirstPartyClients.CloudOperationWeb)).GetProperty("active").GetBoolean());
         var fleet=(await auth.TokenAsync(browser,"fleet-admin-web",["fleet.read","cloud.health.check"])).Access;
         var operation=(await auth.TokenAsync(browser,"cloud-operation-web",["cloud.resources.summary.read"])).Access;
         var noAudience=(await auth.TokenAsync(browser,"cloud-console-web",[])).Access;
@@ -70,8 +73,9 @@ public sealed class CloudControlServiceJointTests
             if(!OperatingSystem.IsLinux())throw new InvalidOperationException();
             runId=Guid.NewGuid().ToString("N");root=Path.Combine(Path.GetTempPath(),"cloud-control-joint-"+runId);
             Directory.CreateDirectory(root);File.SetUnixFileMode(root,UnixFileMode.UserRead|UnixFileMode.UserWrite|UnixFileMode.UserExecute);
-            using var key=RSA.Create(2048);var request=new CertificateRequest("CN=auth.appliket.com",key,HashAlgorithmName.SHA256,RSASignaturePadding.Pkcs1);
-            var names=new SubjectAlternativeNameBuilder();names.AddDnsName("auth.appliket.com");names.AddDnsName("localhost");names.AddIpAddress(IPAddress.Loopback);
+            var host=new Uri(PandaMadeScopes.CloudIssuer).Host;
+            using var key=RSA.Create(2048);var request=new CertificateRequest("CN="+host,key,HashAlgorithmName.SHA256,RSASignaturePadding.Pkcs1);
+            var names=new SubjectAlternativeNameBuilder();names.AddDnsName(host);names.AddDnsName("localhost");names.AddIpAddress(IPAddress.Loopback);
             request.CertificateExtensions.Add(names.Build());request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true,false,0,true));
             certificate=request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5),DateTimeOffset.UtcNow.AddHours(1));
             Write("run-id",runId);Write("certificate.pem",certificate.ExportCertificatePem());Write("key.pem",key.ExportPkcs8PrivateKeyPem());
@@ -96,7 +100,7 @@ public sealed class CloudControlServiceJointTests
                     if(joint.Unavailable){context.Response.StatusCode=503;return;}
                     if(!context.Request.Path.StartsWithSegments("/.well-known")&&context.Request.Path!="/connect/introspect")
                     {context.Response.StatusCode=404;return;}
-                    using var request=new HttpRequestMessage(new HttpMethod(context.Request.Method),"https://auth.appliket.com"+context.Request.Path+context.Request.QueryString);
+                    using var request=new HttpRequestMessage(new HttpMethod(context.Request.Method),PandaMadeScopes.CloudIssuer.TrimEnd('/')+context.Request.Path+context.Request.QueryString);
                     if(context.Request.ContentLength is >0){using var bytes=new MemoryStream();await context.Request.Body.CopyToAsync(bytes);request.Content=new ByteArrayContent(bytes.ToArray());}
                     foreach(var header in context.Request.Headers)
                         if(!new[]{"Host","Connection","Content-Length"}.Contains(header.Key,StringComparer.OrdinalIgnoreCase)
