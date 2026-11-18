@@ -18,6 +18,7 @@ using PandaAuth.Server.Features.Tokens;
 using PandaAuth.Server.Infrastructure.Messaging;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Features.Account;
+using PandaAuth.Server.Features.Authorization;
 using PandaAuth.Server.Infrastructure.Security;
 using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Shared;
@@ -148,6 +149,13 @@ static async Task RunServerAsync(string[] args)
     builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
     var authOptions = builder.Configuration.GetSection(AuthOptions.SectionName).Get<AuthOptions>() ?? new AuthOptions();
     builder.Services.AddSingleton(authOptions.TenantRouting);
+    var nativeLogin = NativeLoginRoute.ReadSettings(builder.Configuration, builder.Environment, authOptions.TenantRouting);
+    if (nativeLogin is not null)
+    {
+        builder.Services.AddSingleton(nativeLogin);
+        builder.Services.AddScoped<NativeLoginChallengeService>();
+        builder.Services.AddScoped<AuthorizationController>();
+    }
     builder.Services.AddSingleton<ITenantHostResolver, TenantHostResolver>();
     builder.Services.AddSingleton<TenantRedirectPolicy>();
     builder.Services.AddScoped<TenantContextAccessor>();
@@ -233,6 +241,8 @@ static async Task RunServerAsync(string[] args)
                 .SetRevocationEndpointUris(PandaAuthEndpoints.Revocation)
                 // JWKS 路径显式化：此前依赖 OpenIddict 默认值（同为 /.well-known/jwks），行为不变，契约成为单一事实源。
                 .SetJsonWebKeySetEndpointUris(PandaAuthEndpoints.JsonWebKeySet);
+
+            if (nativeLogin is not null) NativeLoginRoute.Configure(options);
 
             // 文档门禁：AccessToken 10 分钟；RefreshToken 可吊销。
             options.SetAccessTokenLifetime(TimeSpan.FromMinutes(10))
@@ -453,6 +463,7 @@ static async Task RunServerAsync(string[] args)
     }
 
     app.MapControllers();
+    if (nativeLogin is not null) NativeLoginRoute.Map(app);
     app.MapHealthChecks("/healthz");
 
     app.Run();

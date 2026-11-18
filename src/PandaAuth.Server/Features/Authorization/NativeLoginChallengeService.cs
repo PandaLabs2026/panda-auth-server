@@ -12,7 +12,7 @@ namespace PandaAuth.Server.Features.Authorization;
 // registration. The caller supplies the exact scope/resource context of the initial request.
 internal sealed record NativeLoginBinding(
     TenantId TenantId, Uri Issuer, string ClientId, string CodeChallenge, string? Scope,
-    ImmutableArray<string> Resources, string? RedirectUri)
+    ImmutableArray<string> Resources, string? RedirectUri, string? Nonce = null)
 {
     internal string StorageKey => Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
     {
@@ -23,6 +23,7 @@ internal sealed record NativeLoginBinding(
         Scope,
         Resources,
         RedirectUri,
+        Nonce,
     })));
 }
 
