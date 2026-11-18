@@ -8,6 +8,26 @@ namespace PandaAuth.Tests;
 
 public class MfaChallengeStoreTests
 {
+    [PostgresFact]
+    public async Task ConcurrentConsumers_OnlyOneReceivesTheChallenge()
+    {
+        await using var fixture = await SecurityProtocolFixture.CreateAsync();
+        await using var firstContext = fixture.Context();
+        await using var secondContext = fixture.Context();
+        var first = new MfaChallengeStore(firstContext, TimeProvider.System);
+        var second = new MfaChallengeStore(secondContext, TimeProvider.System);
+        const string purpose = "pandesk-native-login-test";
+        var challenge = await first.CreateAsync(purpose, fixture.UserId, [7], TimeSpan.FromMinutes(5), CancellationToken.None);
+
+        var results = await Task.WhenAll(
+            first.ConsumeAsync(challenge, purpose, fixture.UserId, CancellationToken.None),
+            second.ConsumeAsync(challenge, purpose, fixture.UserId, CancellationToken.None));
+
+        var consumed = Assert.Single(results.OfType<ConsumedMfaChallenge>());
+        Assert.Equal(new byte[] { 7 }, consumed.Value);
+        Assert.Null(await first.ConsumeAsync(challenge, purpose, fixture.UserId, CancellationToken.None));
+    }
+
     [Fact]
     public async Task Challenge_CanOnlyBeConsumedOnceByItsBoundSubject()
     {
