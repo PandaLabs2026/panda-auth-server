@@ -236,6 +236,8 @@ public sealed class CloudControlRegistrationTests
                 Requirements={Requirements.Features.ProofKeyForCodeExchange}};
             if(client==FirstPartyClients.FleetAdminWeb)
                 foreach(var name in PandaAuthScopes.FleetAll)descriptor.Permissions.Add(Permissions.Prefixes.Scope+name);
+            if(client is FirstPartyClients.CloudConsoleWeb or FirstPartyClients.FleetAdminWeb)
+                descriptor.Permissions.Add(Permissions.Scopes.Roles);
             if(client==FirstPartyClients.CloudOperationWeb)
                 descriptor.Permissions.Add(Permissions.Endpoints.Introspection);
             await apps.CreateAsync(descriptor);

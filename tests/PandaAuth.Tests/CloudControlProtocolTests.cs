@@ -119,7 +119,7 @@ public sealed class CloudControlProtocolTests
         internal string Subject {get;}
         private Fixture(AuthQualityPostgresFixture database,string connection,string subject)
         {this.database=database;Subject=subject;factory=new(connection);}
-        internal static async Task<Fixture> CreateAsync()
+        internal static async Task<Fixture> CreateAsync(bool consoleBrowser=false)
         {
             var database=await AuthQualityPostgresFixture.CreateAsync();
             try
@@ -133,7 +133,14 @@ public sealed class CloudControlProtocolTests
                 users.AddDbContext<PandaAuthDbContext>(options=>options.UseNpgsql(connection).UseOpenIddict());users.AddUserStore();
                 await using var userProvider=users.BuildServiceProvider();
                 var user=new PandaUser {UserName="cloud-control-user",Email="cloud-control@example.test",EmailConfirmed=true};
-                Assert.True((await userProvider.GetRequiredService<UserService>().CreateAsync(user,Password)).Succeeded);
+                var userStore=userProvider.GetRequiredService<UserService>();
+                Assert.True((await userStore.CreateAsync(user,Password)).Succeeded);
+                if(consoleBrowser)
+                {
+                    var roles=userProvider.GetRequiredService<RoleService>();
+                    Assert.True((await roles.CreateAsync(new PandaRole{Name="cloud-admin"})).Succeeded);
+                    Assert.True((await userStore.AddToRoleAsync(user,"cloud-admin")).Succeeded);
+                }
                 return new(database,connection,user.Id);
             }
             catch {await database.DisposeAsync();throw;}
