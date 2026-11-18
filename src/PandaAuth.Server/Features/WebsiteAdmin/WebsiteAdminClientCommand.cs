@@ -112,7 +112,8 @@ internal static class WebsiteAdminClientCommand
                 if (current.ClientType != descriptor.ClientType || current.ConsentType != descriptor.ConsentType ||
                     !current.Requirements.SetEquals(descriptor.Requirements) ||
                     !await manager.ValidateClientSecretAsync(existing, secret)) throw new InvalidOperationException();
-                var permissionsChanged = !current.Permissions.SetEquals(descriptor.Permissions);
+                var expectedPermissions = GetExpectedPermissions(descriptor, current);
+                var permissionsChanged = !current.Permissions.SetEquals(expectedPermissions);
                 if (callbackSet.RootProtocol && permissionsChanged) throw new InvalidOperationException();
                 var redirectsChanged = !current.RedirectUris.SetEquals(descriptor.RedirectUris) || !current.PostLogoutRedirectUris.SetEquals(descriptor.PostLogoutRedirectUris);
                 if (permissionsChanged && redirectsChanged) throw new InvalidOperationException();
@@ -122,11 +123,11 @@ internal static class WebsiteAdminClientCommand
                     // 受控权限升级:只允许追加——现有多出的权限(裁剪)与缺口之外的变化一律失败关闭;
                     // 缺口集合必须与 request.json 的 expectedAdditionalPermissions 逐项精确相等,
                     // 防止描述符漂移被顺带放行。升级路径与回调迁移同源:Populate+Update+再验 secret+审计。
-                    var extra = current.Permissions.Except(descriptor.Permissions).ToHashSet(StringComparer.Ordinal);
-                    var missing = descriptor.Permissions.Except(current.Permissions).ToHashSet(StringComparer.Ordinal);
+                    var extra = current.Permissions.Except(expectedPermissions).ToHashSet(StringComparer.Ordinal);
+                    var missing = expectedPermissions.Except(current.Permissions).ToHashSet(StringComparer.Ordinal);
                     var expectedAdditional = root.GetProperty("expectedAdditionalPermissions").EnumerateArray().Select(x => x.GetString()!).ToHashSet(StringComparer.Ordinal);
                     if (extra.Count != 0 || missing.Count == 0 || !missing.SetEquals(expectedAdditional)) throw new InvalidOperationException();
-                    current.Permissions.Clear(); current.Permissions.UnionWith(descriptor.Permissions);
+                    current.Permissions.Clear(); current.Permissions.UnionWith(expectedPermissions);
                     addedPermissions = [.. missing.OrderBy(x => x, StringComparer.Ordinal)];
                 }
                 if (redirectsChanged || callbackSet.RootProtocol)
@@ -173,5 +174,15 @@ internal static class WebsiteAdminClientCommand
             Console.Error.WriteLine(exception.ToString());
             return 1;
         }
+    }
+
+    internal static ISet<string> GetExpectedPermissions(
+        OpenIddictApplicationDescriptor baseline, OpenIddictApplicationDescriptor current)
+    {
+        // Cloud control registration owns this grant. Callback changes only preserve it.
+        var summaryPermission = Permissions.Prefixes.Scope + CloudControlScopes.SummaryRead;
+        return current.Permissions.Contains(summaryPermission)
+            ? new HashSet<string>(baseline.Permissions, StringComparer.Ordinal) { summaryPermission }
+            : baseline.Permissions;
     }
 }
