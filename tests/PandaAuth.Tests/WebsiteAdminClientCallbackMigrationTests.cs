@@ -1,11 +1,38 @@
 using OpenIddict.Abstractions;
 using PandaAuth.Server.Features.WebsiteAdmin;
+using PandaAuth.Shared;
 using Xunit;
 
 namespace PandaAuth.Tests;
 
 public sealed class WebsiteAdminClientCallbackMigrationTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Existing_cloud_summary_grant_is_preserved_without_authorizing_other_permission_changes(bool registered)
+    {
+        var authorization = OpenIddictConstants.Permissions.Endpoints.Authorization;
+        var introspection = OpenIddictConstants.Permissions.Endpoints.Introspection;
+        var scopePrefix = OpenIddictConstants.Permissions.Prefixes.Scope;
+        var summary = scopePrefix + CloudControlScopes.SummaryRead;
+        var baseline = new OpenIddictApplicationDescriptor { Permissions = { authorization, introspection } };
+        var current = new OpenIddictApplicationDescriptor { Permissions = { authorization, introspection } };
+        if (registered)
+            current.Permissions.Add(summary);
+
+        Assert.True(current.Permissions.SetEquals(WebsiteAdminClientCommand.GetExpectedPermissions(baseline, current)));
+
+        current.Permissions.Add(scopePrefix + CloudControlScopes.ResourcesRead);
+        Assert.Equal([scopePrefix + CloudControlScopes.ResourcesRead],
+            current.Permissions.Except(WebsiteAdminClientCommand.GetExpectedPermissions(baseline, current)));
+
+        current.Permissions.Remove(introspection);
+        Assert.Equal([introspection],
+            WebsiteAdminClientCommand.GetExpectedPermissions(baseline, current).Except(current.Permissions));
+        Assert.DoesNotContain(summary, baseline.Permissions);
+    }
+
     private static WebsiteAdminCallbackSet Target()
     {
         using var endpoints = System.Text.Json.JsonDocument.Parse("""
