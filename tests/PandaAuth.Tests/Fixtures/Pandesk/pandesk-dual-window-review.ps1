@@ -1,4 +1,8 @@
-﻿param([Parameter(Mandatory)][int]$WindowPid, [Parameter(Mandatory)][string]$EvidenceDirectory)
+﻿param(
+    [Parameter(Mandatory)][int]$WindowPid,
+    [Parameter(Mandatory)][string]$EvidenceDirectory,
+    [ValidateSet('Switch', 'TrustMismatch')][string]$Scenario = 'Switch'
+)
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing
@@ -216,12 +220,28 @@ $currentStep = [int64][Math]::Floor([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 $lastStep = @{ A = $currentStep; B = $currentStep }
 Remove-Item Env:PANDESK_REVIEW_PASSWORD_A, Env:PANDESK_REVIEW_PASSWORD_B, Env:PANDESK_REVIEW_SEED_A, Env:PANDESK_REVIEW_SEED_B
 try {
-    Check-LateChallenge
-    Complete-Login A '01-signed-in-a.png'
-    Invoke-Control '切换组织'
-    Complete-Login B '02-signed-in-b.png' -CheckRecovery
-    Invoke-Control '切换组织'
-    Complete-Login A '03-signed-in-a-again.png'
+    if ($Scenario -eq 'TrustMismatch') {
+        Submit-Password A
+        [void](Wait-Control '无法完成安全登录。请检查本机联调服务后重试。')
+        $account = (Wait-Control '账号').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+        $account.SetValue('')
+        $deadline = [Diagnostics.Stopwatch]::StartNew()
+        while ($account.Current.Value) {
+            if ($deadline.Elapsed.TotalSeconds -ge 4) { throw 'Synthetic account did not clear before capture.' }
+            Start-Sleep -Milliseconds 75
+        }
+        Save-PandeskWindow '04-a-untrusted-certificate.png'
+        Press-AuthKey 0x1b
+        [void](Wait-Control 'Pandesk 联调组织 B')
+        Complete-Login B '05-b-after-certificate-rejection.png'
+    } else {
+        Check-LateChallenge
+        Complete-Login A '01-signed-in-a.png'
+        Invoke-Control '切换组织'
+        Complete-Login B '02-signed-in-b.png' -CheckRecovery
+        Invoke-Control '切换组织'
+        Complete-Login A '03-signed-in-a-again.png'
+    }
 } finally {
     foreach ($key in $keys.Values) { [Array]::Clear($key, 0, $key.Length) }
     $passwords.Clear()

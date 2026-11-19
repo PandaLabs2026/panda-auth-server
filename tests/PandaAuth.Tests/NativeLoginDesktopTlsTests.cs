@@ -104,8 +104,15 @@ public sealed class NativeLoginDesktopTlsTests
             SetDesktopFixture(start, "PANDESK_FIXTURE_SECOND", secondCertificate, secondPort, second);
             await RunDesktopTestAsync(start);
             if (windowExe is { Length: > 0 })
+            {
                 await VerifyNativeWindowAsync(windowExe, firstCertificate, firstPort, secondCertificate, secondPort,
                     delay is null ? null : app => VerifyOrganizationSwitchAsync(app, delay, first, second, firstSeed, secondSeed));
+                if (delay is not null)
+                {
+                    await VerifyNativeWindowAsync(windowExe, secondCertificate, firstPort, secondCertificate, secondPort,
+                        app => VerifyTrustMismatchAsync(app, delay, first, second, firstSeed, secondSeed));
+                }
+            }
         }
         finally
         {
@@ -121,31 +128,10 @@ public sealed class NativeLoginDesktopTlsTests
         SecurityProtocolFixture first, SecurityProtocolFixture second, byte[] firstSeed, byte[] secondSeed)
     {
         var evidenceDirectory = delay.EvidenceDirectory;
-        var script = Path.Combine(AppContext.BaseDirectory, "Fixtures", "Pandesk", "pandesk-dual-window-review.ps1");
-        Assert.True(File.Exists(script));
         var beforeA = await CountRedeemedCodesAsync(first);
         var beforeB = await CountRedeemedCodesAsync(second);
         var (wrongPasswordsBefore, consumedChallengesBefore) = await ReadRecoveryCountsAsync(second);
-        var powershell = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
-        var start = new ProcessStartInfo(powershell)
-        {
-            UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
-        };
-        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-Sta", "-File", script,
-                     app.Id.ToString(CultureInfo.InvariantCulture), evidenceDirectory })
-            start.ArgumentList.Add(arg);
-        start.Environment.Remove("PANDA_AUTH_TEST_POSTGRES");
-        start.Environment["PANDESK_REVIEW_PASSWORD_A"] = first.AdminPassword;
-        start.Environment["PANDESK_REVIEW_PASSWORD_B"] = second.AdminPassword;
-        start.Environment["PANDESK_REVIEW_SEED_A"] = Convert.ToBase64String(firstSeed);
-        start.Environment["PANDESK_REVIEW_SEED_B"] = Convert.ToBase64String(secondSeed);
-        using var driver = Process.Start(start) ?? throw new InvalidOperationException("Cannot start Windows UI verification.");
-        var stdout = driver.StandardOutput.ReadToEndAsync();
-        var stderr = driver.StandardError.ReadToEndAsync();
-        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-        try { await driver.WaitForExitAsync(deadline.Token); }
-        finally { if (!driver.HasExited) { driver.Kill(entireProcessTree: true); await driver.WaitForExitAsync(); } }
-        Assert.True(driver.ExitCode == 0, await stdout + await stderr);
+        await RunWindowDriverAsync(app, evidenceDirectory, first, second, firstSeed, secondSeed, "Switch");
         var afterA = await CountRedeemedCodesAsync(first) - beforeA;
         var afterB = await CountRedeemedCodesAsync(second) - beforeB;
         var (wrongPasswordsAfter, consumedChallengesAfter) = await ReadRecoveryCountsAsync(second);
@@ -163,6 +149,54 @@ public sealed class NativeLoginDesktopTlsTests
         Console.WriteLine($"One Pandesk window ({app.Id}) redeemed {afterA} codes at issuer A and {afterB} at issuer B.");
         Console.WriteLine("Issuer A accepted the cancellation of its delayed challenge while the window was on organization B.");
         Console.WriteLine($"Issuer B recorded {wrongPasswords} wrong password and consumed {consumedChallenges} distinct TOTP challenges during recovery.");
+    }
+
+    private static async Task VerifyTrustMismatchAsync(Process app, DelayedNativeChallenge observer,
+        SecurityProtocolFixture first, SecurityProtocolFixture second, byte[] firstSeed, byte[] secondSeed)
+    {
+        var requestsBefore = observer.ChallengeRequests;
+        Assert.True(requestsBefore > 0, "The observer did not see the earlier trusted login.");
+        var redeemedBeforeA = await CountRedeemedCodesAsync(first);
+        var redeemedBeforeB = await CountRedeemedCodesAsync(second);
+        await RunWindowDriverAsync(app, observer.EvidenceDirectory, first, second, firstSeed, secondSeed, "TrustMismatch");
+        var requestsA = observer.ChallengeRequests - requestsBefore;
+        var redeemedA = await CountRedeemedCodesAsync(first) - redeemedBeforeA;
+        var redeemedB = await CountRedeemedCodesAsync(second) - redeemedBeforeB;
+        Assert.Equal(0, requestsA);
+        Assert.Equal(0, redeemedA);
+        Assert.Equal(1, redeemedB);
+        Assert.False(app.HasExited);
+        await File.WriteAllTextAsync(Path.Combine(observer.EvidenceDirectory, "trust-mismatch-evidence.json"),
+            JsonSerializer.Serialize(new { windowPid = app.Id, firstIssuerChallengeRequests = requestsA,
+                firstIssuerRedemptions = redeemedA, secondIssuerRedemptions = redeemedB }));
+        Console.WriteLine("Pandesk rejected issuer A's untrusted certificate before sending a login request and redeemed one code at issuer B.");
+    }
+
+    private static async Task RunWindowDriverAsync(Process app, string evidenceDirectory,
+        SecurityProtocolFixture first, SecurityProtocolFixture second, byte[] firstSeed, byte[] secondSeed, string scenario)
+    {
+        var script = Path.Combine(AppContext.BaseDirectory, "Fixtures", "Pandesk", "pandesk-dual-window-review.ps1");
+        Assert.True(File.Exists(script));
+        var powershell = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
+        var start = new ProcessStartInfo(powershell)
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
+        };
+        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-Sta", "-File", script,
+                     app.Id.ToString(CultureInfo.InvariantCulture), evidenceDirectory, scenario })
+            start.ArgumentList.Add(arg);
+        start.Environment.Remove("PANDA_AUTH_TEST_POSTGRES");
+        start.Environment["PANDESK_REVIEW_PASSWORD_A"] = first.AdminPassword;
+        start.Environment["PANDESK_REVIEW_PASSWORD_B"] = second.AdminPassword;
+        start.Environment["PANDESK_REVIEW_SEED_A"] = Convert.ToBase64String(firstSeed);
+        start.Environment["PANDESK_REVIEW_SEED_B"] = Convert.ToBase64String(secondSeed);
+        using var driver = Process.Start(start) ?? throw new InvalidOperationException("Cannot start Windows UI verification.");
+        var stdout = driver.StandardOutput.ReadToEndAsync();
+        var stderr = driver.StandardError.ReadToEndAsync();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        try { await driver.WaitForExitAsync(deadline.Token); }
+        finally { if (!driver.HasExited) { driver.Kill(entireProcessTree: true); await driver.WaitForExitAsync(); } }
+        Assert.True(driver.ExitCode == 0, await stdout + await stderr);
     }
 
     private static async Task<(int WrongPasswords, int ConsumedChallenges)> ReadRecoveryCountsAsync(SecurityProtocolFixture fixture)
@@ -183,6 +217,7 @@ public sealed class NativeLoginDesktopTlsTests
         private readonly string cancellationObserved;
         private string? pendingHandle;
         private bool cancelled;
+        private int challengeRequests;
 
         internal DelayedNativeChallenge(string evidenceDirectory)
         {
@@ -197,6 +232,7 @@ public sealed class NativeLoginDesktopTlsTests
 
         internal string EvidenceDirectory { get; }
         internal bool Cancelled => Volatile.Read(ref cancelled);
+        internal int ChallengeRequests => Volatile.Read(ref challengeRequests);
 
         public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
         {
@@ -208,8 +244,14 @@ public sealed class NativeLoginDesktopTlsTests
         {
             var armedNow = File.Exists(armed);
             var handle = Volatile.Read(ref pendingHandle);
-            if ((!armedNow && handle is null) || context.Request.Path != NativeLoginRouteTests.Path ||
-                !HttpMethods.IsPost(context.Request.Method) || !context.Request.HasFormContentType)
+            if (context.Request.Path != NativeLoginRouteTests.Path || !HttpMethods.IsPost(context.Request.Method))
+            {
+                await next(context);
+                return;
+            }
+
+            Interlocked.Increment(ref challengeRequests);
+            if ((!armedNow && handle is null) || !context.Request.HasFormContentType)
             {
                 await next(context);
                 return;
