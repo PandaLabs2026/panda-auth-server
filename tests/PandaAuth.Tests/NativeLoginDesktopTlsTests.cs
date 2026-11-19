@@ -6,9 +6,12 @@ using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using OpenIddict.EntityFrameworkCore.Models;
 using Xunit;
+using static OpenIddict.Abstractions.OpenIddictConstants;
 
 namespace PandaAuth.Tests;
 
@@ -73,8 +76,8 @@ public sealed class NativeLoginDesktopTlsTests
         Assert.NotEqual(first.UserId, second.UserId);
         await NativeLoginRouteTests.RegisterAsync(first, NativeLoginRouteTests.ClientId);
         await NativeLoginRouteTests.RegisterAsync(second, NativeLoginRouteTests.ClientId, secondTenant);
-        await first.EnableTotpAsync(administrator: false);
-        await second.EnableTotpAsync(administrator: false);
+        var firstSeed = RandomNumberGenerator.GetBytes(20);
+        var secondSeed = RandomNumberGenerator.GetBytes(20);
         var firstPort = GetPort(first);
         var secondPort = GetPort(second);
         Assert.NotEqual(firstPort, secondPort);
@@ -84,21 +87,74 @@ public sealed class NativeLoginDesktopTlsTests
         var secondCertificate = Path.Combine(directory.FullName, "second-ca.cer");
         try
         {
+            await first.EnableTotpAsync(administrator: false, fixtureSecret: firstSeed);
+            await second.EnableTotpAsync(administrator: false, fixtureSecret: secondSeed);
             await File.WriteAllBytesAsync(firstCertificate, firstAuthority.Export(X509ContentType.Cert));
             await File.WriteAllBytesAsync(secondCertificate, secondAuthority.Export(X509ContentType.Cert));
             var start = CreateDesktopTest("isolated_dual_issuer_roundtrip");
             SetDesktopFixture(start, "PANDESK_FIXTURE", firstCertificate, firstPort, first);
             SetDesktopFixture(start, "PANDESK_FIXTURE_SECOND", secondCertificate, secondPort, second);
             await RunDesktopTestAsync(start);
-            if (Environment.GetEnvironmentVariable("PANDESK_AUTH_GUI_EXE") is { Length: > 0 } windowExe)
-                await VerifyNativeWindowAsync(windowExe, firstCertificate, firstPort, secondCertificate, secondPort);
+            var evidence = Environment.GetEnvironmentVariable("PANDESK_AUTH_UI_EVIDENCE_DIR");
+            var windowExe = Environment.GetEnvironmentVariable("PANDESK_AUTH_GUI_EXE");
+            if (!string.IsNullOrWhiteSpace(evidence)) Assert.False(string.IsNullOrWhiteSpace(windowExe));
+            if (windowExe is { Length: > 0 })
+                await VerifyNativeWindowAsync(windowExe, firstCertificate, firstPort, secondCertificate, secondPort,
+                    string.IsNullOrWhiteSpace(evidence) ? null : app => VerifyOrganizationSwitchAsync(app, evidence, first, second, firstSeed, secondSeed));
         }
         finally
         {
+            CryptographicOperations.ZeroMemory(firstSeed);
+            CryptographicOperations.ZeroMemory(secondSeed);
             File.Delete(firstCertificate);
             File.Delete(secondCertificate);
             directory.Delete();
         }
+    }
+
+    private static async Task VerifyOrganizationSwitchAsync(Process app, string evidenceDirectory,
+        SecurityProtocolFixture first, SecurityProtocolFixture second, byte[] firstSeed, byte[] secondSeed)
+    {
+        Assert.True(Path.IsPathFullyQualified(evidenceDirectory) && Directory.Exists(evidenceDirectory));
+        var script = Path.Combine(AppContext.BaseDirectory, "Fixtures", "Pandesk", "pandesk-dual-window-review.ps1");
+        Assert.True(File.Exists(script));
+        var beforeA = await CountRedeemedCodesAsync(first);
+        var beforeB = await CountRedeemedCodesAsync(second);
+        var powershell = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
+        var start = new ProcessStartInfo(powershell)
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
+        };
+        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-Sta", "-File", script,
+                     app.Id.ToString(CultureInfo.InvariantCulture), evidenceDirectory })
+            start.ArgumentList.Add(arg);
+        start.Environment.Remove("PANDA_AUTH_TEST_POSTGRES");
+        start.Environment["PANDESK_REVIEW_PASSWORD_A"] = first.AdminPassword;
+        start.Environment["PANDESK_REVIEW_PASSWORD_B"] = second.AdminPassword;
+        start.Environment["PANDESK_REVIEW_SEED_A"] = Convert.ToBase64String(firstSeed);
+        start.Environment["PANDESK_REVIEW_SEED_B"] = Convert.ToBase64String(secondSeed);
+        using var driver = Process.Start(start) ?? throw new InvalidOperationException("Cannot start Windows UI verification.");
+        var stdout = driver.StandardOutput.ReadToEndAsync();
+        var stderr = driver.StandardError.ReadToEndAsync();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        try { await driver.WaitForExitAsync(deadline.Token); }
+        finally { if (!driver.HasExited) { driver.Kill(entireProcessTree: true); await driver.WaitForExitAsync(); } }
+        Assert.True(driver.ExitCode == 0, await stdout + await stderr);
+        var afterA = await CountRedeemedCodesAsync(first) - beforeA;
+        var afterB = await CountRedeemedCodesAsync(second) - beforeB;
+        Assert.Equal(2, afterA);
+        Assert.Equal(1, afterB);
+        Assert.False(app.HasExited);
+        await File.WriteAllTextAsync(Path.Combine(evidenceDirectory, "same-window-issuer-evidence.json"),
+            System.Text.Json.JsonSerializer.Serialize(new { windowPid = app.Id, firstIssuerRedemptions = afterA, secondIssuerRedemptions = afterB }));
+        Console.WriteLine($"One Pandesk window ({app.Id}) redeemed {afterA} codes at issuer A and {afterB} at issuer B.");
+    }
+
+    private static async Task<int> CountRedeemedCodesAsync(SecurityProtocolFixture fixture)
+    {
+        await using var db = fixture.Context();
+        return await db.Set<OpenIddictEntityFrameworkCoreToken>().CountAsync(token => token.Subject == fixture.UserId &&
+            token.Type == TokenTypeIdentifiers.Private.AuthorizationCode && token.Status == Statuses.Redeemed);
     }
 
     private static int GetPort(SecurityProtocolFixture fixture)
@@ -178,7 +234,8 @@ public sealed class NativeLoginDesktopTlsTests
         finally { CryptographicOperations.ZeroMemory(pfx); }
     }
 
-    private static async Task VerifyNativeWindowAsync(string executable, string certificate, int port, string? secondCertificate = null, int secondPort = 0)
+    private static async Task VerifyNativeWindowAsync(string executable, string certificate, int port,
+        string? secondCertificate = null, int secondPort = 0, Func<Process, Task>? interact = null)
     {
         Assert.True(Path.IsPathFullyQualified(executable) && File.Exists(executable));
         Assert.Equal("pandesk-auth-isolated.exe", Path.GetFileName(executable));
@@ -205,6 +262,7 @@ public sealed class NativeLoginDesktopTlsTests
             Assert.Equal("Pandesk · 隔离认证联调", window.MainWindowTitle);
             Assert.True(window.Responding);
             Console.WriteLine($"Pandesk window: {window.MainWindowTitle}; responding; PID {window.Id}.");
+            if (interact is not null) await interact(window);
         }
         finally
         {
