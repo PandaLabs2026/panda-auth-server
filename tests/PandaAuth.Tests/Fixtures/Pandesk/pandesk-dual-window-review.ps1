@@ -117,11 +117,13 @@ function Save-PandeskWindow([string]$Name) {
     } finally { $bitmap.Dispose() }
 }
 
-function Submit-Password([string]$Organization) {
+function Submit-Password([string]$Organization, [switch]$WrongPassword) {
     Invoke-Control "Pandesk 联调组织 $Organization"
     Write-Field '账号' 'security-admin'
     Press-AuthKey 0x0d
-    Write-Field '密码' $passwords[$Organization] -AlreadyFocused
+    $password = $passwords[$Organization]
+    if ($WrongPassword) { $password += '-wrong' }
+    Write-Field '密码' $password -AlreadyFocused
     Press-AuthKey 0x0d
 }
 
@@ -166,7 +168,11 @@ function Get-FreshTotp([string]$Organization) {
         if ($step -le $lastStep[$Organization] -or ($seconds % 30) -ge 26) { Start-Sleep -Milliseconds 250 }
     } while ($step -le $lastStep[$Organization] -or ($seconds % 30) -ge 26)
     $lastStep[$Organization] = $step
-    $counter = [BitConverter]::GetBytes($step)
+    return Get-TotpForStep $Organization $step
+}
+
+function Get-TotpForStep([string]$Organization, [int64]$Step) {
+    $counter = [BitConverter]::GetBytes($Step)
     if ([BitConverter]::IsLittleEndian) { [Array]::Reverse($counter) }
     $mac = New-Object System.Security.Cryptography.HMACSHA1
     try {
@@ -179,9 +185,26 @@ function Get-FreshTotp([string]$Organization) {
     } finally { $mac.Dispose() }
 }
 
-function Complete-Login([string]$Organization, [string]$Screenshot) {
-    Start-Login $Organization
-    Write-Field '验证码' (Get-FreshTotp $Organization)
+function Check-RecoverableErrors([string]$Organization) {
+    Submit-Password $Organization -WrongPassword
+    [void](Wait-Control '账号或密码无效，请重试。')
+    Write-Field '密码' $passwords[$Organization] -AlreadyFocused
+    Press-AuthKey 0x0d
+    [void](Wait-Control '验证码')
+
+    $step = [int64][Math]::Floor([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() / 30)
+    $nearbyCodes = -2..2 | ForEach-Object { Get-TotpForStep $Organization ($step + $_) }
+    $wrongCode = 0..5 | ForEach-Object { $_.ToString('D6') } |
+        Where-Object { $_ -notin $nearbyCodes } | Select-Object -First 1
+    Write-Field '验证码' $wrongCode -AlreadyFocused
+    Press-AuthKey 0x0d
+    [void](Wait-Control '验证码无效，请输入当前验证码。')
+    Save-PandeskWindow '02-b-otp-retry.png'
+}
+
+function Complete-Login([string]$Organization, [string]$Screenshot, [switch]$CheckRecovery) {
+    if ($CheckRecovery) { Check-RecoverableErrors $Organization } else { Start-Login $Organization }
+    Write-Field '验证码' (Get-FreshTotp $Organization) -AlreadyFocused
     Press-AuthKey 0x0d
     [void](Wait-Control '切换组织')
     Save-PandeskWindow $Screenshot
@@ -196,7 +219,7 @@ try {
     Check-LateChallenge
     Complete-Login A '01-signed-in-a.png'
     Invoke-Control '切换组织'
-    Complete-Login B '02-signed-in-b.png'
+    Complete-Login B '02-signed-in-b.png' -CheckRecovery
     Invoke-Control '切换组织'
     Complete-Login A '03-signed-in-a-again.png'
 } finally {

@@ -125,6 +125,7 @@ public sealed class NativeLoginDesktopTlsTests
         Assert.True(File.Exists(script));
         var beforeA = await CountRedeemedCodesAsync(first);
         var beforeB = await CountRedeemedCodesAsync(second);
+        var (wrongPasswordsBefore, consumedChallengesBefore) = await ReadRecoveryCountsAsync(second);
         var powershell = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
         var start = new ProcessStartInfo(powershell)
         {
@@ -147,14 +148,31 @@ public sealed class NativeLoginDesktopTlsTests
         Assert.True(driver.ExitCode == 0, await stdout + await stderr);
         var afterA = await CountRedeemedCodesAsync(first) - beforeA;
         var afterB = await CountRedeemedCodesAsync(second) - beforeB;
+        var (wrongPasswordsAfter, consumedChallengesAfter) = await ReadRecoveryCountsAsync(second);
+        var wrongPasswords = wrongPasswordsAfter - wrongPasswordsBefore;
+        var consumedChallenges = consumedChallengesAfter - consumedChallengesBefore;
         Assert.Equal(2, afterA);
         Assert.Equal(1, afterB);
+        Assert.Equal(1, wrongPasswords);
+        Assert.Equal(2, consumedChallenges);
         Assert.True(delay.Cancelled, "Issuer A did not accept cancellation of the delayed challenge.");
         Assert.False(app.HasExited);
         await File.WriteAllTextAsync(Path.Combine(evidenceDirectory, "same-window-issuer-evidence.json"),
-            JsonSerializer.Serialize(new { windowPid = app.Id, firstIssuerRedemptions = afterA, secondIssuerRedemptions = afterB, delayedChallengeCancelled = delay.Cancelled }));
+            JsonSerializer.Serialize(new { windowPid = app.Id, firstIssuerRedemptions = afterA, secondIssuerRedemptions = afterB,
+                delayedChallengeCancelled = delay.Cancelled, secondIssuerWrongPasswords = wrongPasswords, secondIssuerConsumedChallenges = consumedChallenges }));
         Console.WriteLine($"One Pandesk window ({app.Id}) redeemed {afterA} codes at issuer A and {afterB} at issuer B.");
         Console.WriteLine("Issuer A accepted the cancellation of its delayed challenge while the window was on organization B.");
+        Console.WriteLine($"Issuer B recorded {wrongPasswords} wrong password and consumed {consumedChallenges} distinct TOTP challenges during recovery.");
+    }
+
+    private static async Task<(int WrongPasswords, int ConsumedChallenges)> ReadRecoveryCountsAsync(SecurityProtocolFixture fixture)
+    {
+        await using var db = fixture.Context();
+        var wrongPasswords = await db.LoginLogs.CountAsync(log => log.UserId == fixture.UserId &&
+            log.ClientId == NativeLoginRouteTests.ClientId && !log.Succeeded && log.FailureReason == "wrong_password");
+        var consumedChallenges = await db.MfaChallenges.CountAsync(challenge =>
+            challenge.Purpose == "native-login-totp" && challenge.ConsumedAt != null);
+        return (wrongPasswords, consumedChallenges);
     }
 
     private sealed class DelayedNativeChallenge : IStartupFilter
