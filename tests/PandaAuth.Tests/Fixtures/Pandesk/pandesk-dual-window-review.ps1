@@ -81,7 +81,7 @@ function Write-Field([string]$Name, [string]$Value) {
     }
 }
 
-function Save-SignedInWindow([string]$Name) {
+function Save-PandeskWindow([string]$Name) {
     $bounds = New-Object PandeskTestWindow+Rect
     if (![PandeskTestWindow]::GetWindowRect($window, [ref]$bounds)) { throw 'Cannot obtain Pandesk window bounds.' }
     $bitmap = [System.Drawing.Bitmap]::new(($bounds.Right - $bounds.Left), ($bounds.Bottom - $bounds.Top))
@@ -97,12 +97,45 @@ function Save-SignedInWindow([string]$Name) {
     } finally { $bitmap.Dispose() }
 }
 
-function Start-Login([string]$Organization) {
+function Submit-Password([string]$Organization) {
     Invoke-Control "Pandesk 联调组织 $Organization"
     Write-Field '账号' 'security-admin'
     Write-Field '密码' $passwords[$Organization]
     Invoke-Control '继续'
+}
+
+function Start-Login([string]$Organization) {
+    Submit-Password $Organization
     [void](Wait-Control '验证码')
+}
+
+function Wait-Phase([string]$Name) {
+    $phase = Join-Path $EvidenceDirectory $Name
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    while (!(Test-Path -LiteralPath $phase)) {
+        if ($deadline.Elapsed.TotalSeconds -ge 7) { throw "The isolated issuer did not report phase: $Name" }
+        Start-Sleep -Milliseconds 50
+    }
+}
+
+function Check-LateChallenge {
+    New-Item -ItemType File -Path (Join-Path $EvidenceDirectory 'delay-armed') | Out-Null
+    try {
+        Submit-Password A
+        Wait-Phase 'delay-held'
+        Invoke-Control '取消'
+        Invoke-Control 'Pandesk 联调组织 B'
+        [void](Wait-Control '账号')
+    } finally {
+        New-Item -ItemType File -Path (Join-Path $EvidenceDirectory 'delay-release') | Out-Null
+    }
+    Wait-Phase 'delay-cancelled'
+    $field = Wait-Control '账号'
+    $value = $field.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+    if ($value) { throw 'A delayed challenge changed the fresh account field in organization B.' }
+    [void](Wait-Control '继续')
+    Save-PandeskWindow '00-b-after-a-delayed-challenge.png'
+    Invoke-Control '取消'
 }
 
 function Get-FreshTotp([string]$Organization) {
@@ -130,7 +163,7 @@ function Complete-Login([string]$Organization, [string]$Screenshot) {
     Write-Field '验证码' (Get-FreshTotp $Organization)
     Invoke-Control '验证并登录'
     [void](Wait-Control '切换组织')
-    Save-SignedInWindow $Screenshot
+    Save-PandeskWindow $Screenshot
 }
 
 $passwords = @{ A = $env:PANDESK_REVIEW_PASSWORD_A; B = $env:PANDESK_REVIEW_PASSWORD_B }
@@ -139,12 +172,7 @@ $currentStep = [int64][Math]::Floor([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 $lastStep = @{ A = $currentStep; B = $currentStep }
 Remove-Item Env:PANDESK_REVIEW_PASSWORD_A, Env:PANDESK_REVIEW_PASSWORD_B, Env:PANDESK_REVIEW_SEED_A, Env:PANDESK_REVIEW_SEED_B
 try {
-    Start-Login A
-    Invoke-Control '取消'
-    Invoke-Control 'Pandesk 联调组织 B'
-    [void](Wait-Control '账号')
-    Invoke-Control '取消'
-
+    Check-LateChallenge
     Complete-Login A '01-signed-in-a.png'
     Invoke-Control '切换组织'
     Complete-Login B '02-signed-in-b.png'

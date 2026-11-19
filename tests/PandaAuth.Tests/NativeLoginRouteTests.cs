@@ -19,7 +19,7 @@ namespace PandaAuth.Tests;
 
 public sealed class NativeLoginRouteTests
 {
-    private const string Path = "/connect/native/authorize-challenge";
+    internal const string Path = "/connect/native/authorize-challenge";
     internal const string ClientId = "pandesk-native-isolated";
     private const string OtherClientId = "another-public-client";
     internal static readonly string Host = FixtureHost("t9876");

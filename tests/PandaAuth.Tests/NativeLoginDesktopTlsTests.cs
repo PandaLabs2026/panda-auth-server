@@ -3,9 +3,12 @@ using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text.Json;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -57,6 +60,10 @@ public sealed class NativeLoginDesktopTlsTests
     public async Task RustTransport_SeparatesSameEmailAccountsAcrossTwoNativeIssuers()
     {
         const string secondTenant = "t9877";
+        var evidence = Environment.GetEnvironmentVariable("PANDESK_AUTH_UI_EVIDENCE_DIR");
+        var windowExe = Environment.GetEnvironmentVariable("PANDESK_AUTH_GUI_EXE");
+        var delay = string.IsNullOrWhiteSpace(evidence) ? null : new DelayedNativeChallenge(evidence);
+        if (delay is not null) Assert.False(string.IsNullOrWhiteSpace(windowExe));
         using var firstAuthorityKey = RSA.Create(2048);
         using var secondAuthorityKey = RSA.Create(2048);
         using var firstServerKey = RSA.Create(2048);
@@ -68,6 +75,7 @@ public sealed class NativeLoginDesktopTlsTests
         using var firstServer = ImportForSchannel(firstGenerated);
         using var secondServer = ImportForSchannel(secondGenerated);
         await using var first = await SecurityProtocolFixture.CreateAsync(
+            configure: delay is null ? null : services => services.AddSingleton<IStartupFilter>(delay),
             settings: NativeLoginRouteTests.Settings(),
             configureHost: factory => factory.UseKestrel(options => options.Listen(IPAddress.Loopback, 0, listener => listener.UseHttps(firstServer))));
         await using var second = await SecurityProtocolFixture.CreateAsync(
@@ -95,12 +103,9 @@ public sealed class NativeLoginDesktopTlsTests
             SetDesktopFixture(start, "PANDESK_FIXTURE", firstCertificate, firstPort, first);
             SetDesktopFixture(start, "PANDESK_FIXTURE_SECOND", secondCertificate, secondPort, second);
             await RunDesktopTestAsync(start);
-            var evidence = Environment.GetEnvironmentVariable("PANDESK_AUTH_UI_EVIDENCE_DIR");
-            var windowExe = Environment.GetEnvironmentVariable("PANDESK_AUTH_GUI_EXE");
-            if (!string.IsNullOrWhiteSpace(evidence)) Assert.False(string.IsNullOrWhiteSpace(windowExe));
             if (windowExe is { Length: > 0 })
                 await VerifyNativeWindowAsync(windowExe, firstCertificate, firstPort, secondCertificate, secondPort,
-                    string.IsNullOrWhiteSpace(evidence) ? null : app => VerifyOrganizationSwitchAsync(app, evidence, first, second, firstSeed, secondSeed));
+                    delay is null ? null : app => VerifyOrganizationSwitchAsync(app, delay, first, second, firstSeed, secondSeed));
         }
         finally
         {
@@ -112,10 +117,10 @@ public sealed class NativeLoginDesktopTlsTests
         }
     }
 
-    private static async Task VerifyOrganizationSwitchAsync(Process app, string evidenceDirectory,
+    private static async Task VerifyOrganizationSwitchAsync(Process app, DelayedNativeChallenge delay,
         SecurityProtocolFixture first, SecurityProtocolFixture second, byte[] firstSeed, byte[] secondSeed)
     {
-        Assert.True(Path.IsPathFullyQualified(evidenceDirectory) && Directory.Exists(evidenceDirectory));
+        var evidenceDirectory = delay.EvidenceDirectory;
         var script = Path.Combine(AppContext.BaseDirectory, "Fixtures", "Pandesk", "pandesk-dual-window-review.ps1");
         Assert.True(File.Exists(script));
         var beforeA = await CountRedeemedCodesAsync(first);
@@ -144,10 +149,96 @@ public sealed class NativeLoginDesktopTlsTests
         var afterB = await CountRedeemedCodesAsync(second) - beforeB;
         Assert.Equal(2, afterA);
         Assert.Equal(1, afterB);
+        Assert.True(delay.Cancelled, "Issuer A did not accept cancellation of the delayed challenge.");
         Assert.False(app.HasExited);
         await File.WriteAllTextAsync(Path.Combine(evidenceDirectory, "same-window-issuer-evidence.json"),
-            System.Text.Json.JsonSerializer.Serialize(new { windowPid = app.Id, firstIssuerRedemptions = afterA, secondIssuerRedemptions = afterB }));
+            JsonSerializer.Serialize(new { windowPid = app.Id, firstIssuerRedemptions = afterA, secondIssuerRedemptions = afterB, delayedChallengeCancelled = delay.Cancelled }));
         Console.WriteLine($"One Pandesk window ({app.Id}) redeemed {afterA} codes at issuer A and {afterB} at issuer B.");
+        Console.WriteLine("Issuer A accepted the cancellation of its delayed challenge while the window was on organization B.");
+    }
+
+    private sealed class DelayedNativeChallenge : IStartupFilter
+    {
+        private readonly string armed;
+        private readonly string held;
+        private readonly string release;
+        private readonly string cancellationObserved;
+        private string? pendingHandle;
+        private bool cancelled;
+
+        internal DelayedNativeChallenge(string evidenceDirectory)
+        {
+            Assert.True(Path.IsPathFullyQualified(evidenceDirectory) && Directory.Exists(evidenceDirectory));
+            EvidenceDirectory = evidenceDirectory;
+            armed = Path.Combine(evidenceDirectory, "delay-armed");
+            held = Path.Combine(evidenceDirectory, "delay-held");
+            release = Path.Combine(evidenceDirectory, "delay-release");
+            cancellationObserved = Path.Combine(evidenceDirectory, "delay-cancelled");
+            Assert.DoesNotContain(new[] { armed, held, release, cancellationObserved }, File.Exists);
+        }
+
+        internal string EvidenceDirectory { get; }
+        internal bool Cancelled => Volatile.Read(ref cancelled);
+
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
+        {
+            app.Use(ObserveAsync);
+            next(app);
+        };
+
+        private async Task ObserveAsync(HttpContext context, RequestDelegate next)
+        {
+            var armedNow = File.Exists(armed);
+            var handle = Volatile.Read(ref pendingHandle);
+            if ((!armedNow && handle is null) || context.Request.Path != NativeLoginRouteTests.Path ||
+                !HttpMethods.IsPost(context.Request.Method) || !context.Request.HasFormContentType)
+            {
+                await next(context);
+                return;
+            }
+
+            var form = await context.Request.ReadFormAsync(context.RequestAborted);
+            if (armedNow && form["step"] == "password")
+            {
+                File.Delete(armed);
+                await HoldResponseAsync(context, next);
+                return;
+            }
+
+            await next(context);
+            if (handle is not null && form["step"] == "cancel" && form["challenge"] == handle &&
+                context.Response.StatusCode == StatusCodes.Status200OK)
+            {
+                Volatile.Write(ref pendingHandle, null);
+                Volatile.Write(ref cancelled, true);
+                await File.WriteAllTextAsync(cancellationObserved, string.Empty, context.RequestAborted);
+            }
+        }
+
+        private async Task HoldResponseAsync(HttpContext context, RequestDelegate next)
+        {
+            var response = context.Response;
+            var transport = response.Body;
+            using var buffered = new MemoryStream();
+            response.Body = buffered;
+            try
+            {
+                await next(context);
+                Assert.Equal(StatusCodes.Status202Accepted, response.StatusCode);
+                buffered.Position = 0;
+                using var body = await JsonDocument.ParseAsync(buffered, cancellationToken: context.RequestAborted);
+                var handle = body.RootElement.GetProperty("challenge").GetString();
+                Assert.True(Guid.TryParseExact(handle, "N", out _));
+                Volatile.Write(ref pendingHandle, handle);
+                await File.WriteAllTextAsync(held, string.Empty, context.RequestAborted);
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
+                deadline.CancelAfter(TimeSpan.FromSeconds(6));
+                while (!File.Exists(release)) await Task.Delay(25, deadline.Token);
+            }
+            finally { response.Body = transport; }
+            buffered.Position = 0;
+            await buffered.CopyToAsync(transport, context.RequestAborted);
+        }
     }
 
     private static async Task<int> CountRedeemedCodesAsync(SecurityProtocolFixture fixture)
