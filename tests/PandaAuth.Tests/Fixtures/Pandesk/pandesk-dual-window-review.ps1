@@ -18,9 +18,16 @@ public static class PandeskTestWindow {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr SendMessageTimeout(IntPtr window, uint message, UIntPtr character,
         IntPtr keyState, uint flags, uint timeout, out UIntPtr result);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool PostMessage(IntPtr window, uint message, UIntPtr key, IntPtr keyState);
     public static bool WriteCharacter(IntPtr window, char value) {
         UIntPtr result;
         return SendMessageTimeout(window, 0x0102, new UIntPtr(value), new IntPtr(1), 2, 1000, out result) != IntPtr.Zero;
+    }
+    public static bool PressKey(IntPtr window, uint key) {
+        var value = new UIntPtr(key);
+        return PostMessage(window, 0x0100, value, new IntPtr(1)) &&
+            PostMessage(window, 0x0101, value, new IntPtr(unchecked((int)0xc0000001)));
     }
     public static bool ClickField(IntPtr window, int x, int y) {
         var point = new Point { X = x, Y = y };
@@ -58,7 +65,15 @@ function Invoke-Control([string]$Name) {
     $control.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
 
-function Write-Field([string]$Name, [string]$Value) {
+function Press-AuthKey([uint32]$Key) {
+    [uint32]$owner = 0
+    [void][PandeskTestWindow]::GetWindowThreadProcessId($window, [ref]$owner)
+    if ($owner -ne $WindowPid -or ![PandeskTestWindow]::PressKey($window, $Key)) {
+        throw 'Pandesk did not accept the keyboard action.'
+    }
+}
+
+function Write-Field([string]$Name, [string]$Value, [switch]$AlreadyFocused) {
     $control = Wait-Control $Name
     [uint32]$owner = 0
     [void][PandeskTestWindow]::GetWindowThreadProcessId($window, [ref]$owner)
@@ -66,19 +81,24 @@ function Write-Field([string]$Name, [string]$Value) {
     if ($owner -ne $WindowPid -or $control.Current.ProcessId -ne $WindowPid -or $bounds.IsEmpty) {
         throw "The isolated Pandesk field is unavailable: $Name"
     }
-    if (![PandeskTestWindow]::ClickField($window, [int]($bounds.Left + $bounds.Width / 2), [int]($bounds.Top + $bounds.Height / 2))) {
+    if (!$AlreadyFocused -and ![PandeskTestWindow]::ClickField($window, [int]($bounds.Left + $bounds.Width / 2), [int]($bounds.Top + $bounds.Height / 2))) {
         throw "The isolated Pandesk field could not be selected: $Name"
     }
     Start-Sleep -Milliseconds 240
+    if ($Name -eq '账号') {
+        $field = Wait-Control $Name
+        $valuePattern = $field.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+        $valuePattern.SetValue($Value)
+        for ($i = 0; $i -lt 20; $i++) {
+            if ($valuePattern.Current.Value -eq $Value) { return }
+            Start-Sleep -Milliseconds 75
+        }
+        throw 'Pandesk did not receive the synthetic account name.'
+    }
     foreach ($character in $Value.ToCharArray()) {
         if (![PandeskTestWindow]::WriteCharacter($window, $character)) { throw 'Pandesk did not accept window input.' }
     }
     Start-Sleep -Milliseconds 180
-    if ($Name -eq '账号') {
-        $field = Wait-Control $Name
-        $valuePattern = $field.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-        if ($valuePattern.Current.Value -ne $Value) { throw 'Pandesk did not receive the synthetic account name.' }
-    }
 }
 
 function Save-PandeskWindow([string]$Name) {
@@ -100,8 +120,9 @@ function Save-PandeskWindow([string]$Name) {
 function Submit-Password([string]$Organization) {
     Invoke-Control "Pandesk 联调组织 $Organization"
     Write-Field '账号' 'security-admin'
-    Write-Field '密码' $passwords[$Organization]
-    Invoke-Control '继续'
+    Press-AuthKey 0x0d
+    Write-Field '密码' $passwords[$Organization] -AlreadyFocused
+    Press-AuthKey 0x0d
 }
 
 function Start-Login([string]$Organization) {
@@ -123,7 +144,7 @@ function Check-LateChallenge {
     try {
         Submit-Password A
         Wait-Phase 'delay-held'
-        Invoke-Control '取消'
+        Press-AuthKey 0x1b
         Invoke-Control 'Pandesk 联调组织 B'
         [void](Wait-Control '账号')
     } finally {
@@ -135,7 +156,7 @@ function Check-LateChallenge {
     if ($value) { throw 'A delayed challenge changed the fresh account field in organization B.' }
     [void](Wait-Control '继续')
     Save-PandeskWindow '00-b-after-a-delayed-challenge.png'
-    Invoke-Control '取消'
+    Press-AuthKey 0x1b
 }
 
 function Get-FreshTotp([string]$Organization) {
@@ -161,7 +182,7 @@ function Get-FreshTotp([string]$Organization) {
 function Complete-Login([string]$Organization, [string]$Screenshot) {
     Start-Login $Organization
     Write-Field '验证码' (Get-FreshTotp $Organization)
-    Invoke-Control '验证并登录'
+    Press-AuthKey 0x0d
     [void](Wait-Control '切换组织')
     Save-PandeskWindow $Screenshot
 }
