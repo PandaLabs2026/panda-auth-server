@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -60,6 +61,7 @@ public class CredentialControllerTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddMvcCore();
+        services.AddAntiforgery();
         services.AddDbContext<PandaAuthDbContext>(builder => builder.UseInMemoryDatabase(Guid.NewGuid().ToString("N")));
         services.AddUserStore();
         services.AddMemoryCache();
@@ -243,7 +245,7 @@ public class CredentialControllerTests
     {
         var (controller, _, _, _, _) = await CreateAsync();
 
-        var result = controller.ChangePassword("/admin");
+        var result = controller.ChangePassword(controller.HttpContext.RequestServices.GetRequiredService<IAntiforgery>(), "/admin");
 
         var view = Assert.IsType<ViewResult>(result);
         var model = Assert.IsType<ChangePasswordViewModel>(view.Model);
@@ -255,7 +257,7 @@ public class CredentialControllerTests
     {
         var (controller, _, _, _, _) = await CreateAsync();
 
-        var result = controller.ChangePassword("https://attacker.example/admin");
+        var result = controller.ChangePassword(controller.HttpContext.RequestServices.GetRequiredService<IAntiforgery>(), "https://attacker.example/admin");
 
         var view = Assert.IsType<ViewResult>(result);
         var model = Assert.IsType<ChangePasswordViewModel>(view.Model);
@@ -462,6 +464,25 @@ public class CredentialControllerTests
         Assert.Equal("new@example.com", (await users.FindByIdAsync(user.Id))!.Email);
         Assert.Equal([user.Id], revoker.RevokedUsers);
         Assert.IsType<BadRequestObjectResult>(await controller.ConfirmEmailChange(verification, cancellationToken));
+    }
+
+    [Fact]
+    public async Task PanelPasswordChange_RequiresMatchingSubjectAndRevokesTokens()
+    {
+        var (controller, _, _, revoker, users) = await CreateAsync();
+        var user = await SeedUserAsync(users, "password-panel@example.test");
+        controller.HttpContext.User = Principal(user.Id);
+        controller.Request.Headers.Accept = "application/json";
+        controller.Request.Headers["X-Panda-Account-Subject"] = "other-subject";
+        var model = new ChangePasswordViewModel { CurrentPassword = "Passw0rd!1234", NewPassword = "NewPass!2026x" };
+        var rejected = await controller.ChangePassword(model, CancellationToken.None);
+        Assert.Equal(409, Assert.IsType<ObjectResult>(rejected).StatusCode);
+        Assert.Empty(revoker.RevokedUsers);
+
+        controller.Request.Headers["X-Panda-Account-Subject"] = user.Id;
+        Assert.IsType<NoContentResult>(await controller.ChangePassword(model, CancellationToken.None));
+        Assert.Equal([user.Id], revoker.RevokedUsers);
+        Assert.True(await users.CheckPasswordAsync((await users.FindByIdAsync(user.Id))!, model.NewPassword));
     }
 
     [Fact]
