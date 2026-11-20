@@ -8,6 +8,8 @@ namespace PandaAuth.Server.Infrastructure.Persistence;
 
 internal static class PandaMadeProductRegistration
 {
+    private static readonly Uri DevelopmentOrigin = new("http://127.0.0.1:5091/");
+
     internal static void Validate(AuthOptions options)
     {
         var seed = options.Seed.PandamadeProduct;
@@ -38,10 +40,10 @@ internal static class PandaMadeProductRegistration
             ClientId = PandaMadeScopes.ProductWebClient,
             ClientType = ClientTypes.Confidential,
             ConsentType = ConsentTypes.Implicit,
-            DisplayName = "PandaMade Website",
+            DisplayName = "PandaMade Website (development)",
             ClientSecret = seed.WebClientSecret,
-            RedirectUris = { new Uri(PandaMadeScopes.ProductSignInCallback) },
-            PostLogoutRedirectUris = { new Uri(PandaMadeScopes.ProductSignOutCallback) },
+            RedirectUris = { new Uri(DevelopmentOrigin, new Uri(PandaMadeScopes.ProductSignInCallback).AbsolutePath) },
+            PostLogoutRedirectUris = { new Uri(DevelopmentOrigin, new Uri(PandaMadeScopes.ProductSignOutCallback).AbsolutePath) },
             Permissions =
             {
                 Permissions.Endpoints.Authorization,

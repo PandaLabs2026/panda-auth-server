@@ -44,8 +44,8 @@ public sealed class PandaMadeProductRegistrationTests
         Assert.NotNull(web);
         Assert.True(await apps.HasClientTypeAsync(web, ClientTypes.Confidential));
         Assert.True(await apps.ValidateClientSecretAsync(web, WebSecret));
-        Assert.Equal(PandaMadeScopes.ProductSignInCallback, Assert.Single(await apps.GetRedirectUrisAsync(web)));
-        Assert.Equal(PandaMadeScopes.ProductSignOutCallback, Assert.Single(await apps.GetPostLogoutRedirectUrisAsync(web)));
+        Assert.Equal("http://127.0.0.1:5091/auth/signin-oidc", Assert.Single(await apps.GetRedirectUrisAsync(web)));
+        Assert.Equal("http://127.0.0.1:5091/auth/signout-callback-oidc", Assert.Single(await apps.GetPostLogoutRedirectUrisAsync(web)));
         Assert.Equal(Requirements.Features.ProofKeyForCodeExchange, Assert.Single(await apps.GetRequirementsAsync(web)));
         Assert.Contains(Permissions.GrantTypes.RefreshToken, await apps.GetPermissionsAsync(web));
         Assert.Contains(Permissions.Prefixes.Scope + PandaMadeScopes.ProductAccount, await apps.GetPermissionsAsync(web));
@@ -65,6 +65,27 @@ public sealed class PandaMadeProductRegistrationTests
         Assert.NotNull(staff);
         Assert.Contains(Permissions.Prefixes.Scope + PandaMadeScopes.Manage, await apps.GetPermissionsAsync(staff));
         Assert.DoesNotContain(Permissions.Prefixes.Scope + PandaMadeScopes.ProductAccount, await apps.GetPermissionsAsync(staff));
+    }
+
+    [Fact]
+    public async Task ProductionCallbacksOnExistingCloudClientAreRejected()
+    {
+        using var provider = CreateProvider();
+        await DbSeeder.SeedAsync(provider);
+        var apps = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        var web = await apps.FindByClientIdAsync(PandaMadeScopes.ProductWebClient);
+        Assert.NotNull(web);
+        var descriptor = new OpenIddictApplicationDescriptor();
+        await apps.PopulateAsync(descriptor, web);
+        descriptor.RedirectUris.Clear();
+        descriptor.RedirectUris.Add(new Uri(PandaMadeScopes.ProductSignInCallback));
+        descriptor.PostLogoutRedirectUris.Clear();
+        descriptor.PostLogoutRedirectUris.Add(new Uri(PandaMadeScopes.ProductSignOutCallback));
+        await apps.UpdateAsync(web, descriptor);
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => DbSeeder.SeedAsync(provider));
+        Assert.Equal("PANDAMADE_PRODUCT_CLIENT_DRIFT", failure.Message);
+        Assert.Equal(PandaMadeScopes.ProductSignInCallback, Assert.Single(await apps.GetRedirectUrisAsync(web)));
     }
 
     [Theory]
