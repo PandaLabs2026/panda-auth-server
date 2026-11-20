@@ -1,5 +1,8 @@
 using System.Security.Claims;
 using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
@@ -344,6 +347,121 @@ public class CredentialControllerTests
         Assert.Equal("new@example.com", reloaded!.Email);
         Assert.True(reloaded.EmailConfirmed);
         Assert.Equal([user.Id], revoker.RevokedUsers);
+    }
+
+    [Fact]
+    public async Task PanelEmailChange_RejectsAnotherSessionBeforeIssuingToken()
+    {
+        var (controller, _, sender, _, users) = await CreateAsync();
+        var user = await SeedUserAsync(users, "signed-in@example.com");
+        controller.HttpContext.User = Principal(user.Id);
+        controller.Request.Headers.Accept = "application/json";
+        controller.Request.Headers["X-Panda-Account-Subject"] = "other-session";
+
+        var result = await controller.ChangeEmail(new ChangeEmailViewModel
+        {
+            NewEmail = "new@example.com",
+            CurrentPassword = "Passw0rd!1234",
+        }, CancellationToken.None);
+
+        Assert.Equal(409, Assert.IsType<ObjectResult>(result).StatusCode);
+        Assert.Empty(sender.Messages);
+    }
+
+    [PostgresFact]
+    public async Task PanelEmailChange_HttpRequiresSignedInCookieAndAntiforgeryForBothWrites()
+    {
+        const string start = "/account/change-email";
+        const string confirm = "/account/confirm-email-change";
+        const string client = "email-panel-test";
+        const string email = "new@example.test";
+        var sender = new StubEmailSender();
+        await using var fixture = await SecurityProtocolFixture.CreateAsync(services => services.AddSingleton<IEmailSender>(sender));
+        await fixture.RegisterClientAsync(client);
+        await fixture.EnableTotpAsync();
+        using var browser = fixture.Browser();
+
+        using (var anonymous = await browser.SendAsync(PanelRequest(HttpMethod.Get, start)))
+            Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        await fixture.IssueAsync(browser, client);
+        using (var legacy = await browser.GetAsync(start))
+        {
+            Assert.Equal(HttpStatusCode.OK, legacy.StatusCode);
+            Assert.Equal("text/html", legacy.Content.Headers.ContentType?.MediaType);
+        }
+        using var admissionResponse = await browser.SendAsync(PanelRequest(HttpMethod.Get, start));
+        Assert.Equal(HttpStatusCode.OK, admissionResponse.StatusCode);
+        Assert.True(admissionResponse.Headers.CacheControl?.NoStore);
+        var admission = await admissionResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var csrf = admission.GetProperty("token").GetString();
+        Assert.False(string.IsNullOrEmpty(csrf));
+        using (var missingCsrf = await browser.SendAsync(PanelRequest(HttpMethod.Post, start, "CurrentPassword", fixture.AdminPassword)))
+            Assert.Equal(HttpStatusCode.BadRequest, missingCsrf.StatusCode);
+        Assert.Empty(sender.Messages);
+        using (var sent = await browser.SendAsync(PanelRequest(HttpMethod.Post, start, "CurrentPassword", fixture.AdminPassword, csrf)))
+            Assert.Equal(HttpStatusCode.NoContent, sent.StatusCode);
+        var token = sender.TakeToken();
+        using (var missingCsrf = await browser.SendAsync(PanelRequest(HttpMethod.Post, confirm, "Token", token)))
+            Assert.Equal(HttpStatusCode.BadRequest, missingCsrf.StatusCode);
+        using (var completed = await browser.SendAsync(PanelRequest(HttpMethod.Post, confirm, "Token", token, csrf)))
+            Assert.Equal(HttpStatusCode.NoContent, completed.StatusCode);
+        using (var signedOut = await browser.SendAsync(PanelRequest(HttpMethod.Get, start)))
+            Assert.Equal(HttpStatusCode.Unauthorized, signedOut.StatusCode);
+
+        HttpRequestMessage PanelRequest(HttpMethod method, string path, string? field = null, string? value = null, string? csrfToken = null)
+        {
+            var request = new HttpRequestMessage(method, path);
+            request.Headers.Accept.ParseAdd("application/json");
+            request.Headers.Add("X-Requested-With", "XMLHttpRequest");
+            if (field is not null)
+            {
+                request.Headers.Add("X-Panda-Account-Subject", fixture.UserId);
+                request.Content = new FormUrlEncodedContent(new Dictionary<string, string> { ["NewEmail"] = email, [field] = value! });
+            }
+            if (csrfToken is not null) request.Headers.Add("RequestVerificationToken", csrfToken);
+            return request;
+        }
+    }
+
+    [Fact]
+    public async Task PanelEmailChange_RequiresPasswordAndTokenAndRevokesAuthorizations()
+    {
+        var (controller, _, sender, revoker, users) = await CreateAsync();
+        var user = await SeedUserAsync(users, "panel@example.com");
+        controller.HttpContext.User = Principal(user.Id);
+        controller.Request.Headers.Accept = "application/json";
+        controller.Request.Headers["X-Panda-Account-Subject"] = user.Id;
+        var cancellationToken = CancellationToken.None;
+
+        var wrongPassword = await controller.ChangeEmail(new ChangeEmailViewModel
+        {
+            NewEmail = "new@example.com",
+            CurrentPassword = "invalid",
+        }, cancellationToken);
+        Assert.IsType<BadRequestObjectResult>(wrongPassword);
+        Assert.Empty(sender.Messages);
+
+        var begin = await controller.ChangeEmail(new ChangeEmailViewModel
+        {
+            NewEmail = "new@example.com",
+            CurrentPassword = "Passw0rd!1234",
+        }, cancellationToken);
+        Assert.IsType<NoContentResult>(begin);
+        var token = sender.TakeToken();
+        Assert.Equal("panel@example.com", (await users.FindByIdAsync(user.Id))!.Email);
+
+        var verification = new ConfirmEmailChangeViewModel { NewEmail = "new@example.com", Token = token };
+        controller.Request.Headers["X-Panda-Account-Subject"] = "other-session";
+        var wrongSession = await controller.ConfirmEmailChange(verification, cancellationToken);
+        Assert.Equal(409, Assert.IsType<ObjectResult>(wrongSession).StatusCode);
+        Assert.Empty(revoker.RevokedUsers);
+
+        controller.Request.Headers["X-Panda-Account-Subject"] = user.Id;
+        var confirm = await controller.ConfirmEmailChange(verification, cancellationToken);
+        Assert.IsType<NoContentResult>(confirm);
+        Assert.Equal("new@example.com", (await users.FindByIdAsync(user.Id))!.Email);
+        Assert.Equal([user.Id], revoker.RevokedUsers);
+        Assert.IsType<BadRequestObjectResult>(await controller.ConfirmEmailChange(verification, cancellationToken));
     }
 
     [Fact]
