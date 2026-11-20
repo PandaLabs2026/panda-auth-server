@@ -39,6 +39,8 @@ public sealed class AuthorizationController(
         var request = HttpContext.GetOpenIddictServerRequest()
             ?? throw new InvalidOperationException("无法解析 OIDC 授权请求。");
 
+        if (request.HasScope(PandeskCustomerRead.Scope)) return InvalidPandeskScope();
+
         if (tenantContextAccessor.Current is { } tenant
             && (!Uri.TryCreate(request.RedirectUri, UriKind.Absolute, out var redirectUri)
                 || !tenantRedirectPolicy.IsAllowed(tenant, redirectUri)))
@@ -123,6 +125,8 @@ public sealed class AuthorizationController(
 
         if (request.IsClientCredentialsGrantType())
         {
+            if (request.HasScope(PandeskCustomerRead.Scope)) return InvalidPandeskScope();
+
             // 服务间调用：仅授予客户端身份，不涉及终端用户。
             var clientIdentity = new ClaimsIdentity(
                 TokenValidationParameters.DefaultAuthenticationType, Claims.Name, Claims.Role);
@@ -163,6 +167,9 @@ public sealed class AuthorizationController(
 
         var principal = await CreatePrincipalAsync(user, authResult.Principal!.GetScopes(), authResult.Principal,
             Claims.AuthenticationTime);
+        if (NativeLoginRoute.HasInvalidPandeskResources(principal)
+            || (principal.HasScope(PandeskCustomerRead.Scope) && !request.IsAuthorizationCodeGrantType()))
+            return InvalidPandeskScope();
         return SignIn(principal, OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
     }
 
@@ -369,6 +376,12 @@ public sealed class AuthorizationController(
         {
             [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.InvalidGrant,
             [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = description,
+        }), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+
+    private IActionResult InvalidPandeskScope()
+        => Forbid(new AuthenticationProperties(new Dictionary<string, string?>
+        {
+            [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.InvalidScope,
         }), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
 
     private IActionResult UserinfoError(string error)

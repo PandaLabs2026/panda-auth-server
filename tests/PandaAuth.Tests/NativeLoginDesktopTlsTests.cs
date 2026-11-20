@@ -308,7 +308,7 @@ public sealed class NativeLoginDesktopTlsTests
             token.Type == TokenTypeIdentifiers.Private.AuthorizationCode && token.Status == Statuses.Redeemed);
     }
 
-    private static int GetPort(SecurityProtocolFixture fixture)
+    internal static int GetPort(SecurityProtocolFixture fixture)
     {
         var listener = fixture.Host.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!;
         var endpoint = new Uri(Assert.Single(listener.Addresses));

@@ -80,6 +80,8 @@ internal static class NativeLoginRoute
             ], OpenIddictServerAspNetCoreDefaults.AuthenticationScheme));
             authorization.ControllerContext = new ControllerContext { HttpContext = http };
             var principal = await authorization.CreatePrincipalAsync(user, protocol.GetScopes(), authenticated);
+            if (HasInvalidPandeskResources(principal))
+                return Json(http, 400, new { error = Errors.InvalidScope });
             principal.SetAuthorizationCodeLifetime(AuthorizationCodeLifetime);
             return Results.SignIn(principal, authenticationScheme: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
         }
@@ -103,6 +105,14 @@ internal static class NativeLoginRoute
     {
         http.Response.Headers.CacheControl = "no-store";
         return Results.Json(body, statusCode: status);
+    }
+
+    internal static bool HasInvalidPandeskResources(ClaimsPrincipal principal)
+    {
+        if (!principal.HasScope(PandeskCustomerRead.Scope)) return false;
+        var resources = principal.GetResources();
+        return resources.Length != 2 || !resources.Contains(PandeskCustomerRead.Audience, StringComparer.Ordinal)
+            || !resources.Contains(PandeskCustomerRead.IntrospectionAudience, StringComparer.Ordinal);
     }
 
     private sealed class ExtractNativeRequest(Settings settings, ITenantHostResolver hosts, IOpenIddictApplicationManager applications)
@@ -161,13 +171,22 @@ internal static class NativeLoginRoute
                 return;
             }
 
-            var callback = new Uri(expectedIssuer, Callback).AbsoluteUri;
-            var binding = new NativeLoginBinding(tenant.TenantId, expectedIssuer, settings.ClientId,
-                form["code_challenge"].ToString(), Scopes.OpenId, [], callback, form["nonce"].ToString());
-            if (ReadStep(form, binding) is not { } pending
-                || await applications.FindByClientIdAsync(settings.ClientId, context.CancellationToken) is not { } application
+            if (await applications.FindByClientIdAsync(settings.ClientId, context.CancellationToken) is not { } application
                 || !await applications.HasClientTypeAsync(application, ClientTypes.Public, context.CancellationToken)
                 || !await applications.HasRequirementAsync(application, Requirements.Features.ProofKeyForCodeExchange, context.CancellationToken))
+            {
+                context.Reject(Errors.InvalidRequest);
+                return;
+            }
+
+            var scope = await applications.HasPermissionAsync(application,
+                Permissions.Prefixes.Scope + PandeskCustomerRead.Scope, context.CancellationToken)
+                ? $"{Scopes.OpenId} {PandeskCustomerRead.Scope}"
+                : Scopes.OpenId;
+            var callback = new Uri(expectedIssuer, Callback).AbsoluteUri;
+            var binding = new NativeLoginBinding(tenant.TenantId, expectedIssuer, settings.ClientId,
+                form["code_challenge"].ToString(), scope, [], callback, form["nonce"].ToString());
+            if (ReadStep(form, binding) is not { } pending)
             {
                 context.Reject(Errors.InvalidRequest);
                 return;
