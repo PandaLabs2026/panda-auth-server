@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PandaAuth.Server.Domain;
@@ -167,22 +168,30 @@ public sealed class CredentialController(
 
     [Authorize]
     [HttpGet("change-email")]
-    public IActionResult ChangeEmail(string? returnUrl = null)
-        => View(new ChangeEmailViewModel { ReturnUrl = NormalizeLocalReturnUrl(returnUrl) });
+    public IActionResult ChangeEmail([FromServices] IAntiforgery antiforgery, string? returnUrl = null)
+    {
+        Response.Headers.CacheControl = "no-store";
+        if (EmailPanelRequest)
+            return Json(new { token = antiforgery.GetAndStoreTokens(HttpContext).RequestToken });
+        return View(new ChangeEmailViewModel { ReturnUrl = NormalizeLocalReturnUrl(returnUrl) });
+    }
 
     [Authorize]
     [HttpPost("change-email")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> ChangeEmail(ChangeEmailViewModel model, CancellationToken cancellationToken)
     {
-        if (!ModelState.IsValid) return View(model);
+        if (!ModelState.IsValid) return EmailChangeError(model, "invalid_input");
         var user = await userManager.GetUserAsync(User);
-        if (user is null) return Challenge();
-        if (!user.EmailConfirmed) return ViewWithError(model, "请先确认当前邮箱。");
+        if (user is null) return EmailPanelRequest ? Unauthorized() : Challenge();
+        if (EmailPanelRequest && !MatchesEmailPanelSubject(user.Id))
+            return StatusCode(409, new { error = "session_changed" });
+        if (!user.EmailConfirmed) return EmailChangeError(model, "email_unconfirmed", "请先确认当前邮箱。");
         var check = await signInManager.CheckPasswordSignInAsync(user, model.CurrentPassword, lockoutOnFailure: true);
-        if (!check.Succeeded) return ViewWithError(model, "当前密码不正确。");
+        if (!check.Succeeded) return EmailChangeError(model, "password_invalid", "当前密码不正确。");
         var outcome = await verification.BeginEmailChangeAsync(check.User!.Id, model.NewEmail, cancellationToken);
-        if (!outcome.Succeeded) return ViewWithError(model, "无法变更邮箱，请检查目标地址。");
+        if (!outcome.Succeeded) return EmailChangeError(model, "email_unavailable", "无法变更邮箱，请检查目标地址。");
+        if (EmailPanelRequest) return NoContent();
         TempData["PendingEmail"] = model.NewEmail;
         TempData["ReturnUrl"] = NormalizeLocalReturnUrl(model.ReturnUrl);
         return RedirectToAction(nameof(ConfirmEmailChange));
@@ -203,14 +212,17 @@ public sealed class CredentialController(
     public async Task<IActionResult> ConfirmEmailChange(
         ConfirmEmailChangeViewModel model, CancellationToken cancellationToken)
     {
-        if (!ModelState.IsValid) return View(model);
+        if (!ModelState.IsValid) return EmailChangeError(model, "invalid_input");
         var user = await userManager.GetUserAsync(User);
-        if (user is null) return Challenge();
+        if (user is null) return EmailPanelRequest ? Unauthorized() : Challenge();
+        if (EmailPanelRequest && !MatchesEmailPanelSubject(user.Id))
+            return StatusCode(409, new { error = "session_changed" });
         var oldEmail = user.Email;
         var outcome = await verification.ConsumeEmailChangeAsync(
             user.Id, model.NewEmail, model.Token, cancellationToken);
-        if (!outcome.Succeeded) return ViewWithError(model, "令牌错误、已使用或已过期。");
-        await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: cancellationToken);
+        if (!outcome.Succeeded) return EmailChangeError(model, "token_invalid", "令牌错误、已使用或已过期。");
+        // Verification has committed the credential change. A closed tab cannot cancel revocation.
+        await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: CancellationToken.None);
         await signInManager.SignOutAsync(HttpContext);
         if (!string.IsNullOrWhiteSpace(oldEmail))
         {
@@ -220,8 +232,18 @@ public sealed class CredentialController(
                 logger.LogError(exception, "旧邮箱变更通知发送失败 userId={UserId}", user.Id);
             }
         }
-        return Redirect(NormalizeLocalReturnUrl(model.ReturnUrl));
+        return EmailPanelRequest ? NoContent() : Redirect(NormalizeLocalReturnUrl(model.ReturnUrl));
     }
+
+    // Me and the legacy pages use the same credential actions and antiforgery policy.
+    private bool EmailPanelRequest => Request.Headers.Accept.ToString() == "application/json";
+
+    private bool MatchesEmailPanelSubject(string userId)
+        => Request.Headers.TryGetValue("X-Panda-Account-Subject", out var values)
+            && values.Count == 1 && string.Equals(values[0], userId, StringComparison.Ordinal);
+
+    private IActionResult EmailChangeError(object model, string code, string? message = null)
+        => EmailPanelRequest ? BadRequest(new { error = code }) : message is null ? View(model) : ViewWithError(model, message);
 
     /// <summary>自助改密（已登录，IDP Cookie）：旧密码验证 + 新密码；成功后吊销全部令牌并登出。</summary>
     [Authorize]
