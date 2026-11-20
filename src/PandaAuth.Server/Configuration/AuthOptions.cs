@@ -139,6 +139,8 @@ public sealed class SeedOptions
 
     public PandamadeApiSeedOptions PandamadeApi { get; set; } = new();
 
+    public PandaMadeProductSeedOptions PandamadeProduct { get; set; } = new();
+
     public AsstWebSeedOptions AsstWeb { get; set; } = new();
 
     public AsstAdminSeedOptions AsstAdmin { get; set; } = new();
@@ -259,6 +261,13 @@ public sealed class PandamadeApiSeedOptions
     public bool Enabled { get; set; }
 
     public string ClientSecret { get; set; } = string.Empty;
+}
+
+public sealed class PandaMadeProductSeedOptions
+{
+    public bool Enabled { get; set; }
+    public string WebClientSecret { get; set; } = string.Empty;
+    public string ApiClientSecret { get; set; } = string.Empty;
 }
 
 // ---- Panda Assistant 客户端族（PANDA-INFRA-R1，panda-asst ADR 0095）----

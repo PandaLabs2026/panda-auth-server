@@ -23,6 +23,7 @@ public static class DbSeeder
         }
 
         CloudConfigRegistration.Validate(options);
+        PandaMadeProductRegistration.Validate(options);
 
         var roleManager = services.GetRequiredService<RoleService>();
         var userManager = services.GetRequiredService<UserService>();
@@ -34,6 +35,10 @@ public static class DbSeeder
         var reconciliation = new SeedPermissionReconciler(applications, options.Seed, db, logger, services.GetService<TimeProvider>() ?? TimeProvider.System);
 
         await CloudConfigRegistration.ValidateFleetReadClientAsync(applications, options.Seed.CloudConfig);
+
+        if (options.Seed.PandamadeProduct.Enabled)
+            await PandaMadeProductRegistration.SeedAsync(services.GetRequiredService<PandaAuthDbContext>(), applications,
+                scopes, options.Seed.PandamadeProduct);
 
         if (options.Seed.CloudConfig.Enabled)
         {

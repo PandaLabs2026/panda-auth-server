@@ -46,6 +46,7 @@ public static class StartupConfiguration
         Check("Auth:Retention", "retention_invalid", options.Retention.Validate);
         Check("Auth:Mfa", "mfa_invalid", () => options.Mfa.Validate(production));
         Check("Auth:Seed:CloudConfig", "cloud_registration_invalid", () => CloudConfigRegistration.Validate(options));
+        Check("Auth:Seed:PandamadeProduct", "pandamade_product_registration_invalid", () => PandaMadeProductRegistration.Validate(options));
         if (migrate)
         {
             if (options.Seed.Enabled) Check("Auth:Seed", "seed_permissions_invalid", () => SeedPermissionPolicy.Validate(options.Seed));
