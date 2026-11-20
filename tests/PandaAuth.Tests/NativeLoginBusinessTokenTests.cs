@@ -62,7 +62,7 @@ public sealed class NativeLoginBusinessTokenTests
         using var secondServer = NativeLoginDesktopTlsTests.CreateServerCertificate(secondAuthority, secondServerKey, NativeLoginRouteTests.FixtureHost(secondTenant));
         await using var first = await CreateIssuerAsync(firstTenant, firstServer);
         await using var second = await CreateIssuerAsync(secondTenant, secondServer);
-        var firstSecret = await RegisterAsync(first, firstTenant);
+        var firstSecret = await RegisterAsync(first, firstTenant, OtherClient);
         var secondSecret = await RegisterAsync(second, secondTenant);
         Assert.NotEqual(first.UserId, second.UserId);
 
@@ -87,7 +87,7 @@ public sealed class NativeLoginBusinessTokenTests
         Assert.False((await IntrospectAsync(b, secondSecret, accessB)).GetProperty("active").GetBoolean());
     }
 
-    private static Task<SecurityProtocolFixture> CreateIssuerAsync(string tenant, X509Certificate2 server)
+    internal static Task<SecurityProtocolFixture> CreateIssuerAsync(string tenant, X509Certificate2 server)
         => SecurityProtocolFixture.CreateAsync(settings: NativeLoginRouteTests.Settings(tenant),
             configureHost: factory => factory.UseKestrel(options =>
                 options.Listen(IPAddress.Loopback, 0, endpoint => endpoint.UseHttps(server))));
@@ -124,7 +124,7 @@ public sealed class NativeLoginBusinessTokenTests
         return new HttpClient(handler) { BaseAddress = issuer };
     }
 
-    private static async Task<string> RegisterAsync(SecurityProtocolFixture fixture, string tenant)
+    internal static async Task<string> RegisterAsync(SecurityProtocolFixture fixture, string tenant, string? revocationProbeClient = null)
     {
         await fixture.EnableTotpAsync(administrator: false);
         await NativeLoginRouteTests.RegisterAsync(fixture, ClientId, tenant);
@@ -137,12 +137,15 @@ public sealed class NativeLoginBusinessTokenTests
         await apps.PopulateAsync(descriptor, client);
         descriptor.Permissions.UnionWith([Permissions.Prefixes.Scope + ReadScope, Permissions.Endpoints.Revocation]);
         await apps.UpdateAsync(client, descriptor);
-        await apps.CreateAsync(new OpenIddictApplicationDescriptor
+        if (revocationProbeClient is not null)
         {
-            ClientId = OtherClient,
-            ClientType = ClientTypes.Public,
-            Permissions = { Permissions.Endpoints.Revocation },
-        });
+            await apps.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = revocationProbeClient,
+                ClientType = ClientTypes.Public,
+                Permissions = { Permissions.Endpoints.Revocation },
+            });
+        }
         var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         await apps.CreateAsync(new OpenIddictApplicationDescriptor
         {
