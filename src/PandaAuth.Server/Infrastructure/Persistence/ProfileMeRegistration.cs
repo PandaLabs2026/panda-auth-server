@@ -11,17 +11,25 @@ public static class ProfileMeRegistration
 {
     internal static readonly Uri ApexIssuer = new($"https://{TenantCanonicalHost.ApexFor(TenantId.Parse("t0000"), TenantProduct.PandaAuth)}/");
 
-    internal static async Task ApplyApexCallbacksAsync(IServiceProvider services)
+    private static readonly Uri OasisApexOrigin = new($"https://{TenantCanonicalHost.ApexFor(TenantId.Parse("t0000"), TenantProduct.PandaOasis)}/");
+
+    internal static async Task ApplyApexCallbacksAsync(IServiceProvider services, string clientId)
     {
+        var (origin, login, logout) = clientId switch
+        {
+            FirstPartyClients.MeWeb => (ApexIssuer, "me/callback/login/pandaauth", "me/callback/logout/pandaauth"),
+            FirstPartyClients.OasisWeb => (OasisApexOrigin, "signin-oidc", "/"),
+            _ => throw new InvalidOperationException("apex_callback_client_not_supported"),
+        };
         var db = services.GetRequiredService<PandaAuthDbContext>();
         if (!db.Database.IsRelational()) throw new InvalidOperationException("profile_registration_relational_required");
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         var apps = services.GetRequiredService<IOpenIddictApplicationManager>();
-        var app = await FindExistingMeAsync(apps);
+        var app = await FindExistingClientAsync(apps, clientId);
         var descriptor = new OpenIddictApplicationDescriptor();
         await apps.PopulateAsync(descriptor, app);
-        var hasNewLogin = descriptor.RedirectUris.Add(new Uri(ApexIssuer, "me/callback/login/pandaauth"));
-        var hasNewLogout = descriptor.PostLogoutRedirectUris.Add(new Uri(ApexIssuer, "me/callback/logout/pandaauth"));
+        var hasNewLogin = descriptor.RedirectUris.Add(new Uri(origin, login));
+        var hasNewLogout = descriptor.PostLogoutRedirectUris.Add(new Uri(origin, logout));
         if (hasNewLogin || hasNewLogout)
         {
             // The populated descriptor carries the existing stored client secret.
@@ -40,7 +48,7 @@ public static class ProfileMeRegistration
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         var apps = services.GetRequiredService<IOpenIddictApplicationManager>();
         var scopes = services.GetRequiredService<IOpenIddictScopeManager>();
-        var app = await FindExistingMeAsync(apps);
+        var app = await FindExistingClientAsync(apps, FirstPartyClients.MeWeb);
         var permissions = await apps.GetPermissionsAsync(app);
         // Check both scope mappings before creating or changing anything.
         foreach (var name in new[] { ProfileScopes.Read, ProfileScopes.Write })
@@ -65,15 +73,15 @@ public static class ProfileMeRegistration
         await transaction.CommitAsync();
     }
 
-    private static async Task<object> FindExistingMeAsync(IOpenIddictApplicationManager apps)
+    private static async Task<object> FindExistingClientAsync(IOpenIddictApplicationManager apps, string clientId)
     {
-        var app = await apps.FindByClientIdAsync(FirstPartyClients.MeWeb)
-            ?? throw new InvalidOperationException("profile_me_existing_client_required");
+        var app = await apps.FindByClientIdAsync(clientId)
+            ?? throw new InvalidOperationException("existing_first_party_client_required");
         var permissions = await apps.GetPermissionsAsync(app);
         if (!await apps.HasClientTypeAsync(app, ClientTypes.Confidential)
             || !permissions.Contains(Permissions.GrantTypes.AuthorizationCode)
             || !permissions.Contains(Permissions.GrantTypes.RefreshToken))
-            throw new InvalidOperationException("profile_me_client_drift");
+            throw new InvalidOperationException("first_party_client_drift");
         return app;
     }
 }
