@@ -1,3 +1,5 @@
+using PandaAuth.Shared;
+
 namespace PandaAuth.Server.Infrastructure.Persistence;
 
 /// <summary>
@@ -42,7 +44,7 @@ public static class FirstPartyClients
     public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
     {
         MeWeb, AdminWeb, OasisWeb, FleetAdminWeb, CloudConsoleWeb, AsstWeb, AsstAdmin,
-        PandamadeAdmin,
+        PandamadeAdmin, PandaMadeScopes.ProductWebClient, PandaMadeScopes.ProductApi,
         AsstMobile,
         AsstServer, FleetApi, MgmtApi, PandamadeApi,
         CloudOperationWeb,

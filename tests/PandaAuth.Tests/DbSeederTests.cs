@@ -972,6 +972,13 @@ public class DbSeederTests
         // （Management API 对名单只读）。新增播种客户端而未登记 FirstPartyClients 会在此失败，
         // 而不是等自动化通道误伤种子对账时才暴露。
         var options = ValidOptions();
+        options.Issuer = PandaMadeScopes.CloudIssuer;
+        options.Seed.PandamadeProduct = new PandaMadeProductSeedOptions
+        {
+            Enabled = true,
+            WebClientSecret = "product-web-fixture-secret-at-least-32",
+            ApiClientSecret = "product-api-fixture-secret-at-least-32",
+        };
         options.Seed.OasisWeb = new OasisWebSeedOptions
         {
             Enabled = true,
