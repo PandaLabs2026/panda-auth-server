@@ -80,11 +80,15 @@ public sealed class TenantRedirectPolicy
 
         // Portal uses the tenant host without a product label. OpenIddict still
         // requires an exact registered redirect URI before this tenant check.
-        if (string.Equals(redirectUri.Host, $"{context.TenantId.Value}.{context.Zone}.{TenantCanonicalHost.ZoneSuffix}",
-                StringComparison.OrdinalIgnoreCase)) // F2 收口:旧后缀已随旧通配删除不可达(2026-11-16)
+        // ADR-056 追记四: apex-form tenants (empty zone) use the bare apex portal host.
+        var portalHost = context.IsApexForm
+            ? TenantCanonicalHost.PortalApexHost(context.TenantId)
+            : $"{context.TenantId.Value}.{context.Zone}.{TenantCanonicalHost.ZoneSuffix}";
+        if (string.Equals(redirectUri.Host, portalHost, StringComparison.OrdinalIgnoreCase))
             return true;
 
-        // 同租户同分区的任一产品规范主机上的回调均放行（跨产品单点登录面）。
+        // 同租户同分区的任一产品规范主机上的回调均放行（跨产品单点登录面）；
+        // apex 上下文(zone 空串)经 For 自动取 apex 形态，分区上下文取分区形态。
         return Enum.GetValues<TenantProduct>().Any(product =>
             string.Equals(redirectUri.Host, TenantCanonicalHost.For(context.TenantId, product, context.Zone), StringComparison.OrdinalIgnoreCase)); // F2 收口
     }

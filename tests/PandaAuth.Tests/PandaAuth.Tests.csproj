@@ -28,6 +28,7 @@
   <ItemGroup><ProjectReference Include="../IdentityViewHost/PandaAuth.Server.IdentityViewHost.csproj" /></ItemGroup>
   <ItemGroup>
     <None Update="Fixtures/ProfileAvatar/*" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Fixtures/Pandesk/pandesk-dual-window-review.ps1" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <!-- Explicit isolated joint lane; ordinary Auth profiles do not build Oasis. -->
   <ItemGroup Condition="'$(OasisIdentityJoint)' == 'true'">
