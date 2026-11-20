@@ -1,5 +1,7 @@
 using System.Security.Claims;
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -22,6 +24,66 @@ namespace PandaAuth.Tests;
 public class LoginMfaChallengeTests
 {
     private static readonly byte[] TotpKey = Convert.FromBase64String("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+
+    [Fact]
+    public async Task NativeCandidate_ReusesPasswordAndTotpWithoutWebSession()
+    {
+        using var provider = Host(loginMfaEnabled: true);
+        var (users, user, secret) = await SeedUserWithTotpFactorAsync(provider);
+
+        // Resolve the account from the server-side fixture and use the same validators as Web login.
+        var account = await users.FindByNameAsync(user.UserName!);
+        Assert.NotNull(account);
+        var sessions = provider.GetRequiredService<LoginSessionService>();
+        Assert.False((await sessions.CheckPasswordSignInAsync(account, "Wrong password", lockoutOnFailure: true)).Succeeded);
+        var password = await sessions.CheckPasswordSignInAsync(account, "Strong!Pass123", lockoutOnFailure: true);
+        Assert.True(password.Succeeded);
+        Assert.Equal(user.Id, password.User?.Id);
+
+        var mfa = MfaService(provider);
+        Assert.True(await mfa.HasVerifiableFactorAsync(user.Id, CancellationToken.None));
+        Assert.False(await mfa.VerifyAsync(user.Id, "invalid", CancellationToken.None));
+        var code = TotpCode(secret);
+        Assert.True(await mfa.VerifyAsync(user.Id, code, CancellationToken.None));
+        Assert.False(await mfa.VerifyAsync(user.Id, code, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task NativeCandidate_ChallengeStoreCanBindAndConsumeAContextWithoutWebSession()
+    {
+        using var provider = Host(loginMfaEnabled: true);
+        var (_, user, _) = await SeedUserWithTotpFactorAsync(provider);
+        var clock = new StubTimeProvider(DateTimeOffset.UtcNow);
+        var store = new MfaChallengeStore(provider.GetRequiredService<PandaAuthDbContext>(), clock);
+        const string purpose = "pandesk-native-login-test";
+        var binding = new NativeCandidateBinding("org-a", "https://auth-a.example.test/", "pandesk", "s256-a");
+        var expiry = TimeSpan.FromMinutes(5);
+        var stamp = Encoding.UTF8.GetBytes(Assert.IsType<string>(user.SecurityStamp));
+        var handle = await store.CreateAsync(purpose, BindingKey(binding), stamp, expiry, CancellationToken.None);
+
+        Assert.Null(await Consume(binding with { Organization = "org-b" }));
+        Assert.Null(await Consume(binding with { Issuer = "https://auth-b.example.test/" }));
+        Assert.Null(await Consume(binding with { Client = "other-client" }));
+        Assert.Null(await Consume(binding with { PkceChallenge = "s256-b" }));
+        Assert.Null(await store.ConsumeAsync(handle, "web-login", BindingKey(binding), CancellationToken.None));
+
+        var accepted = await Consume(binding);
+        Assert.NotNull(accepted);
+        Assert.Equal(stamp, accepted.Value);
+        Assert.Null(await Consume(binding));
+
+        handle = await store.CreateAsync(purpose, BindingKey(binding), stamp, expiry, CancellationToken.None);
+        clock.Advance(expiry);
+        Assert.Null(await Consume(binding));
+
+        Task<ConsumedMfaChallenge?> Consume(NativeCandidateBinding candidate)
+            => store.ConsumeAsync(handle, purpose, BindingKey(candidate), CancellationToken.None);
+
+        string BindingKey(NativeCandidateBinding candidate)
+            => Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new { user.Id, Context = candidate })));
+    }
+
+    private sealed record NativeCandidateBinding(string Organization, string Issuer, string Client, string PkceChallenge);
 
     [Fact]
     public async Task EnabledWithActiveFactor_IssuesPendingChallengeInsteadOfSignIn()

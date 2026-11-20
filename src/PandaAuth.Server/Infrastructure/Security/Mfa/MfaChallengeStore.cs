@@ -24,7 +24,30 @@ public sealed class MfaChallengeStore(PandaAuthDbContext db, TimeProvider clock)
         ArgumentException.ThrowIfNullOrWhiteSpace(subject);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(lifetime, TimeSpan.Zero);
         cancellationToken.ThrowIfCancellationRequested();
+        return await InsertAsync(purpose, subject, value, clock.GetUtcNow().Add(lifetime), cancellationToken);
+    }
 
+    internal async Task<Guid?> TryCreateUntilAsync(
+        string purpose,
+        string subject,
+        byte[] value,
+        DateTimeOffset expiresAt,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(purpose);
+        ArgumentException.ThrowIfNullOrWhiteSpace(subject);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (expiresAt <= clock.GetUtcNow()) return null;
+        return await InsertAsync(purpose, subject, value, expiresAt, cancellationToken);
+    }
+
+    private async Task<Guid> InsertAsync(
+        string purpose,
+        string subject,
+        byte[] value,
+        DateTimeOffset expiresAt,
+        CancellationToken cancellationToken)
+    {
         var id = Guid.NewGuid();
         db.MfaChallenges.Add(new MfaChallenge
         {
@@ -32,7 +55,7 @@ public sealed class MfaChallengeStore(PandaAuthDbContext db, TimeProvider clock)
             Purpose = purpose,
             SubjectId = subject,
             Value = [.. value],
-            ExpiresAt = clock.GetUtcNow().Add(lifetime),
+            ExpiresAt = expiresAt,
         });
         await db.SaveChangesAsync(cancellationToken);
         return id;
