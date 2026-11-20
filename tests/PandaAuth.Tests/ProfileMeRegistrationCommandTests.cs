@@ -44,20 +44,26 @@ public class ProfileMeRegistrationCommandTests
     }
 
     [PostgresFact]
-    public async Task ApexCallbackCommandAddsOnlyTheTwoExactMeUris()
+    public Task ApexMeCallbackCommandAddsOnlyTheTwoExactMeUris() =>
+        CheckApexCallbacks(FirstPartyClients.MeWeb, "--register-profile-me-apex-callbacks",
+            "t0000-auth", "/me/callback/login/pandaauth", "/me/callback/logout/pandaauth", "me_apex_issuer_invalid");
+
+    [PostgresFact]
+    public Task ApexOasisCallbackCommandAddsOnlyTheTwoExactOasisUris() =>
+        CheckApexCallbacks(FirstPartyClients.OasisWeb, "--register-oasis-apex-callbacks",
+            "t0000-oasis", "/signin-oidc", "/", "oasis_apex_issuer_invalid");
+
+    private static async Task CheckApexCallbacks(string clientId, string command, string host, string login, string logout, string issuerError)
     {
-        const string origin = "https://t0000-auth.pandacloud.cc";
-        const string oldOrigin = "https://t0000-auth.s001.pandacloud.cc";
-        const string login = "/me/callback/login/pandaauth";
-        const string logout = "/me/callback/logout/pandaauth";
-        const string command = "--register-profile-me-apex-callbacks";
+        var origin = $"https://{host}.pandacloud.cc";
+        var oldOrigin = $"https://{host}.s001.pandacloud.cc";
         await using var fixture = await AuthQualityPostgresFixture.CreateAsync();
         await using var scope = fixture.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
         var manager = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
         var existing = (OpenIddictEntityFrameworkCoreApplication)await manager.CreateAsync(new OpenIddictApplicationDescriptor
         {
-            ClientId = FirstPartyClients.MeWeb, ClientType = OpenIddictConstants.ClientTypes.Confidential,
+            ClientId = clientId, ClientType = OpenIddictConstants.ClientTypes.Confidential,
             ClientSecret = "synthetic-apex-callback-only",
             RedirectUris = { new Uri(oldOrigin + login) },
             PostLogoutRedirectUris = { new Uri(oldOrigin + logout) },
@@ -67,13 +73,13 @@ public class ProfileMeRegistrationCommandTests
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["ConnectionStrings:Migration"] = db.Database.GetConnectionString(),
-            ["Auth:Issuer"] = oldOrigin + "/",
+            ["Auth:Issuer"] = "https://t0000-auth.s001.pandacloud.cc/",
             ["Auth:Seed:Enabled"] = "false",
         }).Build();
         using var output = new StringWriter();
         Assert.Equal(2, await ProfileMeRegistrationCommand.RunAsync([command], configuration, environment, output));
-        Assert.Contains("me_apex_issuer_invalid", output.ToString());
-        configuration["Auth:Issuer"] = origin + "/";
+        Assert.Contains(issuerError, output.ToString());
+        configuration["Auth:Issuer"] = "https://t0000-auth.pandacloud.cc/";
         Assert.Equal(0, await ProfileMeRegistrationCommand.RunAsync([command], configuration, environment, output));
         var updated = await db.Set<OpenIddictEntityFrameworkCoreApplication>().AsNoTracking().SingleAsync();
         Assert.Equal(new[] { origin + login, oldOrigin + login }.Order(),
@@ -87,6 +93,19 @@ public class ProfileMeRegistrationCommandTests
         Assert.Equal(0, await ProfileMeRegistrationCommand.RunAsync([command], configuration, environment, output));
         Assert.Equal(updated.ConcurrencyToken, (await db.Set<OpenIddictEntityFrameworkCoreApplication>().AsNoTracking().SingleAsync()).ConcurrencyToken);
         Assert.DoesNotContain("synthetic-apex-callback-only", output.ToString());
+    }
+
+    [Theory]
+    [InlineData("--register-oasis-apex-callbacks")]
+    [InlineData("--register-oasis-apex-callbacks", "--migrate")]
+    [InlineData("--register-oasis-apex-unknown")]
+    public async Task OasisCallbackCommandCannotFallThroughIntoRuntime(params string[] arguments)
+    {
+        using var output = new StringWriter();
+        var environment = new HostApplicationBuilder(new HostApplicationBuilderSettings { EnvironmentName = Environments.Development, DisableDefaults = true }).Environment;
+        Assert.True(ProfileMeRegistrationCommand.IsRequested(arguments));
+        Assert.Equal(2, await ProfileMeRegistrationCommand.RunAsync(arguments, new ConfigurationBuilder().Build(), environment, output));
+        Assert.Contains(arguments is ["--register-oasis-apex-callbacks"] ? "oasis_apex_issuer_invalid" : "command_invalid", output.ToString());
     }
 
     [Theory]
