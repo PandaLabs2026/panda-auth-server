@@ -171,7 +171,7 @@ public sealed class CredentialController(
     public IActionResult ChangeEmail([FromServices] IAntiforgery antiforgery, string? returnUrl = null)
     {
         Response.Headers.CacheControl = "no-store";
-        if (EmailPanelRequest)
+        if (CredentialPanelRequest)
             return Json(new { token = antiforgery.GetAndStoreTokens(HttpContext).RequestToken });
         return View(new ChangeEmailViewModel { ReturnUrl = NormalizeLocalReturnUrl(returnUrl) });
     }
@@ -181,17 +181,17 @@ public sealed class CredentialController(
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> ChangeEmail(ChangeEmailViewModel model, CancellationToken cancellationToken)
     {
-        if (!ModelState.IsValid) return EmailChangeError(model, "invalid_input");
+        if (!ModelState.IsValid) return CredentialPanelError(model, "invalid_input");
         var user = await userManager.GetUserAsync(User);
-        if (user is null) return EmailPanelRequest ? Unauthorized() : Challenge();
-        if (EmailPanelRequest && !MatchesEmailPanelSubject(user.Id))
+        if (user is null) return CredentialPanelRequest ? Unauthorized() : Challenge();
+        if (CredentialPanelRequest && !MatchesCredentialPanelSubject(user.Id))
             return StatusCode(409, new { error = "session_changed" });
-        if (!user.EmailConfirmed) return EmailChangeError(model, "email_unconfirmed", "请先确认当前邮箱。");
+        if (!user.EmailConfirmed) return CredentialPanelError(model, "email_unconfirmed", "请先确认当前邮箱。");
         var check = await signInManager.CheckPasswordSignInAsync(user, model.CurrentPassword, lockoutOnFailure: true);
-        if (!check.Succeeded) return EmailChangeError(model, "password_invalid", "当前密码不正确。");
+        if (!check.Succeeded) return CredentialPanelError(model, "password_invalid", "当前密码不正确。");
         var outcome = await verification.BeginEmailChangeAsync(check.User!.Id, model.NewEmail, cancellationToken);
-        if (!outcome.Succeeded) return EmailChangeError(model, "email_unavailable", "无法变更邮箱，请检查目标地址。");
-        if (EmailPanelRequest) return NoContent();
+        if (!outcome.Succeeded) return CredentialPanelError(model, "email_unavailable", "无法变更邮箱，请检查目标地址。");
+        if (CredentialPanelRequest) return NoContent();
         TempData["PendingEmail"] = model.NewEmail;
         TempData["ReturnUrl"] = NormalizeLocalReturnUrl(model.ReturnUrl);
         return RedirectToAction(nameof(ConfirmEmailChange));
@@ -212,15 +212,15 @@ public sealed class CredentialController(
     public async Task<IActionResult> ConfirmEmailChange(
         ConfirmEmailChangeViewModel model, CancellationToken cancellationToken)
     {
-        if (!ModelState.IsValid) return EmailChangeError(model, "invalid_input");
+        if (!ModelState.IsValid) return CredentialPanelError(model, "invalid_input");
         var user = await userManager.GetUserAsync(User);
-        if (user is null) return EmailPanelRequest ? Unauthorized() : Challenge();
-        if (EmailPanelRequest && !MatchesEmailPanelSubject(user.Id))
+        if (user is null) return CredentialPanelRequest ? Unauthorized() : Challenge();
+        if (CredentialPanelRequest && !MatchesCredentialPanelSubject(user.Id))
             return StatusCode(409, new { error = "session_changed" });
         var oldEmail = user.Email;
         var outcome = await verification.ConsumeEmailChangeAsync(
             user.Id, model.NewEmail, model.Token, cancellationToken);
-        if (!outcome.Succeeded) return EmailChangeError(model, "token_invalid", "令牌错误、已使用或已过期。");
+        if (!outcome.Succeeded) return CredentialPanelError(model, "token_invalid", "令牌错误、已使用或已过期。");
         // Verification has committed the credential change. A closed tab cannot cancel revocation.
         await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: CancellationToken.None);
         await signInManager.SignOutAsync(HttpContext);
@@ -232,24 +232,27 @@ public sealed class CredentialController(
                 logger.LogError(exception, "旧邮箱变更通知发送失败 userId={UserId}", user.Id);
             }
         }
-        return EmailPanelRequest ? NoContent() : Redirect(NormalizeLocalReturnUrl(model.ReturnUrl));
+        return CredentialPanelRequest ? NoContent() : Redirect(NormalizeLocalReturnUrl(model.ReturnUrl));
     }
 
     // Me and the legacy pages use the same credential actions and antiforgery policy.
-    private bool EmailPanelRequest => Request.Headers.Accept.ToString() == "application/json";
+    private bool CredentialPanelRequest => Request.Headers.Accept.ToString() == "application/json";
 
-    private bool MatchesEmailPanelSubject(string userId)
+    private bool MatchesCredentialPanelSubject(string userId)
         => Request.Headers.TryGetValue("X-Panda-Account-Subject", out var values)
             && values.Count == 1 && string.Equals(values[0], userId, StringComparison.Ordinal);
 
-    private IActionResult EmailChangeError(object model, string code, string? message = null)
-        => EmailPanelRequest ? BadRequest(new { error = code }) : message is null ? View(model) : ViewWithError(model, message);
+    private IActionResult CredentialPanelError(object model, string code, string? message = null)
+        => CredentialPanelRequest ? BadRequest(new { error = code }) : message is null ? View(model) : ViewWithError(model, message);
 
     /// <summary>自助改密（已登录，IDP Cookie）：旧密码验证 + 新密码；成功后吊销全部令牌并登出。</summary>
     [Authorize]
     [HttpGet("change-password")]
-    public IActionResult ChangePassword(string? returnUrl = null)
+    public IActionResult ChangePassword([FromServices] IAntiforgery antiforgery, string? returnUrl = null)
     {
+        Response.Headers.CacheControl = "no-store";
+        if (CredentialPanelRequest)
+            return Json(new { token = antiforgery.GetAndStoreTokens(HttpContext).RequestToken });
         return View(new ChangePasswordViewModel { ReturnUrl = NormalizeLocalReturnUrl(returnUrl) });
     }
 
@@ -267,35 +270,36 @@ public sealed class CredentialController(
 
         if (!ModelState.IsValid)
         {
-            return View(model);
+            return CredentialPanelError(model, "invalid_input");
         }
 
         var user = await userManager.GetUserAsync(User);
         if (user is null)
         {
-            return Challenge();
+            return CredentialPanelRequest ? Unauthorized() : Challenge();
         }
+
+        if (CredentialPanelRequest && !MatchesCredentialPanelSubject(user.Id))
+            return StatusCode(409, new { error = "session_changed" });
 
         var check = await signInManager.CheckPasswordSignInAsync(user, model.CurrentPassword, lockoutOnFailure: true);
         if (!check.Succeeded)
         {
-            ModelState.AddModelError(string.Empty, "当前密码不正确。");
-            return View(model);
+            return CredentialPanelError(model, "password_invalid", "当前密码不正确。");
         }
 
         // CheckPasswordSignInAsync can retry after a concurrency conflict. From this point on
         // every mutation must use its reloaded entity, not the pre-check instance.
         user = check.User!;
-        if (!user.EmailConfirmed) return ViewWithError(model, "请先确认当前邮箱。");
+        if (!user.EmailConfirmed) return CredentialPanelError(model, "email_unconfirmed", "请先确认当前邮箱。");
 
         // 泄露密码检测：通过当前密码核验后、写入前执行。
         var pwned = await pwnedPasswords.CheckAsync(model.NewPassword, cancellationToken);
         if (pwned.Rejected)
         {
-            ModelState.AddModelError(string.Empty, pwned.Outcome == PwnedPasswordOutcome.Breached
-                ? "该密码出现在已知泄露库中，请更换新密码。"
-                : "暂时无法核验密码安全性，请稍后再试。");
-            return View(model);
+            return pwned.Outcome == PwnedPasswordOutcome.Breached
+                ? CredentialPanelError(model, "password_breached", "该密码出现在已知泄露库中，请更换新密码。")
+                : CredentialPanelError(model, "password_check_unavailable", "暂时无法核验密码安全性，请稍后再试。");
         }
 
         // ReplacePasswordAsync（哈希+安全戳）经 UserService 的单次 SaveAsync 落库：
@@ -304,8 +308,7 @@ public sealed class CredentialController(
         var changed = await userManager.ReplacePasswordAsync(user, model.NewPassword);
         if (!changed.Succeeded)
         {
-            ModelState.AddModelError(string.Empty, string.Join("；", changed.Errors.Select(error => error.Description)));
-            return View(model);
+            return CredentialPanelError(model, "password_policy", string.Join("；", changed.Errors.Select(error => error.Description)));
         }
 
         await tokenRevoker.RevokeUserTokensAsync(user.Id, cancellationToken: cancellationToken);
@@ -316,6 +319,8 @@ public sealed class CredentialController(
         await transaction.CommitAsync(cancellationToken);
         await signInManager.SignOutAsync(HttpContext);
         logger.LogInformation("用户自助修改密码 userId={UserId}（已吊销全部令牌并登出）", user.Id);
+
+        if (CredentialPanelRequest) return NoContent();
 
         TempData["Notice"] = "密码已修改，请使用新密码重新登录。";
         return RedirectToAction("Login", "Account");
