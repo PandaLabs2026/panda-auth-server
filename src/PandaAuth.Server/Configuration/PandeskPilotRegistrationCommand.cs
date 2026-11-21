@@ -15,13 +15,17 @@ internal static class PandeskPilotRegistrationCommand
     private const string Prefix = "--register-pandesk-t0000";
     private const string Argument = Prefix + "-only";
 
+    private const string ResourcePrefix = "--register-native-resource";
+    private const string ResourceArgument = ResourcePrefix + "-only";
+
     internal static bool IsRequested(string[] args) =>
-        args.Any(arg => arg.StartsWith(Prefix, StringComparison.Ordinal));
+        args.Any(arg => arg.StartsWith(Prefix, StringComparison.Ordinal) || arg.StartsWith(ResourcePrefix, StringComparison.Ordinal));
 
     internal static async Task<int> RunAsync(string[] args, IConfiguration configuration,
         IHostEnvironment environment, TextWriter output)
     {
-        if (args is not [Argument]) return Reject(output, "command", "command_invalid");
+        var registerResource = args is [ResourceArgument];
+        if (!registerResource && args is not [Argument]) return Reject(output, "command", "command_invalid");
 
         var clientId = configuration["Auth:NativeLogin:ClientId"];
         var secret = configuration["Auth:NativeLogin:T0000Pilot:IntrospectionClientSecret"];
@@ -29,7 +33,7 @@ internal static class PandeskPilotRegistrationCommand
             || clientId is not { Length: > 0 and <= BusinessInputLimits.ClientId }
             || clientId.Any(character => char.IsWhiteSpace(character) || char.IsControl(character))
             || clientId == PandeskCustomerRead.IntrospectionClientId
-            || secret is not { Length: >= 32 } || string.IsNullOrWhiteSpace(secret))
+            || (!registerResource && (secret is not { Length: >= 32 } || string.IsNullOrWhiteSpace(secret))))
             return Reject(output, "Auth:NativeLogin", "pandesk_registration_input_invalid");
 
         var report = StartupConfiguration.Validate(configuration, environment, migrate: true);
@@ -41,6 +45,13 @@ internal static class PandeskPilotRegistrationCommand
 
         try
         {
+            var resource = registerResource
+                ? NativeResourceClient.Read(configuration, clientId, NativeLoginRoute.ReadResourceAccess(configuration))
+                : null;
+            if (registerResource && (resource is null || FirstPartyClients.All.Contains(resource.ClientId)
+                || resource.ClientId == PandeskCustomerRead.IntrospectionClientId || resource.Resource.Audiences.Contains(resource.ClientId)))
+                return Reject(output, NativeResourceClient.SectionName, "native_resource_registration_input_invalid");
+
             var connection = configuration.GetConnectionString("Migration")!;
             if (environment.IsProduction() && new NpgsqlConnectionStringBuilder(connection) is not
                 { Host: "pandalabs-postgres", Port: 5432, Database: "panda_auth_t0000", Username: "panda_auth_t0000_migrator" })
@@ -61,10 +72,11 @@ internal static class PandeskPilotRegistrationCommand
             if ((await db.Database.GetPendingMigrationsAsync()).Any())
                 return Reject(output, "ConnectionStrings:Migration", "pandesk_registration_schema_not_ready");
 
-            if (!await RegisterAsync(scope.ServiceProvider, db, clientId, secret))
+            if (!await RegisterAsync(scope.ServiceProvider, db, resource?.ClientId ?? clientId, secret, resource?.Resource))
                 return Reject(output, "Auth:NativeLogin", "pandesk_registration_conflict");
 
-            OperationalCommand.Write(output, new { Schema = 1, Valid = true, Operation = "pandesk-t0000-registration-only-v1", ClientId = clientId });
+            var operation = registerResource ? "native-resource-registration-only-v1" : "pandesk-t0000-registration-only-v1";
+            OperationalCommand.Write(output, new { Schema = 1, Valid = true, Operation = operation, ClientId = resource?.ClientId ?? clientId });
             return 0;
         }
         catch (Exception)
@@ -75,20 +87,19 @@ internal static class PandeskPilotRegistrationCommand
     }
 
     private static async Task<bool> RegisterAsync(IServiceProvider services, PandaAuthDbContext db,
-        string clientId, string secret)
+        string clientId, string? secret, NativeLoginRoute.ApiResource? resource)
     {
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         var scopes = services.GetRequiredService<IOpenIddictScopeManager>();
         var applications = services.GetRequiredService<IOpenIddictApplicationManager>();
-        var readScope = new OpenIddictScopeDescriptor
-        {
-            Name = PandeskCustomerRead.Scope,
-            Resources = { PandeskCustomerRead.Audience, PandeskCustomerRead.IntrospectionAudience },
-        };
-        var existingScope = await scopes.FindByNameAsync(readScope.Name);
+        var descriptor = new OpenIddictScopeDescriptor { Name = resource?.Scope ?? PandeskCustomerRead.Scope };
+        descriptor.Resources.UnionWith(resource is null
+            ? [PandeskCustomerRead.Audience, PandeskCustomerRead.IntrospectionAudience]
+            : resource.Audiences);
+        var existingScope = await scopes.FindByNameAsync(descriptor.Name);
         if (existingScope is null)
-            await scopes.CreateAsync(readScope);
-        else if (!readScope.Resources.SetEquals(await scopes.GetResourcesAsync(existingScope)))
+            await scopes.CreateAsync(descriptor);
+        else if (!descriptor.Resources.SetEquals(await scopes.GetResourcesAsync(existingScope)))
             return false;
 
         var desktop = new OpenIddictApplicationDescriptor
@@ -101,20 +112,25 @@ internal static class PandeskPilotRegistrationCommand
             {
                 Permissions.Endpoints.Authorization, Permissions.Endpoints.Token, Permissions.Endpoints.Revocation,
                 Permissions.GrantTypes.AuthorizationCode, Permissions.ResponseTypes.Code,
-                Permissions.Prefixes.Scope + PandeskCustomerRead.Scope,
+                Permissions.Prefixes.Scope + descriptor.Name,
             },
             Requirements = { Requirements.Features.ProofKeyForCodeExchange },
         };
-        var introspector = new OpenIddictApplicationDescriptor
-        {
-            ClientId = PandeskCustomerRead.IntrospectionClientId,
-            ClientType = ClientTypes.Confidential,
-            ClientSecret = secret,
-            ConsentType = ConsentTypes.Implicit,
-            Permissions = { Permissions.Endpoints.Introspection },
-        };
-        if (!await CreateOrMatchAsync(applications, desktop) || !await CreateOrMatchAsync(applications, introspector))
+        if (!await CreateOrMatchAsync(applications, desktop))
             return false;
+        if (resource is null)
+        {
+            var introspector = new OpenIddictApplicationDescriptor
+            {
+                ClientId = PandeskCustomerRead.IntrospectionClientId,
+                ClientType = ClientTypes.Confidential,
+                ClientSecret = secret,
+                ConsentType = ConsentTypes.Implicit,
+                Permissions = { Permissions.Endpoints.Introspection },
+            };
+            if (!await CreateOrMatchAsync(applications, introspector))
+                return false;
+        }
 
         await transaction.CommitAsync();
         return true;

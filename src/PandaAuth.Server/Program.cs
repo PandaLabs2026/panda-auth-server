@@ -266,6 +266,7 @@ static async Task RunServerAsync(string[] args)
                 handler.UseInlineHandler(context =>
                 {
                     context.Claims.Remove(NativeLoginRoute.PilotRevisionClaim);
+                    context.Claims.Remove(NativeResourceClient.RevisionClaim);
                     return ValueTask.CompletedTask;
                 }).SetOrder(OpenIddict.Server.OpenIddictServerHandlers.Introspection.AttachApplicationClaims.Descriptor.Order + 500));
 

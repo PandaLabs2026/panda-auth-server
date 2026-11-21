@@ -24,13 +24,13 @@ internal static class NativeLoginRoute
     internal const string Callback = "connect/native/callback";
     private static readonly TimeSpan AuthorizationCodeLifetime = TimeSpan.FromMinutes(1);
 
-    private const string PilotConfig = "Auth:NativeLogin:T0000Pilot";
+    internal const string PilotConfig = "Auth:NativeLogin:T0000Pilot";
     internal const string PilotRevisionClaim = "urn:pandaauth:internal:pandesk-t0000-revision";
     private static readonly TenantId PilotTenant = TenantId.Parse("t0000");
     internal static readonly string PilotIssuer = $"https://{TenantCanonicalHost.For(PilotTenant, TenantProduct.PandaAuth, "")}/";
 
     internal sealed record Settings(string ClientId, IReadOnlySet<string>? PilotSubjects = null, string? PilotRevision = null,
-        ApiResource? ResourceAccess = null)
+        ApiResource? ResourceAccess = null, NativeResourceClient? DedicatedResource = null)
     {
         internal bool AllowsSubject(string subject, IConfiguration configuration)
             => PilotRevision is null || (PilotSubjects!.Contains(subject)
@@ -46,7 +46,7 @@ internal static class NativeLoginRoute
 
     internal static ApiResource? ReadResourceAccess(IConfiguration configuration)
     {
-        var section = configuration.GetSection("Auth:NativeLogin:ResourceAccess");
+        var section = configuration.GetSection(NativeResourceClient.SectionName);
         var scope = section["Scope"];
         var audiences = section.GetSection("Audiences").Get<string[]>();
         if (scope is null && audiences is null) return null;
@@ -94,7 +94,8 @@ internal static class NativeLoginRoute
         {
             throw new InvalidOperationException("The t0000 native pilot requires the exact issuer, a ready apex route, a revision and a nonempty subject allowlist.");
         }
-        return new Settings(clientId, subjects, revision);
+        return new Settings(clientId, subjects, revision,
+            DedicatedResource: NativeResourceClient.Read(configuration, clientId, resourceAccess));
     }
 
     internal static bool HasPilotRequestOrigin(HttpRequest request)
@@ -202,9 +203,19 @@ internal static class NativeLoginRoute
             ], OpenIddictServerAspNetCoreDefaults.AuthenticationScheme));
             authorization.ControllerContext = new ControllerContext { HttpContext = http };
             var principal = await authorization.CreatePrincipalAsync(user, protocol.GetScopes(), authenticated);
-            if (HasInvalidPandeskResources(principal) || settings.ResourceAccess?.HasInvalidAudience(principal) == true)
-                return Json(http, 400, new { error = Errors.InvalidScope });
-            if (settings.PilotRevision is { } revision) SetPilotRevision(principal, revision);
+            if (pending.Binding.ResourceRevision is not null)
+            {
+                if (settings.DedicatedResource is not { } resource
+                    || !resource.IsCurrent(http.RequestServices.GetRequiredService<IConfiguration>()) || !resource.Allows(principal))
+                    return Json(http, 400, new { error = Errors.InvalidScope });
+                resource.Mark(principal);
+            }
+            else
+            {
+                if (HasInvalidPandeskResources(principal) || settings.ResourceAccess?.HasInvalidAudience(principal) == true)
+                    return Json(http, 400, new { error = Errors.InvalidScope });
+                if (settings.PilotRevision is { } revision) SetPilotRevision(principal, revision);
+            }
             principal.SetAuthorizationCodeLifetime(AuthorizationCodeLifetime);
             return Results.SignIn(principal, authenticationScheme: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
         }
@@ -246,18 +257,13 @@ internal static class NativeLoginRoute
         public async ValueTask HandleAsync(ExtractAuthorizationRequestContext context)
         {
             var request = context.Transaction.GetHttpRequest()!;
+            var configuration = request.HttpContext.RequestServices.GetRequiredService<IConfiguration>();
             if (request.Path != Path)
             {
                 await webExtraction.HandleAsync(context);
-                if (string.Equals(context.Transaction.Request?.ClientId, settings.ClientId, StringComparison.Ordinal))
+                var webClient = context.Transaction.Request?.ClientId;
+                if (webClient == settings.ClientId || NativeResourceClient.IsConfiguredClient(configuration, webClient))
                     context.Reject(Errors.InvalidRequest);
-                return;
-            }
-
-            if (settings.PilotRevision is { } revision
-                && !PilotRevisionIsCurrent(request.HttpContext.RequestServices.GetRequiredService<IConfiguration>(), revision))
-            {
-                context.Reject(Errors.InvalidRequest);
                 return;
             }
 
@@ -293,8 +299,12 @@ internal static class NativeLoginRoute
                 return;
             }
             request.Form = FormCollection.Empty;
+            var clientId = form["client_id"].ToString();
+            var dedicated = settings.DedicatedResource is { } candidate && candidate.ClientId == clientId ? candidate : null;
             if (form.Any(field => field.Value.Count != 1)
-                || !string.Equals(form["client_id"], settings.ClientId, StringComparison.Ordinal)
+                || (dedicated is null && clientId != settings.ClientId)
+                || (dedicated is not null && !dedicated.IsCurrent(configuration))
+                || (dedicated is null && settings.PilotRevision is { } revision && !PilotRevisionIsCurrent(configuration, revision))
                 || form["code_challenge_method"] != CodeChallengeMethods.Sha256
                 || !IsBase64Url256(form["code_challenge"].ToString()) || !IsBase64Url256(form["nonce"].ToString()))
             {
@@ -302,7 +312,7 @@ internal static class NativeLoginRoute
                 return;
             }
 
-            if (await applications.FindByClientIdAsync(settings.ClientId, context.CancellationToken) is not { } application
+            if (await applications.FindByClientIdAsync(clientId, context.CancellationToken) is not { } application
                 || !await applications.HasClientTypeAsync(application, ClientTypes.Public, context.CancellationToken)
                 || !await applications.HasRequirementAsync(application, Requirements.Features.ProofKeyForCodeExchange, context.CancellationToken))
             {
@@ -312,20 +322,22 @@ internal static class NativeLoginRoute
 
             var hasCustomerRead = await applications.HasPermissionAsync(application,
                 Permissions.Prefixes.Scope + PandeskCustomerRead.Scope, context.CancellationToken);
-            if (settings.PilotSubjects is not null && !hasCustomerRead)
+            var resource = dedicated?.Resource ?? settings.ResourceAccess;
+            var hasResource = resource is not null && await applications.HasPermissionAsync(application,
+                Permissions.Prefixes.Scope + resource.Scope, context.CancellationToken);
+            if (dedicated is not null ? (!hasResource || hasCustomerRead) : settings.PilotSubjects is not null && !hasCustomerRead)
             {
                 context.Reject(Errors.InvalidScope);
                 return;
             }
+
             var scopes = new List<string> { Scopes.OpenId };
             if (hasCustomerRead) scopes.Add(PandeskCustomerRead.Scope);
-            if (settings.ResourceAccess is { } resource && await applications.HasPermissionAsync(application,
-                Permissions.Prefixes.Scope + resource.Scope, context.CancellationToken))
-                scopes.Add(resource.Scope);
+            if (hasResource) scopes.Add(resource!.Scope);
             var scope = string.Join(' ', scopes);
             var callback = new Uri(expectedIssuer, Callback).AbsoluteUri;
-            var binding = new NativeLoginBinding(tenant.TenantId, expectedIssuer, settings.ClientId,
-                form["code_challenge"].ToString(), scope, [], callback, form["nonce"].ToString());
+            var binding = new NativeLoginBinding(tenant.TenantId, expectedIssuer, clientId,
+                form["code_challenge"].ToString(), scope, [], callback, form["nonce"].ToString(), dedicated?.Revision);
             if (ReadStep(form, binding) is not { } pending)
             {
                 context.Reject(Errors.InvalidRequest);
