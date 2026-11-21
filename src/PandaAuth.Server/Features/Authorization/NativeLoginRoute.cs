@@ -23,7 +23,13 @@ internal static class NativeLoginRoute
     private const string Callback = "connect/native/callback";
     private static readonly TimeSpan AuthorizationCodeLifetime = TimeSpan.FromMinutes(1);
 
-    internal sealed record Settings(string ClientId);
+    private static readonly TenantId PilotTenant = TenantId.Parse("t0000");
+    private static readonly string PilotIssuer = $"https://{TenantCanonicalHost.For(PilotTenant, TenantProduct.PandaAuth, "")}/";
+
+    internal sealed record Settings(string ClientId, IReadOnlySet<string>? PilotSubjects = null)
+    {
+        internal bool AllowsSubject(string subject) => PilotSubjects?.Contains(subject) ?? true;
+    }
 
     internal static Settings? ReadSettings(IConfiguration configuration, IHostEnvironment environment, TenantRoutingOptions routing)
     {
@@ -32,7 +38,22 @@ internal static class NativeLoginRoute
         if (!environment.IsDevelopment() || !routing.Enabled || string.IsNullOrWhiteSpace(clientId)
             || clientId.Length > BusinessInputLimits.ClientId)
             throw new InvalidOperationException("Native login requires Development, tenant routing and an explicit client registration.");
-        return new Settings(clientId);
+        var pilot = configuration.GetSection("Auth:NativeLogin:T0000Pilot");
+        if (!pilot.GetValue<bool>("Enabled")) return new Settings(clientId);
+
+        var configuredSubjects = pilot.GetSection("AllowedSubjects").Get<string[]>() ?? [];
+        var subjects = configuredSubjects.ToHashSet(StringComparer.Ordinal);
+        if (!string.Equals(configuration["Auth:Issuer"], PilotIssuer, StringComparison.Ordinal)
+            || !routing.Bindings.Any(binding => string.Equals(binding.TenantId, PilotTenant.Value, StringComparison.Ordinal)
+                && binding.Product == TenantProduct.PandaAuth && binding.Zone == ""
+                && binding.RouteRevision > 0 && binding.State == TenantRouteState.Ready)
+            || subjects.Count == 0 || subjects.Count != configuredSubjects.Length
+            || subjects.Any(subject => string.IsNullOrEmpty(subject)
+                || subject.Any(character => char.IsWhiteSpace(character) || char.IsControl(character))))
+        {
+            throw new InvalidOperationException("The t0000 native pilot requires the exact issuer, a ready apex route and a nonempty subject allowlist.");
+        }
+        return new Settings(clientId, subjects);
     }
 
     internal static void Configure(OpenIddictServerBuilder options)
@@ -148,7 +169,9 @@ internal static class NativeLoginRoute
                 return;
             }
             var expectedIssuer = new Uri($"https://{tenant.CanonicalHost}/");
-            if (request.Host.Port is not (null or 443) || context.Options.Issuer != expectedIssuer)
+            if (request.Host.Port is not (null or 443) || context.Options.Issuer != expectedIssuer
+                || (settings.PilotSubjects is not null
+                    && !string.Equals(expectedIssuer.AbsoluteUri, PilotIssuer, StringComparison.Ordinal)))
             {
                 await RejectHostAsync();
                 return;
@@ -179,10 +202,14 @@ internal static class NativeLoginRoute
                 return;
             }
 
-            var scope = await applications.HasPermissionAsync(application,
-                Permissions.Prefixes.Scope + PandeskCustomerRead.Scope, context.CancellationToken)
-                ? $"{Scopes.OpenId} {PandeskCustomerRead.Scope}"
-                : Scopes.OpenId;
+            var hasCustomerRead = await applications.HasPermissionAsync(application,
+                Permissions.Prefixes.Scope + PandeskCustomerRead.Scope, context.CancellationToken);
+            if (settings.PilotSubjects is not null && !hasCustomerRead)
+            {
+                context.Reject(Errors.InvalidScope);
+                return;
+            }
+            var scope = hasCustomerRead ? $"{Scopes.OpenId} {PandeskCustomerRead.Scope}" : Scopes.OpenId;
             var callback = new Uri(expectedIssuer, Callback).AbsoluteUri;
             var binding = new NativeLoginBinding(tenant.TenantId, expectedIssuer, settings.ClientId,
                 form["code_challenge"].ToString(), scope, [], callback, form["nonce"].ToString());

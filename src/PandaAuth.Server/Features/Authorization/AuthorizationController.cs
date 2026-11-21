@@ -123,6 +123,12 @@ public sealed class AuthorizationController(
         var request = HttpContext.GetOpenIddictServerRequest()
             ?? throw new InvalidOperationException("无法解析 OIDC Token 请求。");
 
+        var native = HttpContext.RequestServices.GetService<NativeLoginRoute.Settings>();
+        var isPilotClient = native?.PilotSubjects is not null
+            && string.Equals(request.ClientId, native.ClientId, StringComparison.Ordinal);
+        if (isPilotClient && !request.IsAuthorizationCodeGrantType())
+            return InvalidGrant("试点客户端只允许使用原生授权码换码。");
+
         if (request.IsClientCredentialsGrantType())
         {
             if (request.HasScope(PandeskCustomerRead.Scope)) return InvalidPandeskScope();
@@ -164,6 +170,9 @@ public sealed class AuthorizationController(
         {
             return InvalidGrant("账号不存在或已被冻结。");
         }
+
+        if (isPilotClient && (!native!.AllowsSubject(user.Id) || !authResult.Principal!.HasScope(PandeskCustomerRead.Scope)))
+            return InvalidGrant("授权票据无效或已过期。");
 
         var principal = await CreatePrincipalAsync(user, authResult.Principal!.GetScopes(), authResult.Principal,
             Claims.AuthenticationTime);

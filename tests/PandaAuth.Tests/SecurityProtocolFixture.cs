@@ -41,7 +41,8 @@ internal sealed class SecurityProtocolFixture : IAsyncDisposable
     }
 
     internal static async Task<SecurityProtocolFixture> CreateAsync(Action<IServiceCollection>? configure = null,
-        IReadOnlyDictionary<string, string>? settings = null, Action<Factory>? configureHost = null)
+        IReadOnlyDictionary<string, string>? settings = null, Action<Factory>? configureHost = null,
+        string? userId = null)
     {
         var builder = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("PANDA_AUTH_TEST_POSTGRES"));
         PostgresTestBoundary.ValidateEndpoint(builder, PostgresTestBoundary.SharedMode);
@@ -64,6 +65,7 @@ internal sealed class SecurityProtocolFixture : IAsyncDisposable
             var roles = scope.ServiceProvider.GetRequiredService<RoleService>();
             Assert.True((await roles.CreateAsync(new PandaRole { Name = PandaAuthRoles.Admin })).Succeeded);
             var user = new PandaUser { UserName = "security-admin", Email = "security-admin@example.test", EmailConfirmed = true };
+            if (userId is not null) user.Id = userId;
             Assert.True((await users.CreateAsync(user, fixture.password)).Succeeded);
             Assert.True((await users.AddToRoleAsync(user, PandaAuthRoles.Admin)).Succeeded);
             fixture.UserId = user.Id;
