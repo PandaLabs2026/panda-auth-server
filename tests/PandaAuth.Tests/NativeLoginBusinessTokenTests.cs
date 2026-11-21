@@ -149,9 +149,11 @@ public sealed class NativeLoginBusinessTokenTests
     }
 
     private static HttpClient CreateClient(string tenant, X509Certificate2 server, SecurityProtocolFixture fixture)
+        => CreateLoopbackClient(new Uri($"https://{NativeLoginRouteTests.FixtureHost(tenant)}/"),
+            NativeLoginDesktopTlsTests.GetPort(fixture), server);
+
+    internal static HttpClient CreateLoopbackClient(Uri issuer, int listenerPort, X509Certificate2 server)
     {
-        var issuer = new Uri($"https://{NativeLoginRouteTests.FixtureHost(tenant)}/");
-        var listenerPort = NativeLoginDesktopTlsTests.GetPort(fixture);
         var handler = new SocketsHttpHandler
         {
             AllowAutoRedirect = false,

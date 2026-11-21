@@ -36,6 +36,14 @@ await RunServerAsync(args);
 // Keep Web startup out of the decode entry point so its JIT does not resolve the hosting graph.
 static async Task RunServerAsync(string[] args)
 {
+    if (PandeskPilotRegistrationCommand.IsRequested(args))
+    {
+        var commandBuilder = WebApplication.CreateBuilder([]);
+        Environment.ExitCode = await PandeskPilotRegistrationCommand.RunAsync(args,
+            commandBuilder.Configuration, commandBuilder.Environment, Console.Out);
+        return;
+    }
+
     if (CloudControlRegistrationCommand.IsRequested(args))
     {
         var commandBuilder = WebApplication.CreateBuilder([]);
@@ -149,7 +157,7 @@ static async Task RunServerAsync(string[] args)
     builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
     var authOptions = builder.Configuration.GetSection(AuthOptions.SectionName).Get<AuthOptions>() ?? new AuthOptions();
     builder.Services.AddSingleton(authOptions.TenantRouting);
-    var nativeLogin = NativeLoginRoute.ReadSettings(builder.Configuration, builder.Environment, authOptions.TenantRouting);
+    var nativeLogin = isMigrateCommand ? null : NativeLoginRoute.ReadSettings(builder.Configuration, builder.Environment, authOptions.TenantRouting);
     if (nativeLogin is not null)
     {
         builder.Services.AddSingleton(nativeLogin);
@@ -251,6 +259,12 @@ static async Task RunServerAsync(string[] args)
             options.Configure(RefreshTokenPolicy.Configure);
             options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ProcessAuthenticationContext>(handler =>
                 handler.UseScopedHandler<RejectRevokedSsoSession>().SetOrder(int.MaxValue));
+            options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.HandleIntrospectionRequestContext>(handler =>
+                handler.UseInlineHandler(context =>
+                {
+                    context.Claims.Remove(NativeLoginRoute.PilotRevisionClaim);
+                    return ValueTask.CompletedTask;
+                }).SetOrder(OpenIddict.Server.OpenIddictServerHandlers.Introspection.AttachApplicationClaims.Descriptor.Order + 500));
 
             options.RegisterScopes(
                 OpenIddictConstants.Scopes.OpenId,

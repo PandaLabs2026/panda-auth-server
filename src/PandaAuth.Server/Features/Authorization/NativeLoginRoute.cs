@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Claims;
+using System.Text.Json;
 using Microsoft.AspNetCore;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,19 +21,112 @@ namespace PandaAuth.Server.Features.Authorization;
 internal static class NativeLoginRoute
 {
     private const string Path = "/connect/native/authorize-challenge";
-    private const string Callback = "connect/native/callback";
+    internal const string Callback = "connect/native/callback";
     private static readonly TimeSpan AuthorizationCodeLifetime = TimeSpan.FromMinutes(1);
 
-    internal sealed record Settings(string ClientId, bool AllowQuotePolicyScope);
+    private const string PilotConfig = "Auth:NativeLogin:T0000Pilot";
+    internal const string PilotRevisionClaim = "urn:pandaauth:internal:pandesk-t0000-revision";
+    private static readonly TenantId PilotTenant = TenantId.Parse("t0000");
+    internal static readonly string PilotIssuer = $"https://{TenantCanonicalHost.For(PilotTenant, TenantProduct.PandaAuth, "")}/";
+
+    internal sealed record Settings(string ClientId, IReadOnlySet<string>? PilotSubjects = null, string? PilotRevision = null,
+        bool AllowQuotePolicyScope = false)
+    {
+        internal bool AllowsSubject(string subject, IConfiguration configuration)
+            => PilotRevision is null || (PilotSubjects!.Contains(subject)
+                && PilotRevisionIsCurrent(configuration, PilotRevision)
+                && PilotSubjectIsCurrent(configuration, subject));
+    }
 
     internal static Settings? ReadSettings(IConfiguration configuration, IHostEnvironment environment, TenantRoutingOptions routing)
     {
         if (!configuration.GetValue<bool>("Auth:NativeLogin:Enabled")) return null;
+        var pilot = configuration.GetSection(PilotConfig);
+        var pilotEnabled = pilot.GetValue<bool>("Enabled");
+        var isPilotIssuer = string.Equals(configuration["Auth:Issuer"], PilotIssuer, StringComparison.Ordinal);
+        if (!pilotEnabled && isPilotIssuer) return null;
+
         var clientId = configuration["Auth:NativeLogin:ClientId"];
-        if (!environment.IsDevelopment() || !routing.Enabled || string.IsNullOrWhiteSpace(clientId)
+        if ((!environment.IsDevelopment() && !(environment.IsProduction() && pilotEnabled))
+            || !routing.Enabled || string.IsNullOrWhiteSpace(clientId)
             || clientId.Length > BusinessInputLimits.ClientId)
-            throw new InvalidOperationException("Native login requires Development, tenant routing and an explicit client registration.");
-        return new Settings(clientId, configuration.GetValue<bool>("Auth:NativeLogin:AllowQuotePolicyScope"));
+            throw new InvalidOperationException("Native login requires an eligible environment, tenant routing and an explicit client registration.");
+        if (!pilotEnabled)
+            return new Settings(clientId, AllowQuotePolicyScope: configuration.GetValue<bool>("Auth:NativeLogin:AllowQuotePolicyScope"));
+
+        var revision = pilot["Revision"];
+        var subjects = ReadPilotSubjects(pilot);
+        // The resolver uses the first matching binding. A later Ready row cannot
+        // activate a host shadowed by a Pending route.
+        var binding = routing.Bindings.FirstOrDefault(binding => string.Equals(binding.TenantId, PilotTenant.Value, StringComparison.Ordinal)
+            && binding.Product == TenantProduct.PandaAuth && binding.Zone == "");
+        if (!Guid.TryParseExact(revision, "D", out var parsedRevision) || parsedRevision == Guid.Empty
+            || !isPilotIssuer || binding is not { RouteRevision: > 0, State: TenantRouteState.Ready }
+            || subjects is null)
+        {
+            throw new InvalidOperationException("The t0000 native pilot requires the exact issuer, a ready apex route, a revision and a nonempty subject allowlist.");
+        }
+        return new Settings(clientId, subjects, revision);
+    }
+
+    internal static bool HasPilotRequestOrigin(HttpRequest request)
+        => request.IsHttps && request.Host.Port is null or 443
+            && string.Equals($"https://{request.Host.Host}/", PilotIssuer, StringComparison.OrdinalIgnoreCase);
+
+    private static bool PilotRevisionIsCurrent(IConfiguration configuration, string revision)
+        => bool.TryParse(configuration["Auth:NativeLogin:Enabled"], out var nativeEnabled) && nativeEnabled
+            && bool.TryParse(configuration[$"{PilotConfig}:Enabled"], out var pilotEnabled) && pilotEnabled
+            && string.Equals(configuration["Auth:Issuer"], PilotIssuer, StringComparison.Ordinal)
+            && string.Equals(configuration[$"{PilotConfig}:Revision"], revision, StringComparison.Ordinal);
+
+    private static bool PilotSubjectIsCurrent(IConfiguration configuration, string subject)
+        => ReadPilotSubjects(configuration.GetSection(PilotConfig))?.Contains(subject) == true;
+
+    private static HashSet<string>? ReadPilotSubjects(IConfigurationSection pilot)
+    {
+        var indexed = pilot.GetSection("AllowedSubjects");
+        var json = pilot["AllowedSubjectsJson"];
+        string?[]? configured;
+        if (string.IsNullOrEmpty(json))
+        {
+            configured = indexed.GetChildren().Select(entry => entry.Value).ToArray();
+        }
+        else
+        {
+            if (indexed.GetChildren().Any()) return null;
+            try { configured = JsonSerializer.Deserialize<string?[]>(json); }
+            catch (JsonException) { return null; }
+        }
+
+        if (configured is not { Length: > 0 }) return null;
+        var subjects = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var subject in configured)
+        {
+            if (string.IsNullOrEmpty(subject)
+                || subject.Any(character => char.IsWhiteSpace(character) || char.IsControl(character))
+                || !subjects.Add(subject))
+                return null;
+        }
+        return subjects;
+    }
+
+    internal static bool RejectInactivePilotPrincipal(ClaimsPrincipal principal, IConfiguration configuration)
+    {
+        var revisions = principal.FindAll(PilotRevisionClaim).ToArray();
+        if (revisions.Length == 0 && !(principal.HasScope(PandeskCustomerRead.Scope)
+            && (string.Equals(principal.GetClaim(PandaAuthClaims.TenantId), PilotTenant.Value, StringComparison.Ordinal)
+                || string.Equals(configuration["Auth:Issuer"], PilotIssuer, StringComparison.Ordinal))))
+            return false;
+
+        return revisions.Length != 1 || !PilotRevisionIsCurrent(configuration, revisions[0].Value)
+            || principal.GetClaim(Claims.Subject) is not { Length: > 0 } subject
+            || !PilotSubjectIsCurrent(configuration, subject);
+    }
+
+    internal static void SetPilotRevision(ClaimsPrincipal principal, string revision)
+    {
+        var identity = (ClaimsIdentity)principal.Identity!;
+        identity.AddClaim(new Claim(PilotRevisionClaim, revision).SetDestinations(Destinations.AccessToken));
     }
 
     internal static void Configure(OpenIddictServerBuilder options)
@@ -53,7 +147,7 @@ internal static class NativeLoginRoute
 
     private static async Task<IResult> HandleAsync(
         HttpContext http, NativeLoginChallengeService flow, AuthorizationController authorization,
-        ITenantContextAccessor tenant, TimeProvider clock, CancellationToken ct)
+        ITenantContextAccessor tenant, TimeProvider clock, Settings settings, CancellationToken ct)
     {
         if (http.Items[typeof(PendingRequest)] is not PendingRequest pending
             || tenant.Current?.TenantId != pending.Binding.TenantId || http.GetOpenIddictServerRequest() is not { } protocol)
@@ -82,6 +176,7 @@ internal static class NativeLoginRoute
             var principal = await authorization.CreatePrincipalAsync(user, protocol.GetScopes(), authenticated);
             if (HasInvalidPandeskResources(principal))
                 return Json(http, 400, new { error = Errors.InvalidScope });
+            if (settings.PilotRevision is { } revision) SetPilotRevision(principal, revision);
             principal.SetAuthorizationCodeLifetime(AuthorizationCodeLifetime);
             return Results.SignIn(principal, authenticationScheme: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
         }
@@ -134,6 +229,13 @@ internal static class NativeLoginRoute
                 return;
             }
 
+            if (settings.PilotRevision is { } revision
+                && !PilotRevisionIsCurrent(request.HttpContext.RequestServices.GetRequiredService<IConfiguration>(), revision))
+            {
+                context.Reject(Errors.InvalidRequest);
+                return;
+            }
+
             if (!HttpMethods.IsPost(request.Method) || !request.IsHttps || request.QueryString.HasValue
                 || request.ContentLength is null or < 1 or > 8192
                 || !MediaTypeHeaderValue.TryParse(request.ContentType, out var contentType)
@@ -151,7 +253,8 @@ internal static class NativeLoginRoute
                 return;
             }
             var expectedIssuer = new Uri($"https://{tenant.CanonicalHost}/");
-            if (request.Host.Port is not (null or 443) || context.Options.Issuer != expectedIssuer)
+            if (request.Host.Port is not (null or 443) || context.Options.Issuer != expectedIssuer
+                || (settings.PilotSubjects is not null && !HasPilotRequestOrigin(request)))
             {
                 await RejectHostAsync();
                 return;
@@ -182,10 +285,15 @@ internal static class NativeLoginRoute
                 return;
             }
 
+            var hasCustomerRead = await applications.HasPermissionAsync(application,
+                Permissions.Prefixes.Scope + PandeskCustomerRead.Scope, context.CancellationToken);
+            if (settings.PilotSubjects is not null && !hasCustomerRead)
+            {
+                context.Reject(Errors.InvalidScope);
+                return;
+            }
             var scopes = new List<string> { Scopes.OpenId };
-            if (await applications.HasPermissionAsync(application, Permissions.Prefixes.Scope + PandeskCustomerRead.Scope,
-                context.CancellationToken))
-                scopes.Add(PandeskCustomerRead.Scope);
+            if (hasCustomerRead) scopes.Add(PandeskCustomerRead.Scope);
             if (settings.AllowQuotePolicyScope && await applications.HasPermissionAsync(application,
                 Permissions.Prefixes.Scope + PandeskQuotePolicies.Scope, context.CancellationToken))
                 scopes.Add(PandeskQuotePolicies.Scope);
