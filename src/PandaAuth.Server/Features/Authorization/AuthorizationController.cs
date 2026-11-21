@@ -39,7 +39,7 @@ public sealed class AuthorizationController(
         var request = HttpContext.GetOpenIddictServerRequest()
             ?? throw new InvalidOperationException("无法解析 OIDC 授权请求。");
 
-        if (request.HasScope(PandeskCustomerRead.Scope)) return InvalidPandeskScope();
+        if (request.GetScopes().Any(NativeLoginRoute.IsPandeskBusinessScope)) return InvalidPandeskScope();
 
         if (tenantContextAccessor.Current is { } tenant
             && (!Uri.TryCreate(request.RedirectUri, UriKind.Absolute, out var redirectUri)
@@ -125,7 +125,7 @@ public sealed class AuthorizationController(
 
         if (request.IsClientCredentialsGrantType())
         {
-            if (request.HasScope(PandeskCustomerRead.Scope)) return InvalidPandeskScope();
+            if (request.GetScopes().Any(NativeLoginRoute.IsPandeskBusinessScope)) return InvalidPandeskScope();
 
             // 服务间调用：仅授予客户端身份，不涉及终端用户。
             var clientIdentity = new ClaimsIdentity(
@@ -168,9 +168,24 @@ public sealed class AuthorizationController(
         var principal = await CreatePrincipalAsync(user, authResult.Principal!.GetScopes(), authResult.Principal,
             Claims.AuthenticationTime);
         if (NativeLoginRoute.HasInvalidPandeskResources(principal)
-            || (principal.HasScope(PandeskCustomerRead.Scope) && !request.IsAuthorizationCodeGrantType()))
+            || (principal.GetScopes().Any(NativeLoginRoute.IsPandeskBusinessScope) && !request.IsAuthorizationCodeGrantType())
+            || (principal.HasScope(PandeskQuotePolicies.Scope) && !await IsQuotePolicyExchangeAllowedAsync(request.ClientId)))
             return InvalidPandeskScope();
         return SignIn(principal, OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+    }
+
+    private async Task<bool> IsQuotePolicyExchangeAllowedAsync(string? clientId)
+    {
+        var services = HttpContext.RequestServices;
+        if (services.GetService<NativeLoginRoute.Settings>() is not { AllowQuotePolicyScope: true } native
+            || !string.Equals(clientId, native.ClientId, StringComparison.Ordinal))
+            return false;
+        var applications = services.GetRequiredService<IOpenIddictApplicationManager>();
+        var ct = HttpContext.RequestAborted;
+        var application = await applications.FindByClientIdAsync(native.ClientId, ct);
+        return application is not null
+            && await applications.HasClientTypeAsync(application, ClientTypes.Public, ct)
+            && await applications.HasPermissionAsync(application, Permissions.Prefixes.Scope + PandeskQuotePolicies.Scope, ct);
     }
 
     [Authorize(AuthenticationSchemes = OpenIddictServerAspNetCoreDefaults.AuthenticationScheme)]

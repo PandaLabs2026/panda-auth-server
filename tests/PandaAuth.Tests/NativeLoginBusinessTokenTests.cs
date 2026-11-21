@@ -87,10 +87,66 @@ public sealed class NativeLoginBusinessTokenTests
         Assert.False((await IntrospectAsync(b, secondSecret, accessB)).GetProperty("active").GetBoolean());
     }
 
-    internal static Task<SecurityProtocolFixture> CreateIssuerAsync(string tenant, X509Certificate2 server)
-        => SecurityProtocolFixture.CreateAsync(settings: NativeLoginRouteTests.Settings(tenant),
+    [PostgresFact]
+    public async Task Quote_scope_requires_enabling_the_issuer_and_the_registered_native_client()
+    {
+        const string tenant = "t9876";
+        using var caKey = RSA.Create(2048);
+        using var serverKey = RSA.Create(2048);
+        using var ca = NativeLoginDesktopTlsTests.CreateAuthority(caKey);
+        using var certificate = NativeLoginDesktopTlsTests.CreateServerCertificate(ca, serverKey, NativeLoginRouteTests.FixtureHost(tenant));
+        foreach (var (enabled, permitted) in new[] { (false, true), (true, false), (true, true) })
+        {
+            await using var issuer = await CreateIssuerAsync(tenant, certificate, enabled);
+            var secret = await RegisterAsync(issuer, tenant, permitQuotePolicies: permitted);
+            using var client = CreateClient(tenant, certificate, issuer);
+            var token = await IssueAsync(client, issuer);
+            var scopes = enabled && permitted ? new[] { ReadScope, PandeskQuotePolicies.Scope } : [ReadScope];
+            AssertBusinessToken(await IntrospectAsync(client, secret, token), client.BaseAddress!, issuer.UserId, scopes);
+            if (enabled && permitted)
+            {
+                await AssertBusinessScopeUnavailableToOtherGrantsAsync(client, issuer, PandeskQuotePolicies.Scope);
+                using var accepted = await RevokeAsync(client, ClientId, token);
+                Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+                Assert.False((await IntrospectAsync(client, secret, token)).GetProperty("active").GetBoolean());
+            }
+        }
+    }
+
+    [PostgresFact]
+    public async Task Quote_code_exchange_fails_after_the_client_permission_is_removed()
+    {
+        const string tenant = "t9876";
+        using var caKey = RSA.Create(2048);
+        using var serverKey = RSA.Create(2048);
+        using var ca = NativeLoginDesktopTlsTests.CreateAuthority(caKey);
+        using var certificate = NativeLoginDesktopTlsTests.CreateServerCertificate(ca, serverKey, NativeLoginRouteTests.FixtureHost(tenant));
+        await using var issuer = await CreateIssuerAsync(tenant, certificate, quotePolicies: true);
+        await RegisterAsync(issuer, tenant, permitQuotePolicies: true);
+        using var client = CreateClient(tenant, certificate, issuer);
+        var request = await CreateExchangeRequestAsync(client, issuer);
+
+        using var scope = issuer.Host.Services.CreateScope();
+        var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+        var registration = Assert.IsAssignableFrom<object>(await applications.FindByClientIdAsync(ClientId));
+        var descriptor = new OpenIddictApplicationDescriptor();
+        await applications.PopulateAsync(descriptor, registration);
+        Assert.True(descriptor.Permissions.Remove(Permissions.Prefixes.Scope + PandeskQuotePolicies.Scope));
+        await applications.UpdateAsync(registration, descriptor);
+
+        var response = await PostAsync(client, PandaAuthEndpoints.Token, request, HttpStatusCode.BadRequest);
+        Assert.Equal(Errors.InvalidScope, response.GetProperty("error").GetString());
+        Assert.False(response.TryGetProperty("access_token", out _));
+    }
+
+    internal static Task<SecurityProtocolFixture> CreateIssuerAsync(string tenant, X509Certificate2 server, bool quotePolicies = false)
+    {
+        var settings = NativeLoginRouteTests.Settings(tenant);
+        settings["Auth:NativeLogin:AllowQuotePolicyScope"] = quotePolicies ? "true" : "false";
+        return SecurityProtocolFixture.CreateAsync(settings: settings,
             configureHost: factory => factory.UseKestrel(options =>
                 options.Listen(IPAddress.Loopback, 0, endpoint => endpoint.UseHttps(server))));
+    }
 
     private static HttpClient CreateClient(string tenant, X509Certificate2 server, SecurityProtocolFixture fixture)
     {
@@ -124,7 +180,7 @@ public sealed class NativeLoginBusinessTokenTests
         return new HttpClient(handler) { BaseAddress = issuer };
     }
 
-    internal static async Task<string> RegisterAsync(SecurityProtocolFixture fixture, string tenant, string? revocationProbeClient = null)
+    internal static async Task<string> RegisterAsync(SecurityProtocolFixture fixture, string tenant, string? revocationProbeClient = null, bool permitQuotePolicies = false)
     {
         await fixture.EnableTotpAsync(administrator: false);
         await NativeLoginRouteTests.RegisterAsync(fixture, ClientId, tenant);
@@ -136,6 +192,12 @@ public sealed class NativeLoginBusinessTokenTests
         var descriptor = new OpenIddictApplicationDescriptor();
         await apps.PopulateAsync(descriptor, client);
         descriptor.Permissions.UnionWith([Permissions.Prefixes.Scope + ReadScope, Permissions.Endpoints.Revocation]);
+        if (permitQuotePolicies)
+        {
+            await scopes.CreateAsync(new OpenIddictScopeDescriptor
+                { Name = PandeskQuotePolicies.Scope, Resources = { Audience, Introspector } });
+            descriptor.Permissions.Add(Permissions.Prefixes.Scope + PandeskQuotePolicies.Scope);
+        }
         await apps.UpdateAsync(client, descriptor);
         if (revocationProbeClient is not null)
         {
@@ -157,7 +219,7 @@ public sealed class NativeLoginBusinessTokenTests
         return secret;
     }
 
-    private static async Task<string> IssueAsync(HttpClient client, SecurityProtocolFixture fixture)
+    private static async Task<Dictionary<string, string>> CreateExchangeRequestAsync(HttpClient client, SecurityProtocolFixture fixture)
     {
         var verifier = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
         var challenge = WebEncoders.Base64UrlEncode(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
@@ -175,19 +237,25 @@ public sealed class NativeLoginBusinessTokenTests
         {
             ["step"] = "totp", ["challenge"] = pending.GetProperty("challenge").GetString()!, ["otp"] = fixture.CurrentTotpCode(),
         });
-        var tokens = await PostAsync(client, PandaAuthEndpoints.Token, new()
+        return new()
         {
             ["client_id"] = ClientId, ["grant_type"] = GrantTypes.AuthorizationCode,
             ["code"] = issued.GetProperty("authorization_code").GetString()!, ["code_verifier"] = verifier,
             ["redirect_uri"] = new Uri(client.BaseAddress!, "connect/native/callback").AbsoluteUri,
-        });
+        };
+    }
+
+    private static async Task<string> IssueAsync(HttpClient client, SecurityProtocolFixture fixture)
+    {
+        var request = await CreateExchangeRequestAsync(client, fixture);
+        var tokens = await PostAsync(client, PandaAuthEndpoints.Token, request);
         Assert.True(tokens.TryGetProperty("id_token", out _));
         Assert.False(tokens.TryGetProperty("refresh_token", out _));
         Assert.InRange(tokens.GetProperty("expires_in").GetInt32(), 1, 600);
         return Assert.IsType<string>(tokens.GetProperty("access_token").GetString());
     }
 
-    private static async Task AssertBusinessScopeUnavailableToOtherGrantsAsync(HttpClient client, SecurityProtocolFixture fixture)
+    private static async Task AssertBusinessScopeUnavailableToOtherGrantsAsync(HttpClient client, SecurityProtocolFixture fixture, string scopeName = ReadScope)
     {
         const string genericClient = "configured-web-and-machine-client";
         var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
@@ -203,18 +271,18 @@ public sealed class NativeLoginBusinessTokenTests
             Permissions =
             {
                 Permissions.Endpoints.Token, Permissions.Endpoints.Authorization, Permissions.GrantTypes.ClientCredentials,
-                Permissions.GrantTypes.AuthorizationCode, Permissions.ResponseTypes.Code, Permissions.Prefixes.Scope + ReadScope,
+                Permissions.GrantTypes.AuthorizationCode, Permissions.ResponseTypes.Code, Permissions.Prefixes.Scope + scopeName,
             },
         });
         var machine = await PostAsync(client, PandaAuthEndpoints.Token, new()
         {
-            ["grant_type"] = GrantTypes.ClientCredentials, ["client_id"] = genericClient, ["client_secret"] = secret, ["scope"] = ReadScope,
+            ["grant_type"] = GrantTypes.ClientCredentials, ["client_id"] = genericClient, ["client_secret"] = secret, ["scope"] = scopeName,
         }, HttpStatusCode.BadRequest);
         Assert.Equal(Errors.InvalidScope, machine.GetProperty("error").GetString());
         using var web = await client.GetAsync(QueryHelpers.AddQueryString(PandaAuthEndpoints.Authorization, new Dictionary<string, string?>
         {
             ["client_id"] = genericClient, ["redirect_uri"] = callback.AbsoluteUri, ["response_type"] = ResponseTypes.Code,
-            ["scope"] = ReadScope, ["code_challenge_method"] = CodeChallengeMethods.Sha256,
+            ["scope"] = scopeName, ["code_challenge_method"] = CodeChallengeMethods.Sha256,
             ["code_challenge"] = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32)),
         }));
         Assert.Equal(HttpStatusCode.Redirect, web.StatusCode);
@@ -223,7 +291,7 @@ public sealed class NativeLoginBusinessTokenTests
         Assert.Equal(Errors.InvalidScope, QueryHelpers.ParseQuery(web.Headers.Location.Query)["error"].ToString());
     }
 
-    private static void AssertBusinessToken(JsonElement token, Uri issuer, string subject)
+    private static void AssertBusinessToken(JsonElement token, Uri issuer, string subject, params string[] businessScopes)
     {
         Assert.True(token.GetProperty("active").GetBoolean(), "The business introspector must accept the App access token.");
         Assert.Equal(issuer.AbsoluteUri, token.GetProperty("iss").GetString());
@@ -232,7 +300,7 @@ public sealed class NativeLoginBusinessTokenTests
         Assert.Equal(PandaAuthClaims.SubjectTypes.Human, subjectType.GetString());
         Assert.Equal(new[] { Audience, PandeskCustomerRead.IntrospectionAudience }.Order(StringComparer.Ordinal),
             token.GetProperty("aud").EnumerateArray().Select(value => value.GetString()).Order(StringComparer.Ordinal));
-        Assert.Equal(new[] { Scopes.OpenId, ReadScope }.Order(StringComparer.Ordinal),
+        Assert.Equal((businessScopes.Length == 0 ? [ReadScope] : businessScopes).Append(Scopes.OpenId).Order(StringComparer.Ordinal),
             token.GetProperty("scope").GetString()!.Split(' ').Order(StringComparer.Ordinal));
     }
 

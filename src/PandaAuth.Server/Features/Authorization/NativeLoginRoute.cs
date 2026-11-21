@@ -23,7 +23,7 @@ internal static class NativeLoginRoute
     private const string Callback = "connect/native/callback";
     private static readonly TimeSpan AuthorizationCodeLifetime = TimeSpan.FromMinutes(1);
 
-    internal sealed record Settings(string ClientId);
+    internal sealed record Settings(string ClientId, bool AllowQuotePolicyScope);
 
     internal static Settings? ReadSettings(IConfiguration configuration, IHostEnvironment environment, TenantRoutingOptions routing)
     {
@@ -32,7 +32,7 @@ internal static class NativeLoginRoute
         if (!environment.IsDevelopment() || !routing.Enabled || string.IsNullOrWhiteSpace(clientId)
             || clientId.Length > BusinessInputLimits.ClientId)
             throw new InvalidOperationException("Native login requires Development, tenant routing and an explicit client registration.");
-        return new Settings(clientId);
+        return new Settings(clientId, configuration.GetValue<bool>("Auth:NativeLogin:AllowQuotePolicyScope"));
     }
 
     internal static void Configure(OpenIddictServerBuilder options)
@@ -107,9 +107,12 @@ internal static class NativeLoginRoute
         return Results.Json(body, statusCode: status);
     }
 
+    internal static bool IsPandeskBusinessScope(string scope)
+        => scope is PandeskCustomerRead.Scope or PandeskQuotePolicies.Scope;
+
     internal static bool HasInvalidPandeskResources(ClaimsPrincipal principal)
     {
-        if (!principal.HasScope(PandeskCustomerRead.Scope)) return false;
+        if (!principal.GetScopes().Any(IsPandeskBusinessScope)) return false;
         var resources = principal.GetResources();
         return resources.Length != 2 || !resources.Contains(PandeskCustomerRead.Audience, StringComparer.Ordinal)
             || !resources.Contains(PandeskCustomerRead.IntrospectionAudience, StringComparer.Ordinal);
@@ -179,10 +182,14 @@ internal static class NativeLoginRoute
                 return;
             }
 
-            var scope = await applications.HasPermissionAsync(application,
-                Permissions.Prefixes.Scope + PandeskCustomerRead.Scope, context.CancellationToken)
-                ? $"{Scopes.OpenId} {PandeskCustomerRead.Scope}"
-                : Scopes.OpenId;
+            var scopes = new List<string> { Scopes.OpenId };
+            if (await applications.HasPermissionAsync(application, Permissions.Prefixes.Scope + PandeskCustomerRead.Scope,
+                context.CancellationToken))
+                scopes.Add(PandeskCustomerRead.Scope);
+            if (settings.AllowQuotePolicyScope && await applications.HasPermissionAsync(application,
+                Permissions.Prefixes.Scope + PandeskQuotePolicies.Scope, context.CancellationToken))
+                scopes.Add(PandeskQuotePolicies.Scope);
+            var scope = string.Join(' ', scopes);
             var callback = new Uri(expectedIssuer, Callback).AbsoluteUri;
             var binding = new NativeLoginBinding(tenant.TenantId, expectedIssuer, settings.ClientId,
                 form["code_challenge"].ToString(), scope, [], callback, form["nonce"].ToString());
