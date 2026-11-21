@@ -72,6 +72,8 @@ are development defaults, not production port assignments.
 
 `PandaAuth.Server --register-cloud-config-only` 复用既有 CloudConfig 登记组件，只登记五个原 scope、专用内省 client，并给已存在的 `FirstPartyClients.CloudConsoleWeb` 增加对应权限。不执行 Schema 迁移或全量 DbSeeder，不创建 Console/Fleet/用户/角色，不启动 Web 或密钥任务。错误参数（包括与 `--migrate` 混用）失败关闭，不落入服务启动。
 
+`PandaAuth.Server --register-cloud-config-console-role-only` 通过同一正式登记门禁和数据库维护锁，只登记固定的 `cloud-admin` 角色。已存在的同名空角色可复用。账号角色授予走现有 PandaAuth 管理 API 的精确 MFA 操作授权与审计。运行命令和账号授予均绑定实际生产批次。
+
 执行条件为已批准的正式镜像、原迁移连接与就绪 Schema，以及一次性受保护配置中显式开启 `Auth:Seed:Enabled`、`Auth:Seed:CloudConfig:Enabled`、`Auth:Seed:CloudConsoleWeb:Enabled`；issuer 必须匹配共享契约，专用 `Auth:Seed:CloudConfig:ClientSecret` 不能为空。本入口拒绝 FleetReadEnabled，避免把本批扩大到 Fleet client。配置及秘密只经服务器受保护材料供应，不在聊天、命令参数或日志中传递；生产授权、备份/恢复、镜像来源及执行入口仍按 [Auth 部署正本](../panda-auth/deploy/README.md)准备具体批次。本命令存在不授予执行权限。
 
 入口持有原数据库租约，拒绝待迁移 Schema；整个登记及 Console 权限追加在一个 Serializable 事务中完成。资源映射、内省 client 类型/权限或专用 secret 漂移即回滚；不静默轮换、不改 Console 原 secret/hash、回调或其它属性，不删原权限或改变其它客户端。重入复用同一身份。成功仅输出 `cloud-config-registration-only-v1` 脱敏结果；失败不回显连接、SQL、secret 或底层异常，不自动重试。关闭 seed 开关、撤销代码或镜像回退都不会撤销已登记权限/token，实际撤销另按精确批次处理。
