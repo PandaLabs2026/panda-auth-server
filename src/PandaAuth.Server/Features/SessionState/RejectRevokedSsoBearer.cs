@@ -16,6 +16,7 @@ public sealed class RejectRevokedSsoBearer(SessionRevocationService revocations,
         var kinds = context.AccessTokenPrincipal?.FindAll(PandaAuthClaims.SubjectType).ToArray() ?? [];
         if (context.AccessTokenPrincipal is null || (ids.Length == 0 && kinds.Length == 1 && kinds[0].Value == PandaAuthClaims.SubjectTypes.Machine)) return;
         if (NativeLoginRoute.RejectInactivePilotPrincipal(context.AccessTokenPrincipal, configuration)
+            || NativeResourceClient.RejectInactivePrincipal(context.AccessTokenPrincipal, configuration)
             || !await AccountSecurityVersion.IsCurrentAsync(context.AccessTokenPrincipal, users)
             || ids.Length != 1 || !Guid.TryParseExact(ids[0].Value, "N", out _)
             || await revocations.IsRevokedAsync(PandaAuthSessionApi.SsoPartition, ids[0].Value, context.CancellationToken))

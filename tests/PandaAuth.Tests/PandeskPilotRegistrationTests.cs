@@ -98,6 +98,47 @@ public sealed class PandeskPilotRegistrationTests
         Assert.True(await finalApps.ValidateClientSecretAsync(introspector, existingSecret));
     }
 
+    [PostgresFact]
+    public async Task Resource_registration_creates_only_the_separate_client_and_scope()
+    {
+        const string resourceArgument = "--register-native-resource-only";
+        const string resourceClient = "dedicated-native-registration-fixture";
+        const string resourceScope = "fixture.native.api";
+        const string resource = "Auth:NativeLogin:ResourceAccess:";
+        await using var fixture = await SecurityProtocolFixture.CreateAsync();
+        var original = await RegisterAsync(fixture);
+        Assert.Equal(0, original.ExitCode);
+        var configuration = Settings(fixture.ConnectionString);
+        configuration[resource + "ClientId"] = resourceClient;
+        configuration[resource + "Scope"] = resourceScope;
+        configuration[resource + "Enabled"] = "false";
+        configuration[resource + "Revision"] = Guid.NewGuid().ToString("D");
+        configuration[resource + "Audiences:0"] = PandeskCustomerRead.Audience;
+        configuration[resource + "Audiences:1"] = PandeskCustomerRead.IntrospectionAudience;
+        var environment = fixture.Host.Services.GetRequiredService<IHostEnvironment>();
+        using var output = new StringWriter();
+        Assert.Equal(0, await PandeskPilotRegistrationCommand.RunAsync([resourceArgument], configuration, environment, output));
+        Assert.Equal(0, await PandeskPilotRegistrationCommand.RunAsync([resourceArgument], configuration, environment, output));
+
+        using var scope = fixture.Host.Services.CreateScope();
+        var apps = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+        var resourceApp = Assert.IsAssignableFrom<object>(await apps.FindByClientIdAsync(resourceClient));
+        var reader = Assert.IsAssignableFrom<object>(await apps.FindByClientIdAsync(ClientId));
+        Assert.True(await apps.HasClientTypeAsync(resourceApp, ClientTypes.Public));
+        Assert.True(await apps.HasRequirementAsync(resourceApp, Requirements.Features.ProofKeyForCodeExchange));
+        Assert.True(await apps.HasPermissionAsync(resourceApp, Permissions.Prefixes.Scope + resourceScope));
+        Assert.False(await apps.HasPermissionAsync(resourceApp, Permissions.Prefixes.Scope + PandeskCustomerRead.Scope));
+        Assert.False(await apps.HasPermissionAsync(reader, Permissions.Prefixes.Scope + resourceScope));
+
+        configuration[resource + "Audiences:0"] = "conflicting-audience";
+        Assert.Equal(2, await PandeskPilotRegistrationCommand.RunAsync([resourceArgument], configuration, environment, output));
+        Assert.Contains("pandesk_registration_conflict", output.ToString());
+        var scopes = scope.ServiceProvider.GetRequiredService<IOpenIddictScopeManager>();
+        var registered = Assert.IsAssignableFrom<object>(await scopes.FindByNameAsync(resourceScope));
+        Assert.Contains(PandeskCustomerRead.Audience, await scopes.GetResourcesAsync(registered));
+        Assert.DoesNotContain(Secret, output.ToString());
+    }
+
     private static IConfiguration Settings(string connection) => new ConfigurationBuilder()
         .AddInMemoryCollection(new Dictionary<string, string?>
         {

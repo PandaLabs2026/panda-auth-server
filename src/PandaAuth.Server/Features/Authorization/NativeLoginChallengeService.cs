@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Infrastructure.Security;
@@ -12,19 +13,27 @@ namespace PandaAuth.Server.Features.Authorization;
 // registration. The caller supplies the exact scope/resource context of the initial request.
 internal sealed record NativeLoginBinding(
     TenantId TenantId, Uri Issuer, string ClientId, string CodeChallenge, string? Scope,
-    ImmutableArray<string> Resources, string? RedirectUri, string? Nonce = null)
+    ImmutableArray<string> Resources, string? RedirectUri, string? Nonce = null, string? ResourceRevision = null)
 {
-    internal string StorageKey => Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
+    internal string StorageKey
     {
-        Tenant = TenantId.Value,
-        Issuer = Issuer.AbsoluteUri,
-        ClientId,
-        CodeChallenge,
-        Scope,
-        Resources,
-        RedirectUri,
-        Nonce,
-    })));
+        get
+        {
+            var key = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                Tenant = TenantId.Value,
+                Issuer = Issuer.AbsoluteUri,
+                ClientId,
+                CodeChallenge,
+                Scope,
+                Resources,
+                RedirectUri,
+                Nonce,
+            })));
+            return ResourceRevision is null ? key
+                : Convert.ToHexString(SHA256.HashData(Encoding.ASCII.GetBytes($"{key}:{ResourceRevision}")));
+        }
+    }
 }
 
 internal enum NativeLoginStatus
@@ -65,7 +74,7 @@ internal sealed class NativeLoginChallengeService(
         if (!accountLease.IsAcquired) return new(NativeLoginStatus.RateLimited);
 
         var account = await users.FindByNameAsync(username);
-        var (verified, failure) = await VerifyPasswordAsync(account, password, ct);
+        var (verified, failure) = await VerifyPasswordAsync(binding, account, password, ct);
         await loginAudit.RecordAsync(new LoginLog
         {
             UserId = account?.Id,
@@ -97,7 +106,7 @@ internal sealed class NativeLoginChallengeService(
         using var accountLease = limiter.AttemptMfaChallengeByUser(pending.UserId);
         if (!accountLease.IsAcquired) return new(NativeLoginStatus.RateLimited);
         var current = await users.FindByIdAsync(pending.UserId);
-        if (!Matches(current, pending)) return new(NativeLoginStatus.InvalidChallenge);
+        if (!Matches(binding, current, pending)) return new(NativeLoginStatus.InvalidChallenge);
 
         if (!await mfa.VerifyAsync(pending.UserId, otp, ct))
         {
@@ -106,7 +115,7 @@ internal sealed class NativeLoginChallengeService(
         }
 
         var reloaded = await users.ReloadAsync(pending.UserId);
-        if (stored.ExpiresAt <= clock.GetUtcNow() || !Matches(reloaded, pending))
+        if (stored.ExpiresAt <= clock.GetUtcNow() || !Matches(binding, reloaded, pending))
             return new(NativeLoginStatus.InvalidChallenge);
         return new(NativeLoginStatus.Verified, User: reloaded);
     }
@@ -120,7 +129,7 @@ internal sealed class NativeLoginChallengeService(
         return new(cancelled is null ? NativeLoginStatus.InvalidChallenge : NativeLoginStatus.Cancelled);
     }
 
-    private async Task<(PandaUser? User, string? Failure)> VerifyPasswordAsync(PandaUser? account, string password, CancellationToken ct)
+    private async Task<(PandaUser? User, string? Failure)> VerifyPasswordAsync(NativeLoginBinding binding, PandaUser? account, string password, CancellationToken ct)
     {
         if (account is not { Status: UserStatus.Active })
         {
@@ -128,7 +137,7 @@ internal sealed class NativeLoginChallengeService(
             return (null, account is null ? "user_not_found" : "account_frozen");
         }
 
-        if (!settings.AllowsSubject(account.Id, configuration))
+        if (!AllowsSubject(binding, account.Id))
         {
             await hasher.VerifyAsync(dummyPassword.Value, password, ct);
             return (null, "pilot_subject_not_allowed");
@@ -143,10 +152,14 @@ internal sealed class NativeLoginChallengeService(
         return (verified, null);
     }
 
-    private bool Matches(PandaUser? user, PendingUser pending)
+    private bool Matches(NativeLoginBinding binding, PandaUser? user, PendingUser pending)
         => user is { Status: UserStatus.Active, EmailConfirmed: true, SecurityStamp.Length: > 0 }
-            && settings.AllowsSubject(user.Id, configuration)
+            && AllowsSubject(binding, user.Id)
             && string.Equals(AccountSecurityVersion.From(user), pending.SecurityVersion, StringComparison.Ordinal);
+
+    private bool AllowsSubject(NativeLoginBinding binding, string subject)
+        => binding.ResourceRevision is null ? settings.AllowsSubject(subject, configuration)
+            : settings.DedicatedResource is { } resource && resource.IsCurrent(configuration);
 
     private sealed record PendingUser(string UserId, string SecurityVersion);
 }
