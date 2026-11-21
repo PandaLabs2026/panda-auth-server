@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using OpenIddict.Abstractions;
 using OpenIddict.Server;
 using PandaAuth.Server.Features.SessionState;
@@ -23,7 +24,7 @@ public sealed class SsoTokenValidationTests
         var context = new OpenIddictServerEvents.ProcessAuthenticationContext(new OpenIddictServerTransaction
         { Request = new OpenIddictRequest() })
         { AccessTokenPrincipal = new ClaimsPrincipal(new ClaimsIdentity([new Claim(PandaAuthClaims.SubjectType, kind)], "verified")) };
-        await new RejectRevokedSsoSession(new(db, TimeProvider.System), new(db, new Argon2idPasswordHasher(), TimeProvider.System)).HandleAsync(context);
+        await new RejectRevokedSsoSession(new(db, TimeProvider.System), new(db, new Argon2idPasswordHasher(), TimeProvider.System), new ConfigurationBuilder().Build()).HandleAsync(context);
         Assert.Equal(rejected, context.IsRejected);
     }
 
@@ -38,7 +39,7 @@ public sealed class SsoTokenValidationTests
         var context = new OpenIddict.Validation.OpenIddictValidationEvents.ProcessAuthenticationContext(
             new OpenIddict.Validation.OpenIddictValidationTransaction())
         { AccessTokenPrincipal = new ClaimsPrincipal(new ClaimsIdentity([new Claim(PandaAuthClaims.SsoSessionId, sid)], "verified")) };
-        await new RejectRevokedSsoBearer(service, new(db, new Argon2idPasswordHasher(), TimeProvider.System)).HandleAsync(context);
+        await new RejectRevokedSsoBearer(service, new(db, new Argon2idPasswordHasher(), TimeProvider.System), new ConfigurationBuilder().Build()).HandleAsync(context);
         Assert.True(context.IsRejected);
     }
 
@@ -57,7 +58,7 @@ public sealed class SsoTokenValidationTests
         var users = new UserService(db, new Argon2idPasswordHasher(), TimeProvider.System);
         var user = new PandaUser { UserName = "sso-user" };
         Assert.True((await users.CreateAsync(user)).Succeeded);
-        var handler = new RejectRevokedSsoSession(service, users);
+        var handler = new RejectRevokedSsoSession(service, users, new ConfigurationBuilder().Build());
         foreach (var sid in new[] { revoked, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" })
         {
             var context = new OpenIddictServerEvents.ProcessAuthenticationContext(new OpenIddictServerTransaction

@@ -251,6 +251,12 @@ static async Task RunServerAsync(string[] args)
             options.Configure(RefreshTokenPolicy.Configure);
             options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ProcessAuthenticationContext>(handler =>
                 handler.UseScopedHandler<RejectRevokedSsoSession>().SetOrder(int.MaxValue));
+            options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.HandleIntrospectionRequestContext>(handler =>
+                handler.UseInlineHandler(context =>
+                {
+                    context.Claims.Remove(NativeLoginRoute.PilotRevisionClaim);
+                    return ValueTask.CompletedTask;
+                }).SetOrder(OpenIddict.Server.OpenIddictServerHandlers.Introspection.AttachApplicationClaims.Descriptor.Order + 500));
 
             options.RegisterScopes(
                 OpenIddictConstants.Scopes.OpenId,

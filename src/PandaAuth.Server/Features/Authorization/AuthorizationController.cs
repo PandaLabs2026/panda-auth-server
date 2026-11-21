@@ -171,7 +171,8 @@ public sealed class AuthorizationController(
             return InvalidGrant("账号不存在或已被冻结。");
         }
 
-        if (isPilotClient && (!native!.AllowsSubject(user.Id) || !authResult.Principal!.HasScope(PandeskCustomerRead.Scope)))
+        if (isPilotClient && (!native!.AllowsSubject(user.Id, HttpContext.RequestServices.GetRequiredService<IConfiguration>())
+            || !authResult.Principal!.HasScope(PandeskCustomerRead.Scope)))
             return InvalidGrant("授权票据无效或已过期。");
 
         var principal = await CreatePrincipalAsync(user, authResult.Principal!.GetScopes(), authResult.Principal,
@@ -179,6 +180,7 @@ public sealed class AuthorizationController(
         if (NativeLoginRoute.HasInvalidPandeskResources(principal)
             || (principal.HasScope(PandeskCustomerRead.Scope) && !request.IsAuthorizationCodeGrantType()))
             return InvalidPandeskScope();
+        if (isPilotClient) NativeLoginRoute.SetPilotRevision(principal, native!.PilotRevision!);
         return SignIn(principal, OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
     }
 

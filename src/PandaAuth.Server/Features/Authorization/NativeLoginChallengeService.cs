@@ -49,7 +49,8 @@ internal sealed class NativeLoginChallengeService(
     MfaService mfa,
     LoginAuditWriter loginAudit,
     TimeProvider clock,
-    NativeLoginRoute.Settings settings)
+    NativeLoginRoute.Settings settings,
+    IConfiguration configuration)
 {
     private const string Purpose = "native-login-totp";
     private static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(5);
@@ -127,7 +128,7 @@ internal sealed class NativeLoginChallengeService(
             return (null, account is null ? "user_not_found" : "account_frozen");
         }
 
-        if (!settings.AllowsSubject(account.Id))
+        if (!settings.AllowsSubject(account.Id, configuration))
         {
             await hasher.VerifyAsync(dummyPassword.Value, password, ct);
             return (null, "pilot_subject_not_allowed");
@@ -144,7 +145,7 @@ internal sealed class NativeLoginChallengeService(
 
     private bool Matches(PandaUser? user, PendingUser pending)
         => user is { Status: UserStatus.Active, EmailConfirmed: true, SecurityStamp.Length: > 0 }
-            && settings.AllowsSubject(user.Id)
+            && settings.AllowsSubject(user.Id, configuration)
             && string.Equals(AccountSecurityVersion.From(user), pending.SecurityVersion, StringComparison.Ordinal);
 
     private sealed record PendingUser(string UserId, string SecurityVersion);

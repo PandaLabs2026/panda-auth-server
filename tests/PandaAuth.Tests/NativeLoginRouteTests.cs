@@ -41,11 +41,14 @@ public sealed class NativeLoginRouteTests
     private const string PilotIssuer = "https://t0000-auth.pandacloud.cc/";
     private const string PilotClient = "pandesk-native-t0000-test";
     private const string PilotSubject = "818cbf0b-3e70-452f-9eae-1fd87aa07fa7";
+    private const string PilotRevision = "fcbdd74a-bf92-4fe6-9c3d-fcef0dcd6314";
+    private const string PilotConfig = "Auth:NativeLogin:T0000Pilot:";
 
     [Theory]
     [InlineData("Auth:Issuer", "https://t0000-auth.s001.pandacloud.cc/")]
     [InlineData("Auth:TenantRouting:Bindings:0:TenantId", "t9876")]
     [InlineData("Auth:NativeLogin:T0000Pilot:AllowedSubjects:0", "")]
+    [InlineData(PilotConfig + "Revision", "")]
     public void T0000PilotRefusesIncompleteOrWrongBindings(string key, string value)
     {
         var settings = PilotSettings();
@@ -56,12 +59,26 @@ public sealed class NativeLoginRouteTests
         Assert.Throws<InvalidOperationException>(() => NativeLoginRoute.ReadSettings(configuration, environment, routing));
     }
 
+    [Fact]
+    public void DisabledT0000PilotDoesNotFallBackToGenericNativeLogin()
+    {
+        var settings = PilotSettings();
+        settings[PilotConfig + "Enabled"] = "false";
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            settings.Select(pair => new KeyValuePair<string, string?>(pair.Key, pair.Value))).Build();
+        var environment = new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = Environments.Development };
+        var routing = configuration.GetSection("Auth:TenantRouting").Get<TenantRoutingOptions>()!;
+        Assert.Null(NativeLoginRoute.ReadSettings(configuration, environment, routing));
+    }
+
     [PostgresTheory]
-    [InlineData(true, true, HttpStatusCode.Accepted)]
-    [InlineData(false, true, HttpStatusCode.Unauthorized)]
-    [InlineData(true, false, HttpStatusCode.BadRequest)]
+    [InlineData(true, true, HttpStatusCode.Accepted, PilotConfig + "Enabled", "false")]
+    [InlineData(true, true, HttpStatusCode.Accepted, PilotConfig + "AllowedSubjects:0", "53a0cb4c-0438-4026-8c0f-57c7e7a84309")]
+    [InlineData(true, true, HttpStatusCode.Accepted, PilotConfig + "Revision", "83568975-a8ec-481a-bc91-a9f3ef75f250")]
+    [InlineData(false, true, HttpStatusCode.Unauthorized, null, null)]
+    [InlineData(true, false, HttpStatusCode.BadRequest, null, null)]
     public async Task T0000PilotRequiresBothSubjectAdmissionAndReadOnlyScope(
-        bool approved, bool readScope, HttpStatusCode expected)
+        bool approved, bool readScope, HttpStatusCode expected, string? closedKey, string? closedValue)
     {
         const string unapprovedSubject = "53a0cb4c-0438-4026-8c0f-57c7e7a84309";
         await using var fixture = await SecurityProtocolFixture.CreateAsync(settings: PilotSettings(),
@@ -131,6 +148,34 @@ public sealed class NativeLoginRouteTests
         Assert.True(tokens.TryGetProperty("access_token", out _));
         Assert.True(tokens.TryGetProperty("id_token", out _));
         Assert.False(tokens.TryGetProperty("refresh_token", out _));
+
+        var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        await applications.CreateAsync(new OpenIddictApplicationDescriptor
+        {
+            ClientId = PandeskCustomerRead.IntrospectionClientId,
+            ClientType = ClientTypes.Confidential,
+            ClientSecret = secret,
+            Permissions = { Permissions.Endpoints.Introspection },
+        });
+        var accessToken = tokens.GetProperty("access_token").GetString()!;
+        Assert.True(await IsActiveAsync());
+        var configuration = fixture.Host.Services.GetRequiredService<IConfiguration>();
+        configuration[closedKey!] = closedValue;
+        Assert.False(await IsActiveAsync());
+
+        async Task<bool> IsActiveAsync()
+        {
+            using var reply = await client.PostAsync("/connect/introspect", new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["client_id"] = PandeskCustomerRead.IntrospectionClientId,
+                ["client_secret"] = secret,
+                ["token"] = accessToken,
+            }));
+            Assert.Equal(HttpStatusCode.OK, reply.StatusCode);
+            var body = await reply.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.False(body.TryGetProperty(NativeLoginRoute.PilotRevisionClaim, out _));
+            return body.GetProperty("active").GetBoolean();
+        }
     }
 
     private static Dictionary<string, string> PilotSettings() => new()
@@ -143,8 +188,9 @@ public sealed class NativeLoginRouteTests
         ["Auth:TenantRouting:Bindings:0:Zone"] = "",
         ["Auth:NativeLogin:Enabled"] = "true",
         ["Auth:NativeLogin:ClientId"] = PilotClient,
-        ["Auth:NativeLogin:T0000Pilot:Enabled"] = "true",
-        ["Auth:NativeLogin:T0000Pilot:AllowedSubjects:0"] = PilotSubject,
+        [PilotConfig + "Enabled"] = "true",
+        [PilotConfig + "Revision"] = PilotRevision,
+        [PilotConfig + "AllowedSubjects:0"] = PilotSubject,
     };
 
     [PostgresFact]
