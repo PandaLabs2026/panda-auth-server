@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Claims;
+using System.Text.Json;
 using Microsoft.AspNetCore;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
@@ -52,17 +53,14 @@ internal static class NativeLoginRoute
         if (!pilotEnabled) return new Settings(clientId);
 
         var revision = pilot["Revision"];
-        var configuredSubjects = pilot.GetSection("AllowedSubjects").Get<string[]>() ?? [];
-        var subjects = configuredSubjects.ToHashSet(StringComparer.Ordinal);
+        var subjects = ReadPilotSubjects(pilot);
         // The resolver uses the first matching binding. A later Ready row cannot
         // activate a host shadowed by a Pending route.
         var binding = routing.Bindings.FirstOrDefault(binding => string.Equals(binding.TenantId, PilotTenant.Value, StringComparison.Ordinal)
             && binding.Product == TenantProduct.PandaAuth && binding.Zone == "");
         if (!Guid.TryParseExact(revision, "D", out var parsedRevision) || parsedRevision == Guid.Empty
             || !isPilotIssuer || binding is not { RouteRevision: > 0, State: TenantRouteState.Ready }
-            || subjects.Count == 0 || subjects.Count != configuredSubjects.Length
-            || subjects.Any(subject => string.IsNullOrEmpty(subject)
-                || subject.Any(character => char.IsWhiteSpace(character) || char.IsControl(character))))
+            || subjects is null)
         {
             throw new InvalidOperationException("The t0000 native pilot requires the exact issuer, a ready apex route, a revision and a nonempty subject allowlist.");
         }
@@ -80,8 +78,35 @@ internal static class NativeLoginRoute
             && string.Equals(configuration[$"{PilotConfig}:Revision"], revision, StringComparison.Ordinal);
 
     private static bool PilotSubjectIsCurrent(IConfiguration configuration, string subject)
-        => configuration.GetSection($"{PilotConfig}:AllowedSubjects").GetChildren()
-            .Any(entry => string.Equals(entry.Value, subject, StringComparison.Ordinal));
+        => ReadPilotSubjects(configuration.GetSection(PilotConfig))?.Contains(subject) == true;
+
+    private static HashSet<string>? ReadPilotSubjects(IConfigurationSection pilot)
+    {
+        var indexed = pilot.GetSection("AllowedSubjects");
+        var json = pilot["AllowedSubjectsJson"];
+        string?[]? configured;
+        if (string.IsNullOrEmpty(json))
+        {
+            configured = indexed.GetChildren().Select(entry => entry.Value).ToArray();
+        }
+        else
+        {
+            if (indexed.GetChildren().Any()) return null;
+            try { configured = JsonSerializer.Deserialize<string?[]>(json); }
+            catch (JsonException) { return null; }
+        }
+
+        if (configured is not { Length: > 0 }) return null;
+        var subjects = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var subject in configured)
+        {
+            if (string.IsNullOrEmpty(subject)
+                || subject.Any(character => char.IsWhiteSpace(character) || char.IsControl(character))
+                || !subjects.Add(subject))
+                return null;
+        }
+        return subjects;
+    }
 
     internal static bool RejectInactivePilotPrincipal(ClaimsPrincipal principal, IConfiguration configuration)
     {
