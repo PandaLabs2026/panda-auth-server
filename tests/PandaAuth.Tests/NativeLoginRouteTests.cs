@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -46,6 +47,59 @@ public sealed class NativeLoginRouteTests
     private const string PilotSubject = "818cbf0b-3e70-452f-9eae-1fd87aa07fa7";
     private const string PilotRevision = "fcbdd74a-bf92-4fe6-9c3d-fcef0dcd6314";
     private const string PilotConfig = "Auth:NativeLogin:T0000Pilot:";
+
+    [Fact]
+    public void ProductionAcceptsJsonSubjectsAndUsesTheCurrentListForExistingTokens()
+    {
+        const string second = "53a0cb4c-0438-4026-8c0f-57c7e7a84309";
+        var settings = PilotSettings();
+        settings.Remove(PilotConfig + "AllowedSubjects:0");
+        var jsonKey = PilotConfig + "AllowedSubjectsJson";
+        settings[jsonKey] = JsonSerializer.Serialize(new[] { PilotSubject, second });
+        var configuration = PilotConfiguration(settings);
+        var environment = new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = Environments.Production };
+        var routing = configuration.GetSection("Auth:TenantRouting").Get<TenantRoutingOptions>()!;
+        var active = Assert.IsType<NativeLoginRoute.Settings>(NativeLoginRoute.ReadSettings(configuration, environment, routing));
+        Assert.True(active.AllowsSubject(PilotSubject, configuration));
+        Assert.True(active.AllowsSubject(second, configuration));
+
+        var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim(Claims.Subject, PilotSubject)], "fixture"));
+        principal.SetScopes(PandeskCustomerRead.Scope);
+        NativeLoginRoute.SetPilotRevision(principal, PilotRevision);
+        Assert.False(NativeLoginRoute.RejectInactivePilotPrincipal(principal, configuration));
+        configuration[jsonKey] = JsonSerializer.Serialize(new[] { second });
+        Assert.True(NativeLoginRoute.RejectInactivePilotPrincipal(principal, configuration));
+        Assert.True(active.AllowsSubject(second, configuration));
+        configuration[jsonKey] = "[";
+        Assert.False(active.AllowsSubject(second, configuration));
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("{}")]
+    [InlineData("[42]")]
+    [InlineData("[null]")]
+    [InlineData("[\"allowed\",\"allowed\"]")]
+    [InlineData("[\" padded\"]")]
+    [InlineData("[\"line\\nfeed\"]")]
+    public void PilotRejectsInvalidJsonSubjectLists(string json)
+    {
+        var settings = PilotSettings();
+        settings.Remove(PilotConfig + "AllowedSubjects:0");
+        settings[PilotConfig + "AllowedSubjectsJson"] = json;
+        var environment = new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = Environments.Production };
+        Assert.Throws<InvalidOperationException>(() => ReadPilotSettings(settings, environment));
+    }
+
+    [Fact]
+    public void PilotRefusesTwoSubjectProvidersEvenWhenBothHoldTheSameSubject()
+    {
+        var settings = PilotSettings();
+        settings[PilotConfig + "AllowedSubjectsJson"] = JsonSerializer.Serialize(new[] { PilotSubject });
+        var environment = new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = Environments.Production };
+        Assert.Throws<InvalidOperationException>(() => ReadPilotSettings(settings, environment));
+    }
 
     [Theory]
     [InlineData("Production")]
@@ -139,13 +193,18 @@ public sealed class NativeLoginRouteTests
     [InlineData(true, true, HttpStatusCode.Accepted, PilotConfig + "Revision", "83568975-a8ec-481a-bc91-a9f3ef75f250", false)]
     [InlineData(false, true, HttpStatusCode.Unauthorized, null, null, false)]
     [InlineData(true, false, HttpStatusCode.BadRequest, null, null, false)]
-    [InlineData(true, true, HttpStatusCode.Accepted, PilotConfig + "AllowedSubjects:0", "53a0cb4c-0438-4026-8c0f-57c7e7a84309", true)]
+    [InlineData(true, true, HttpStatusCode.Accepted, PilotConfig + "AllowedSubjectsJson", "[\"53a0cb4c-0438-4026-8c0f-57c7e7a84309\"]", true)]
     public async Task T0000PilotRequiresBothSubjectAdmissionAndReadOnlyScope(
         bool approved, bool readScope, HttpStatusCode expected, string? closedKey, string? closedValue, bool production)
     {
         const string unapprovedSubject = "53a0cb4c-0438-4026-8c0f-57c7e7a84309";
         var settings = PilotSettings();
-        if (production) settings["Auth:HttpsRequired"] = "false"; // The existing t0000 host allows HTTP backhaul.
+        if (production)
+        {
+            settings["Auth:HttpsRequired"] = "false"; // The existing t0000 host allows HTTP backhaul.
+            settings.Remove(PilotConfig + "AllowedSubjects:0");
+            settings[PilotConfig + "AllowedSubjectsJson"] = JsonSerializer.Serialize(new[] { PilotSubject });
+        }
         var pilotUri = new Uri(PilotIssuer);
         using var authorityKey = production ? RSA.Create(2048) : null;
         using var serverKey = production ? RSA.Create(2048) : null;
