@@ -26,6 +26,7 @@ namespace PandaAuth.Tests;
 public sealed class NativeLoginBusinessTokenTests
 {
     private const string ClientId = NativeLoginRouteTests.ClientId;
+    private const string ResourceScope = "fixture.native.api";
     private const string OtherClient = "another-native-test-client";
     private const string ReadScope = PandeskCustomerRead.Scope;
     private const string Audience = PandeskCustomerRead.Audience;
@@ -88,7 +89,7 @@ public sealed class NativeLoginBusinessTokenTests
     }
 
     [PostgresFact]
-    public async Task Quote_scope_requires_enabling_the_issuer_and_the_registered_native_client()
+    public async Task Resource_scope_requires_issuer_configuration_and_client_registration()
     {
         const string tenant = "t9876";
         using var caKey = RSA.Create(2048);
@@ -98,14 +99,14 @@ public sealed class NativeLoginBusinessTokenTests
         foreach (var (enabled, permitted) in new[] { (false, true), (true, false), (true, true) })
         {
             await using var issuer = await CreateIssuerAsync(tenant, certificate, enabled);
-            var secret = await RegisterAsync(issuer, tenant, permitQuotePolicies: permitted);
+            var secret = await RegisterAsync(issuer, tenant, permitResourceScope: permitted);
             using var client = CreateClient(tenant, certificate, issuer);
             var token = await IssueAsync(client, issuer);
-            var scopes = enabled && permitted ? new[] { ReadScope, PandeskQuotePolicies.Scope } : [ReadScope];
+            var scopes = enabled && permitted ? new[] { ReadScope, ResourceScope } : [ReadScope];
             AssertBusinessToken(await IntrospectAsync(client, secret, token), client.BaseAddress!, issuer.UserId, scopes);
             if (enabled && permitted)
             {
-                await AssertBusinessScopeUnavailableToOtherGrantsAsync(client, issuer, PandeskQuotePolicies.Scope);
+                await AssertBusinessScopeUnavailableToOtherGrantsAsync(client, issuer, ResourceScope);
                 using var accepted = await RevokeAsync(client, ClientId, token);
                 Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
                 Assert.False((await IntrospectAsync(client, secret, token)).GetProperty("active").GetBoolean());
@@ -113,36 +114,53 @@ public sealed class NativeLoginBusinessTokenTests
         }
     }
 
-    [PostgresFact]
-    public async Task Quote_code_exchange_fails_after_the_client_permission_is_removed()
+    [PostgresTheory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Resource_code_exchange_fails_after_registration_changes(bool removeClientPermission)
     {
         const string tenant = "t9876";
         using var caKey = RSA.Create(2048);
         using var serverKey = RSA.Create(2048);
         using var ca = NativeLoginDesktopTlsTests.CreateAuthority(caKey);
         using var certificate = NativeLoginDesktopTlsTests.CreateServerCertificate(ca, serverKey, NativeLoginRouteTests.FixtureHost(tenant));
-        await using var issuer = await CreateIssuerAsync(tenant, certificate, quotePolicies: true);
-        await RegisterAsync(issuer, tenant, permitQuotePolicies: true);
+        await using var issuer = await CreateIssuerAsync(tenant, certificate, resourceAccess: true);
+        await RegisterAsync(issuer, tenant, permitResourceScope: true);
         using var client = CreateClient(tenant, certificate, issuer);
         var request = await CreateExchangeRequestAsync(client, issuer);
 
         using var scope = issuer.Host.Services.CreateScope();
-        var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
-        var registration = Assert.IsAssignableFrom<object>(await applications.FindByClientIdAsync(ClientId));
-        var descriptor = new OpenIddictApplicationDescriptor();
-        await applications.PopulateAsync(descriptor, registration);
-        Assert.True(descriptor.Permissions.Remove(Permissions.Prefixes.Scope + PandeskQuotePolicies.Scope));
-        await applications.UpdateAsync(registration, descriptor);
+        if (removeClientPermission)
+        {
+            var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+            var registration = Assert.IsAssignableFrom<object>(await applications.FindByClientIdAsync(ClientId));
+            var descriptor = new OpenIddictApplicationDescriptor();
+            await applications.PopulateAsync(descriptor, registration);
+            Assert.True(descriptor.Permissions.Remove(Permissions.Prefixes.Scope + ResourceScope));
+            await applications.UpdateAsync(registration, descriptor);
+        }
+        else
+        {
+            var scopes = scope.ServiceProvider.GetRequiredService<IOpenIddictScopeManager>();
+            var registration = Assert.IsAssignableFrom<object>(await scopes.FindByNameAsync(ResourceScope));
+            var descriptor = new OpenIddictScopeDescriptor { Name = ResourceScope, Resources = { Audience, "different-api" } };
+            await scopes.UpdateAsync(registration, descriptor);
+        }
 
         var response = await PostAsync(client, PandaAuthEndpoints.Token, request, HttpStatusCode.BadRequest);
         Assert.Equal(Errors.InvalidScope, response.GetProperty("error").GetString());
         Assert.False(response.TryGetProperty("access_token", out _));
     }
 
-    internal static Task<SecurityProtocolFixture> CreateIssuerAsync(string tenant, X509Certificate2 server, bool quotePolicies = false)
+    internal static Task<SecurityProtocolFixture> CreateIssuerAsync(string tenant, X509Certificate2 server, bool resourceAccess = false)
     {
         var settings = NativeLoginRouteTests.Settings(tenant);
-        settings["Auth:NativeLogin:AllowQuotePolicyScope"] = quotePolicies ? "true" : "false";
+        if (resourceAccess)
+        {
+            settings["Auth:NativeLogin:ResourceAccess:Scope"] = ResourceScope;
+            settings["Auth:NativeLogin:ResourceAccess:Audiences:0"] = Audience;
+            settings["Auth:NativeLogin:ResourceAccess:Audiences:1"] = Introspector;
+        }
         return SecurityProtocolFixture.CreateAsync(settings: settings,
             configureHost: factory => factory.UseKestrel(options =>
                 options.Listen(IPAddress.Loopback, 0, endpoint => endpoint.UseHttps(server))));
@@ -182,7 +200,7 @@ public sealed class NativeLoginBusinessTokenTests
         return new HttpClient(handler) { BaseAddress = issuer };
     }
 
-    internal static async Task<string> RegisterAsync(SecurityProtocolFixture fixture, string tenant, string? revocationProbeClient = null, bool permitQuotePolicies = false)
+    internal static async Task<string> RegisterAsync(SecurityProtocolFixture fixture, string tenant, string? revocationProbeClient = null, bool permitResourceScope = false)
     {
         await fixture.EnableTotpAsync(administrator: false);
         await NativeLoginRouteTests.RegisterAsync(fixture, ClientId, tenant);
@@ -194,11 +212,11 @@ public sealed class NativeLoginBusinessTokenTests
         var descriptor = new OpenIddictApplicationDescriptor();
         await apps.PopulateAsync(descriptor, client);
         descriptor.Permissions.UnionWith([Permissions.Prefixes.Scope + ReadScope, Permissions.Endpoints.Revocation]);
-        if (permitQuotePolicies)
+        if (permitResourceScope)
         {
             await scopes.CreateAsync(new OpenIddictScopeDescriptor
-                { Name = PandeskQuotePolicies.Scope, Resources = { Audience, Introspector } });
-            descriptor.Permissions.Add(Permissions.Prefixes.Scope + PandeskQuotePolicies.Scope);
+                { Name = ResourceScope, Resources = { Audience, Introspector } });
+            descriptor.Permissions.Add(Permissions.Prefixes.Scope + ResourceScope);
         }
         await apps.UpdateAsync(client, descriptor);
         if (revocationProbeClient is not null)
