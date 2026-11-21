@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.HttpOverrides;
 using Npgsql;
+using PandaAuth.Server.Features.Authorization;
 using PandaAuth.Server.Infrastructure.Messaging;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Server.Infrastructure.Security;
@@ -52,6 +53,8 @@ public static class StartupConfiguration
             if (options.Seed.Enabled) Check("Auth:Seed", "seed_permissions_invalid", () => SeedPermissionPolicy.Validate(options.Seed));
             return new(1, errors.Count == 0, errors.ToArray());
         }
+        Check("Auth:NativeLogin", "native_login_invalid", () =>
+            NativeLoginRoute.ReadSettings(configuration, environment, options.TenantRouting));
         Check("PANDA_AUTH_TRUSTED_PROXY", "proxy_invalid", () => TenantForwardedHeaders.Configure(new ForwardedHeadersOptions(), configuration));
         if (production && options.CookieSecure != CookieSecurePolicy.Always)
             errors.Add(new("Auth:CookieSecure", "secure_cookie_required"));

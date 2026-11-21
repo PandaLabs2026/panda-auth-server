@@ -39,23 +39,27 @@ internal static class NativeLoginRoute
     internal static Settings? ReadSettings(IConfiguration configuration, IHostEnvironment environment, TenantRoutingOptions routing)
     {
         if (!configuration.GetValue<bool>("Auth:NativeLogin:Enabled")) return null;
-        var clientId = configuration["Auth:NativeLogin:ClientId"];
-        if (!environment.IsDevelopment() || !routing.Enabled || string.IsNullOrWhiteSpace(clientId)
-            || clientId.Length > BusinessInputLimits.ClientId)
-            throw new InvalidOperationException("Native login requires Development, tenant routing and an explicit client registration.");
         var pilot = configuration.GetSection(PilotConfig);
-        if (!pilot.GetValue<bool>("Enabled"))
-            return string.Equals(configuration["Auth:Issuer"], PilotIssuer, StringComparison.Ordinal)
-                ? null : new Settings(clientId);
+        var pilotEnabled = pilot.GetValue<bool>("Enabled");
+        var isPilotIssuer = string.Equals(configuration["Auth:Issuer"], PilotIssuer, StringComparison.Ordinal);
+        if (!pilotEnabled && isPilotIssuer) return null;
+
+        var clientId = configuration["Auth:NativeLogin:ClientId"];
+        if ((!environment.IsDevelopment() && !(environment.IsProduction() && pilotEnabled))
+            || !routing.Enabled || string.IsNullOrWhiteSpace(clientId)
+            || clientId.Length > BusinessInputLimits.ClientId)
+            throw new InvalidOperationException("Native login requires an eligible environment, tenant routing and an explicit client registration.");
+        if (!pilotEnabled) return new Settings(clientId);
 
         var revision = pilot["Revision"];
         var configuredSubjects = pilot.GetSection("AllowedSubjects").Get<string[]>() ?? [];
         var subjects = configuredSubjects.ToHashSet(StringComparer.Ordinal);
+        // The resolver uses the first matching binding. A later Ready row cannot
+        // activate a host shadowed by a Pending route.
+        var binding = routing.Bindings.FirstOrDefault(binding => string.Equals(binding.TenantId, PilotTenant.Value, StringComparison.Ordinal)
+            && binding.Product == TenantProduct.PandaAuth && binding.Zone == "");
         if (!Guid.TryParseExact(revision, "D", out var parsedRevision) || parsedRevision == Guid.Empty
-            || !string.Equals(configuration["Auth:Issuer"], PilotIssuer, StringComparison.Ordinal)
-            || !routing.Bindings.Any(binding => string.Equals(binding.TenantId, PilotTenant.Value, StringComparison.Ordinal)
-                && binding.Product == TenantProduct.PandaAuth && binding.Zone == ""
-                && binding.RouteRevision > 0 && binding.State == TenantRouteState.Ready)
+            || !isPilotIssuer || binding is not { RouteRevision: > 0, State: TenantRouteState.Ready }
             || subjects.Count == 0 || subjects.Count != configuredSubjects.Length
             || subjects.Any(subject => string.IsNullOrEmpty(subject)
                 || subject.Any(character => char.IsWhiteSpace(character) || char.IsControl(character))))
@@ -64,6 +68,10 @@ internal static class NativeLoginRoute
         }
         return new Settings(clientId, subjects, revision);
     }
+
+    internal static bool HasPilotRequestOrigin(HttpRequest request)
+        => request.IsHttps && request.Host.Port is null or 443
+            && string.Equals($"https://{request.Host.Host}/", PilotIssuer, StringComparison.OrdinalIgnoreCase);
 
     private static bool PilotRevisionIsCurrent(IConfiguration configuration, string revision)
         => bool.TryParse(configuration["Auth:NativeLogin:Enabled"], out var nativeEnabled) && nativeEnabled
@@ -216,8 +224,7 @@ internal static class NativeLoginRoute
             }
             var expectedIssuer = new Uri($"https://{tenant.CanonicalHost}/");
             if (request.Host.Port is not (null or 443) || context.Options.Issuer != expectedIssuer
-                || (settings.PilotSubjects is not null
-                    && !string.Equals(expectedIssuer.AbsoluteUri, PilotIssuer, StringComparison.Ordinal)))
+                || (settings.PilotSubjects is not null && !HasPilotRequestOrigin(request)))
             {
                 await RejectHostAsync();
                 return;

@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using OpenIddict.Abstractions;
@@ -34,15 +35,16 @@ internal sealed class SecurityProtocolFixture : IAsyncDisposable
     internal string UserId { get; private set; } = "";
     private byte[]? mfaSecret;
 
-    private SecurityProtocolFixture(string connection, Action<IServiceCollection>? configure, IReadOnlyDictionary<string, string>? settings)
+    private SecurityProtocolFixture(string connection, Action<IServiceCollection>? configure,
+        IReadOnlyDictionary<string, string>? settings, string environmentName)
     {
         ConnectionString = connection;
-        Host = new Factory(connection, configure, settings);
+        Host = new Factory(connection, configure, settings, environmentName);
     }
 
     internal static async Task<SecurityProtocolFixture> CreateAsync(Action<IServiceCollection>? configure = null,
         IReadOnlyDictionary<string, string>? settings = null, Action<Factory>? configureHost = null,
-        string? userId = null)
+        string? userId = null, string environmentName = "Development")
     {
         var builder = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("PANDA_AUTH_TEST_POSTGRES"));
         PostgresTestBoundary.ValidateEndpoint(builder, PostgresTestBoundary.SharedMode);
@@ -55,7 +57,7 @@ internal sealed class SecurityProtocolFixture : IAsyncDisposable
             await command.ExecuteNonQueryAsync();
         }
         builder.Database = database;
-        var fixture = new SecurityProtocolFixture(builder.ConnectionString, configure, settings);
+        var fixture = new SecurityProtocolFixture(builder.ConnectionString, configure, settings, environmentName);
         try
         {
             configureHost?.Invoke(fixture.Host);
@@ -232,23 +234,32 @@ internal sealed class SecurityProtocolFixture : IAsyncDisposable
         await PostgresTestBoundary.DropOwnedDatabaseAsync(ConnectionString, "panda_protocol_test_");
     }
 
-    internal sealed class Factory(string connection, Action<IServiceCollection>? configure, IReadOnlyDictionary<string, string>? settings = null) : WebApplicationFactory<Program>
+    internal sealed class Factory(string connection, Action<IServiceCollection>? configure,
+        IReadOnlyDictionary<string, string>? settings = null, string environmentName = "Development") : WebApplicationFactory<Program>
     {
-        private readonly ProtocolHostContentRoot root = new(connection, Settings(settings));
-        private static Dictionary<string, string> Settings(IReadOnlyDictionary<string, string>? overrides)
+        private readonly ProtocolHostContentRoot root = new(connection, Settings(settings, environmentName),
+            useProductionDataProtection: environmentName == Environments.Production);
+        private static Dictionary<string, string> Settings(IReadOnlyDictionary<string, string>? overrides, string environmentName)
         {
             var values = new Dictionary<string, string>
             {
                 ["Auth:Issuer"] = "http://localhost/", ["Auth:HttpsRequired"] = "false", ["Auth:Seed:Enabled"] = "false",
                 ["Auth:LoginMfa:Enabled"] = "true",
             };
+            if (environmentName == Environments.Production)
+            {
+                values["Auth:CookieSecure"] = "Always";
+                values["Auth:Mfa:TotpEncryptionKey"] = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+                values["Email:ApiKey"] = "synthetic-protocol-fixture";
+                values["Email:FromAddress"] = "fixture@example.invalid";
+            }
             if (overrides is not null)
                 foreach (var item in overrides) values[item.Key] = item.Value;
             return values;
         }
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
-            builder.UseEnvironment("Development").UseContentRoot(root.Path);
+            builder.UseEnvironment(environmentName).UseContentRoot(root.Path);
             builder.ConfigureLogging(logging => logging.ClearProviders());
             builder.ConfigureTestServices(services =>
             {

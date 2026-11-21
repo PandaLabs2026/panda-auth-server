@@ -3,6 +3,9 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Configuration;
@@ -45,6 +48,65 @@ public sealed class NativeLoginRouteTests
     private const string PilotConfig = "Auth:NativeLogin:T0000Pilot:";
 
     [Theory]
+    [InlineData("Production")]
+    [InlineData("Development")]
+    public void T0000PilotRequiresExplicitActivation(string environmentName)
+    {
+        var settings = PilotSettings();
+        var environment = new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = environmentName };
+        var active = Assert.IsType<NativeLoginRoute.Settings>(ReadPilotSettings(settings, environment));
+        Assert.Equal(PilotClient, active.ClientId);
+        Assert.Equal(PilotRevision, active.PilotRevision);
+
+        settings[PilotConfig + "Enabled"] = "false";
+        Assert.Null(ReadPilotSettings(settings, environment));
+        settings[PilotConfig + "Enabled"] = "true";
+        settings["Auth:NativeLogin:Enabled"] = "false";
+        Assert.Null(ReadPilotSettings(settings, environment));
+    }
+
+    [Theory]
+    [InlineData("Auth:Issuer", "https://t0000-auth.s001.pandacloud.cc/")]
+    [InlineData("Auth:TenantRouting:Enabled", "false")]
+    [InlineData("Auth:TenantRouting:Bindings:0:State", "Pending")]
+    [InlineData("Auth:TenantRouting:Bindings:0:RouteRevision", "0")]
+    [InlineData(PilotConfig + "AllowedSubjects:0", "")]
+    [InlineData(PilotConfig + "Revision", "")]
+    [InlineData("Auth:NativeLogin:ClientId", " ")]
+    public void ProductionPilotRefusesInvalidActivationSettings(string key, string value)
+    {
+        var settings = PilotSettings();
+        settings[key] = value;
+        var environment = new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = Environments.Production };
+        Assert.Throws<InvalidOperationException>(() => ReadPilotSettings(settings, environment));
+
+        var report = StartupConfiguration.Validate(PilotConfiguration(settings), environment, migrate: false);
+        Assert.Contains(new ConfigurationError("Auth:NativeLogin", "native_login_invalid"), report.Errors);
+    }
+
+    [Fact]
+    public void ProductionPilotRefusesPendingRouteShadowingReadyRoute()
+    {
+        var settings = PilotSettings();
+        foreach (var suffix in new[] { "TenantId", "Product", "Zone" })
+            settings["Auth:TenantRouting:Bindings:1:" + suffix] = settings["Auth:TenantRouting:Bindings:0:" + suffix];
+        settings["Auth:TenantRouting:Bindings:0:State"] = "Pending";
+        var environment = new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = Environments.Production };
+        Assert.Throws<InvalidOperationException>(() => ReadPilotSettings(settings, environment));
+    }
+
+    private static NativeLoginRoute.Settings? ReadPilotSettings(Dictionary<string, string> settings, IHostEnvironment environment)
+    {
+        var configuration = PilotConfiguration(settings);
+        var routing = configuration.GetSection("Auth:TenantRouting").Get<TenantRoutingOptions>()!;
+        return NativeLoginRoute.ReadSettings(configuration, environment, routing);
+    }
+
+    private static IConfiguration PilotConfiguration(Dictionary<string, string> settings)
+        => new ConfigurationBuilder().AddInMemoryCollection(settings.Select(pair =>
+            new KeyValuePair<string, string?>(pair.Key, pair.Value))).Build();
+
+    [Theory]
     [InlineData("Auth:Issuer", "https://t0000-auth.s001.pandacloud.cc/")]
     [InlineData("Auth:TenantRouting:Bindings:0:TenantId", "t9876")]
     [InlineData("Auth:NativeLogin:T0000Pilot:AllowedSubjects:0", "")]
@@ -72,17 +134,32 @@ public sealed class NativeLoginRouteTests
     }
 
     [PostgresTheory]
-    [InlineData(true, true, HttpStatusCode.Accepted, PilotConfig + "Enabled", "false")]
-    [InlineData(true, true, HttpStatusCode.Accepted, PilotConfig + "AllowedSubjects:0", "53a0cb4c-0438-4026-8c0f-57c7e7a84309")]
-    [InlineData(true, true, HttpStatusCode.Accepted, PilotConfig + "Revision", "83568975-a8ec-481a-bc91-a9f3ef75f250")]
-    [InlineData(false, true, HttpStatusCode.Unauthorized, null, null)]
-    [InlineData(true, false, HttpStatusCode.BadRequest, null, null)]
+    [InlineData(true, true, HttpStatusCode.Accepted, PilotConfig + "Enabled", "false", false)]
+    [InlineData(true, true, HttpStatusCode.Accepted, PilotConfig + "AllowedSubjects:0", "53a0cb4c-0438-4026-8c0f-57c7e7a84309", false)]
+    [InlineData(true, true, HttpStatusCode.Accepted, PilotConfig + "Revision", "83568975-a8ec-481a-bc91-a9f3ef75f250", false)]
+    [InlineData(false, true, HttpStatusCode.Unauthorized, null, null, false)]
+    [InlineData(true, false, HttpStatusCode.BadRequest, null, null, false)]
+    [InlineData(true, true, HttpStatusCode.Accepted, PilotConfig + "AllowedSubjects:0", "53a0cb4c-0438-4026-8c0f-57c7e7a84309", true)]
     public async Task T0000PilotRequiresBothSubjectAdmissionAndReadOnlyScope(
-        bool approved, bool readScope, HttpStatusCode expected, string? closedKey, string? closedValue)
+        bool approved, bool readScope, HttpStatusCode expected, string? closedKey, string? closedValue, bool production)
     {
         const string unapprovedSubject = "53a0cb4c-0438-4026-8c0f-57c7e7a84309";
-        await using var fixture = await SecurityProtocolFixture.CreateAsync(settings: PilotSettings(),
-            userId: approved ? PilotSubject : unapprovedSubject);
+        var settings = PilotSettings();
+        if (production) settings["Auth:HttpsRequired"] = "false"; // The existing t0000 host allows HTTP backhaul.
+        var pilotUri = new Uri(PilotIssuer);
+        using var authorityKey = production ? RSA.Create(2048) : null;
+        using var serverKey = production ? RSA.Create(2048) : null;
+        using var authority = production ? NativeLoginDesktopTlsTests.CreateAuthority(authorityKey!) : null;
+        using var certificate = production
+            ? NativeLoginDesktopTlsTests.CreateServerCertificate(authority!, serverKey!, pilotUri.Host) : null;
+        await using var fixture = await SecurityProtocolFixture.CreateAsync(settings: settings,
+            userId: approved ? PilotSubject : unapprovedSubject,
+            configureHost: certificate is null ? null : factory => factory.UseKestrel(server =>
+            {
+                server.Listen(IPAddress.Loopback, 0);
+                server.Listen(IPAddress.Loopback, 0, listener => listener.UseHttps(certificate));
+            }),
+            environmentName: production ? Environments.Production : Environments.Development);
         await fixture.EnableTotpAsync();
         using var scope = fixture.Host.Services.CreateScope();
         var scopes = scope.ServiceProvider.GetRequiredService<IOpenIddictScopeManager>();
@@ -104,7 +181,7 @@ public sealed class NativeLoginRouteTests
         };
         if (readScope) registration.Permissions.Add(Permissions.Prefixes.Scope + PandeskCustomerRead.Scope);
         await applications.CreateAsync(registration);
-        using var client = CreateClient(fixture, PilotIssuer);
+        using var client = certificate is null ? CreateClient(fixture, PilotIssuer) : LocalClient(pilotUri);
 
         var verifier = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
         var fields = new Dictionary<string, string>
@@ -117,6 +194,31 @@ public sealed class NativeLoginRouteTests
             ["username"] = "security-admin",
             ["password"] = fixture.AdminPassword,
         };
+        if (production)
+        {
+            var webCallback = new Uri("https://t0000.pandacloud.cc/oidc-test-callback");
+            await applications.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "synthetic-t0000-web",
+                ClientType = ClientTypes.Confidential,
+                ClientSecret = SecurityProtocolFixture.Secret,
+                ConsentType = ConsentTypes.Implicit,
+                RedirectUris = { webCallback },
+                Permissions = { Permissions.Endpoints.Authorization, Permissions.Endpoints.Token,
+                    Permissions.GrantTypes.AuthorizationCode, Permissions.ResponseTypes.Code },
+            });
+            using var browser = await client.GetAsync(QueryHelpers.AddQueryString("/connect/authorize", new Dictionary<string, string?>
+            {
+                ["client_id"] = "synthetic-t0000-web", ["response_type"] = ResponseTypes.Code,
+                ["redirect_uri"] = webCallback.AbsoluteUri, ["scope"] = Scopes.OpenId, ["prompt"] = PromptValues.None,
+                ["code_challenge"] = fields["code_challenge"], ["code_challenge_method"] = CodeChallengeMethods.Sha256,
+            }));
+            Assert.Equal(HttpStatusCode.Redirect, browser.StatusCode);
+            var destination = Assert.IsType<Uri>(browser.Headers.Location);
+            Assert.Equal(webCallback.AbsoluteUri, destination.GetLeftPart(UriPartial.Path));
+            Assert.Equal(Errors.LoginRequired, QueryHelpers.ParseQuery(destination.Query)["error"].ToString());
+        }
+
         using var result = await client.PostAsync(Path, new FormUrlEncodedContent(fields));
         Assert.Equal(expected, result.StatusCode);
         var response = await result.Content.ReadFromJsonAsync<JsonElement>();
@@ -135,14 +237,22 @@ public sealed class NativeLoginRouteTests
         using var verified = await client.PostAsync(Path, new FormUrlEncodedContent(fields));
         Assert.Equal(HttpStatusCode.OK, verified.StatusCode);
         var approval = await verified.Content.ReadFromJsonAsync<JsonElement>();
-        using var exchanged = await client.PostAsync("/connect/token", new FormUrlEncodedContent(new Dictionary<string, string>
+        var exchange = new Dictionary<string, string>
         {
             ["grant_type"] = GrantTypes.AuthorizationCode,
             ["client_id"] = PilotClient,
             ["code"] = approval.GetProperty("authorization_code").GetString()!,
             ["code_verifier"] = verifier,
             ["redirect_uri"] = PilotIssuer + "connect/native/callback",
-        }));
+        };
+        if (production)
+        {
+            using var insecureClient = LocalClient(new UriBuilder(pilotUri) { Scheme = "http", Port = -1 }.Uri);
+            using var insecureExchange = await insecureClient.PostAsync("/connect/token", new FormUrlEncodedContent(exchange));
+            Assert.Equal(HttpStatusCode.BadRequest, insecureExchange.StatusCode);
+            Assert.Equal(Errors.InvalidGrant, (await insecureExchange.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString());
+        }
+        using var exchanged = await client.PostAsync("/connect/token", new FormUrlEncodedContent(exchange));
         Assert.Equal(HttpStatusCode.OK, exchanged.StatusCode);
         var tokens = await exchanged.Content.ReadFromJsonAsync<JsonElement>();
         Assert.True(tokens.TryGetProperty("access_token", out _));
@@ -162,6 +272,14 @@ public sealed class NativeLoginRouteTests
         var configuration = fixture.Host.Services.GetRequiredService<IConfiguration>();
         configuration[closedKey!] = closedValue;
         Assert.False(await IsActiveAsync());
+
+        HttpClient LocalClient(Uri origin)
+        {
+            var listeners = fixture.Host.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!;
+            var listener = Assert.Single(listeners.Addresses.Select(value => new Uri(value)), address => address.Scheme == origin.Scheme);
+            Assert.True(listener.IsLoopback);
+            return NativeLoginBusinessTokenTests.CreateLoopbackClient(origin, listener.Port, certificate!);
+        }
 
         async Task<bool> IsActiveAsync()
         {
