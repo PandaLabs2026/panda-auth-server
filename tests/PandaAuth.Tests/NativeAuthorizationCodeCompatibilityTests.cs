@@ -255,6 +255,7 @@ public sealed class NativeAuthorizationCodeCompatibilityTests
 
     private static void ConfigureFixtureEndpoint(IServiceCollection services)
     {
+        services.AddSingleton(new NativeLoginRoute.Settings(ClientId));
         services.Configure<OpenIddictServerOptions>(options => options.AuthorizationEndpointUris.Add(new Uri(FixtureEndpoint, UriKind.Relative)));
         services.Configure<OpenIddictServerAspNetCoreOptions>(options => options.EnableAuthorizationEndpointPassthrough = false);
         services.AddOpenIddict().AddServer(options =>

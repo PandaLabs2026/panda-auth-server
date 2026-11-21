@@ -9,7 +9,7 @@ namespace PandaAuth.Tests;
 internal sealed class ProtocolHostContentRoot : IDisposable
 {
     internal string Path { get; }
-    internal ProtocolHostContentRoot(string connection, IReadOnlyDictionary<string, string> settings)
+    internal ProtocolHostContentRoot(string connection, IReadOnlyDictionary<string, string> settings, bool useProductionDataProtection = false)
     {
         var parsed = new NpgsqlConnectionStringBuilder(connection);
         if (parsed.Host is not ("127.0.0.1" or "localhost") || parsed.Database is null ||
@@ -29,6 +29,7 @@ internal sealed class ProtocolHostContentRoot : IDisposable
         }
         Path = Directory.CreateTempSubdirectory("panda-auth-t0a2-protocol-").FullName;
         if (OperatingSystem.IsLinux()) File.SetUnixFileMode(Path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        if (useProductionDataProtection) json["Auth"]!["DataProtectionKeyPath"] = Path;
         Directory.CreateDirectory(System.IO.Path.Combine(Path, "wwwroot", "brand"));
         var file = System.IO.Path.Combine(Path, "appsettings.json");
         File.WriteAllText(file, json.ToJsonString());

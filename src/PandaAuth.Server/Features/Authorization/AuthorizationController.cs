@@ -126,7 +126,7 @@ public sealed class AuthorizationController(
         var native = HttpContext.RequestServices.GetService<NativeLoginRoute.Settings>();
         var isPilotClient = native?.PilotSubjects is not null
             && string.Equals(request.ClientId, native.ClientId, StringComparison.Ordinal);
-        if (isPilotClient && !request.IsAuthorizationCodeGrantType())
+        if (isPilotClient && (!request.IsAuthorizationCodeGrantType() || !NativeLoginRoute.HasPilotRequestOrigin(Request)))
             return InvalidGrant("试点客户端只允许使用原生授权码换码。");
 
         if (request.IsClientCredentialsGrantType())
