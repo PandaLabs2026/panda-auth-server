@@ -20,13 +20,13 @@ namespace PandaAuth.Server.Features.Authorization;
 internal static class NativeLoginRoute
 {
     private const string Path = "/connect/native/authorize-challenge";
-    private const string Callback = "connect/native/callback";
+    internal const string Callback = "connect/native/callback";
     private static readonly TimeSpan AuthorizationCodeLifetime = TimeSpan.FromMinutes(1);
 
     private const string PilotConfig = "Auth:NativeLogin:T0000Pilot";
     internal const string PilotRevisionClaim = "urn:pandaauth:internal:pandesk-t0000-revision";
     private static readonly TenantId PilotTenant = TenantId.Parse("t0000");
-    private static readonly string PilotIssuer = $"https://{TenantCanonicalHost.For(PilotTenant, TenantProduct.PandaAuth, "")}/";
+    internal static readonly string PilotIssuer = $"https://{TenantCanonicalHost.For(PilotTenant, TenantProduct.PandaAuth, "")}/";
 
     internal sealed record Settings(string ClientId, IReadOnlySet<string>? PilotSubjects = null, string? PilotRevision = null)
     {

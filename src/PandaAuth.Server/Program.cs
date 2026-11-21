@@ -36,6 +36,14 @@ await RunServerAsync(args);
 // Keep Web startup out of the decode entry point so its JIT does not resolve the hosting graph.
 static async Task RunServerAsync(string[] args)
 {
+    if (PandeskPilotRegistrationCommand.IsRequested(args))
+    {
+        var commandBuilder = WebApplication.CreateBuilder([]);
+        Environment.ExitCode = await PandeskPilotRegistrationCommand.RunAsync(args,
+            commandBuilder.Configuration, commandBuilder.Environment, Console.Out);
+        return;
+    }
+
     if (CloudControlRegistrationCommand.IsRequested(args))
     {
         var commandBuilder = WebApplication.CreateBuilder([]);
