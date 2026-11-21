@@ -39,7 +39,7 @@ public sealed class AuthorizationController(
         var request = HttpContext.GetOpenIddictServerRequest()
             ?? throw new InvalidOperationException("无法解析 OIDC 授权请求。");
 
-        if (request.HasScope(PandeskCustomerRead.Scope)) return InvalidPandeskScope();
+        if (request.GetScopes().Any(IsNativeOnlyScope)) return InvalidNativeScope();
 
         if (tenantContextAccessor.Current is { } tenant
             && (!Uri.TryCreate(request.RedirectUri, UriKind.Absolute, out var redirectUri)
@@ -131,7 +131,7 @@ public sealed class AuthorizationController(
 
         if (request.IsClientCredentialsGrantType())
         {
-            if (request.HasScope(PandeskCustomerRead.Scope)) return InvalidPandeskScope();
+            if (request.GetScopes().Any(IsNativeOnlyScope)) return InvalidNativeScope();
 
             // 服务间调用：仅授予客户端身份，不涉及终端用户。
             var clientIdentity = new ClaimsIdentity(
@@ -177,11 +177,35 @@ public sealed class AuthorizationController(
 
         var principal = await CreatePrincipalAsync(user, authResult.Principal!.GetScopes(), authResult.Principal,
             Claims.AuthenticationTime);
+        var resource = ConfiguredNativeResource;
         if (NativeLoginRoute.HasInvalidPandeskResources(principal)
-            || (principal.HasScope(PandeskCustomerRead.Scope) && !request.IsAuthorizationCodeGrantType()))
-            return InvalidPandeskScope();
+            || (principal.GetScopes().Any(IsNativeOnlyScope) && !request.IsAuthorizationCodeGrantType())
+            || (resource is not null && principal.HasScope(resource.Scope)
+                && (resource.HasInvalidAudience(principal)
+                    || !await CanExchangeNativeResourceAsync(native, request.ClientId, resource.Scope))))
+            return InvalidNativeScope();
         if (isPilotClient) NativeLoginRoute.SetPilotRevision(principal, native!.PilotRevision!);
         return SignIn(principal, OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+    }
+
+    private NativeLoginRoute.ApiResource? ConfiguredNativeResource =>
+        HttpContext.RequestServices.GetService<NativeLoginRoute.ApiResource>();
+
+    private bool IsNativeOnlyScope(string scope) =>
+        scope == PandeskCustomerRead.Scope || scope == ConfiguredNativeResource?.Scope;
+
+    private async Task<bool> CanExchangeNativeResourceAsync(NativeLoginRoute.Settings? native, string? clientId, string scope)
+    {
+        if (native is not { ResourceAccess: { } resource } || resource.Scope != scope || !string.Equals(clientId, native.ClientId, StringComparison.Ordinal))
+            return false;
+
+        var applications = HttpContext.RequestServices.GetRequiredService<IOpenIddictApplicationManager>();
+        var ct = HttpContext.RequestAborted;
+        var application = await applications.FindByClientIdAsync(native.ClientId, ct);
+        return application is not null
+            && await applications.HasClientTypeAsync(application, ClientTypes.Public, ct)
+            && await applications.HasRequirementAsync(application, Requirements.Features.ProofKeyForCodeExchange, ct)
+            && await applications.HasPermissionAsync(application, Permissions.Prefixes.Scope + scope, ct);
     }
 
     [Authorize(AuthenticationSchemes = OpenIddictServerAspNetCoreDefaults.AuthenticationScheme)]
@@ -389,7 +413,7 @@ public sealed class AuthorizationController(
             [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = description,
         }), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
 
-    private IActionResult InvalidPandeskScope()
+    private IActionResult InvalidNativeScope()
         => Forbid(new AuthenticationProperties(new Dictionary<string, string?>
         {
             [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.InvalidScope,

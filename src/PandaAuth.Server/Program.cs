@@ -158,6 +158,9 @@ static async Task RunServerAsync(string[] args)
     var authOptions = builder.Configuration.GetSection(AuthOptions.SectionName).Get<AuthOptions>() ?? new AuthOptions();
     builder.Services.AddSingleton(authOptions.TenantRouting);
     var nativeLogin = isMigrateCommand ? null : NativeLoginRoute.ReadSettings(builder.Configuration, builder.Environment, authOptions.TenantRouting);
+    if (!isMigrateCommand &&
+        (nativeLogin?.ResourceAccess ?? NativeLoginRoute.ReadResourceAccess(builder.Configuration)) is { } nativeResource)
+        builder.Services.AddSingleton(nativeResource);
     if (nativeLogin is not null)
     {
         builder.Services.AddSingleton(nativeLogin);

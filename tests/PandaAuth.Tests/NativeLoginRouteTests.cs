@@ -107,10 +107,13 @@ public sealed class NativeLoginRouteTests
     public void T0000PilotRequiresExplicitActivation(string environmentName)
     {
         var settings = PilotSettings();
+        settings["Auth:NativeLogin:ResourceAccess:Scope"] = "fixture.native.api";
+        settings["Auth:NativeLogin:ResourceAccess:Audiences:0"] = "fixture-api";
         var environment = new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = environmentName };
         var active = Assert.IsType<NativeLoginRoute.Settings>(ReadPilotSettings(settings, environment));
         Assert.Equal(PilotClient, active.ClientId);
         Assert.Equal(PilotRevision, active.PilotRevision);
+        Assert.Null(active.ResourceAccess);
 
         settings[PilotConfig + "Enabled"] = "false";
         Assert.Null(ReadPilotSettings(settings, environment));

@@ -29,7 +29,8 @@ internal static class NativeLoginRoute
     private static readonly TenantId PilotTenant = TenantId.Parse("t0000");
     internal static readonly string PilotIssuer = $"https://{TenantCanonicalHost.For(PilotTenant, TenantProduct.PandaAuth, "")}/";
 
-    internal sealed record Settings(string ClientId, IReadOnlySet<string>? PilotSubjects = null, string? PilotRevision = null)
+    internal sealed record Settings(string ClientId, IReadOnlySet<string>? PilotSubjects = null, string? PilotRevision = null,
+        ApiResource? ResourceAccess = null)
     {
         internal bool AllowsSubject(string subject, IConfiguration configuration)
             => PilotRevision is null || (PilotSubjects!.Contains(subject)
@@ -37,8 +38,36 @@ internal static class NativeLoginRoute
                 && PilotSubjectIsCurrent(configuration, subject));
     }
 
+    internal sealed record ApiResource(string Scope, IReadOnlySet<string> Audiences)
+    {
+        internal bool HasInvalidAudience(ClaimsPrincipal principal)
+            => principal.HasScope(Scope) && !Audiences.SetEquals(principal.GetResources());
+    }
+
+    internal static ApiResource? ReadResourceAccess(IConfiguration configuration)
+    {
+        var section = configuration.GetSection("Auth:NativeLogin:ResourceAccess");
+        var scope = section["Scope"];
+        var audiences = section.GetSection("Audiences").Get<string[]>();
+        if (scope is null && audiences is null) return null;
+
+        if (string.IsNullOrEmpty(scope) || scope.Length > BusinessInputLimits.Name
+            || scope.Any(character => character is < '!' or > '~' or '"' or '\\')
+            || scope is Scopes.OpenId or Scopes.OfflineAccess or Scopes.Profile or Scopes.Email
+                or Scopes.Address or Scopes.Phone or Scopes.Roles or PandeskCustomerRead.Scope
+            || audiences is not { Length: > 0 }
+            || audiences.Any(audience => string.IsNullOrEmpty(audience)
+                || audience.Length > BusinessInputLimits.Identifier
+                || audience.Any(character => char.IsWhiteSpace(character) || char.IsControl(character)))
+            || audiences.Distinct(StringComparer.Ordinal).Count() != audiences.Length)
+            throw new InvalidOperationException("Native resource access requires a dedicated scope and unique audience identifiers.");
+
+        return new ApiResource(scope, audiences.ToHashSet(StringComparer.Ordinal));
+    }
+
     internal static Settings? ReadSettings(IConfiguration configuration, IHostEnvironment environment, TenantRoutingOptions routing)
     {
+        var resourceAccess = ReadResourceAccess(configuration);
         if (!configuration.GetValue<bool>("Auth:NativeLogin:Enabled")) return null;
         var pilot = configuration.GetSection(PilotConfig);
         var pilotEnabled = pilot.GetValue<bool>("Enabled");
@@ -50,7 +79,8 @@ internal static class NativeLoginRoute
             || !routing.Enabled || string.IsNullOrWhiteSpace(clientId)
             || clientId.Length > BusinessInputLimits.ClientId)
             throw new InvalidOperationException("Native login requires an eligible environment, tenant routing and an explicit client registration.");
-        if (!pilotEnabled) return new Settings(clientId);
+        if (!pilotEnabled)
+            return new Settings(clientId, ResourceAccess: resourceAccess);
 
         var revision = pilot["Revision"];
         var subjects = ReadPilotSubjects(pilot);
@@ -172,7 +202,7 @@ internal static class NativeLoginRoute
             ], OpenIddictServerAspNetCoreDefaults.AuthenticationScheme));
             authorization.ControllerContext = new ControllerContext { HttpContext = http };
             var principal = await authorization.CreatePrincipalAsync(user, protocol.GetScopes(), authenticated);
-            if (HasInvalidPandeskResources(principal))
+            if (HasInvalidPandeskResources(principal) || settings.ResourceAccess?.HasInvalidAudience(principal) == true)
                 return Json(http, 400, new { error = Errors.InvalidScope });
             if (settings.PilotRevision is { } revision) SetPilotRevision(principal, revision);
             principal.SetAuthorizationCodeLifetime(AuthorizationCodeLifetime);
@@ -287,7 +317,12 @@ internal static class NativeLoginRoute
                 context.Reject(Errors.InvalidScope);
                 return;
             }
-            var scope = hasCustomerRead ? $"{Scopes.OpenId} {PandeskCustomerRead.Scope}" : Scopes.OpenId;
+            var scopes = new List<string> { Scopes.OpenId };
+            if (hasCustomerRead) scopes.Add(PandeskCustomerRead.Scope);
+            if (settings.ResourceAccess is { } resource && await applications.HasPermissionAsync(application,
+                Permissions.Prefixes.Scope + resource.Scope, context.CancellationToken))
+                scopes.Add(resource.Scope);
+            var scope = string.Join(' ', scopes);
             var callback = new Uri(expectedIssuer, Callback).AbsoluteUri;
             var binding = new NativeLoginBinding(tenant.TenantId, expectedIssuer, settings.ClientId,
                 form["code_challenge"].ToString(), scope, [], callback, form["nonce"].ToString());
