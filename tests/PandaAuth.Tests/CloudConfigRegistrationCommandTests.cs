@@ -34,6 +34,37 @@ public class CloudConfigRegistrationCommandTests
         Assert.Equal(2,await CloudConfigRegistrationCommand.RunAsync([CloudConfigRegistrationCommand.Argument],Config(sensitive,false),Environment(),output));
         Assert.DoesNotContain(sensitive,output.ToString());Assert.Contains("cloud_config_registration_closed",output.ToString());
     }
+    [Fact]
+    public async Task DedicatedConsoleRoleModeUsesTheSameDisabledRegistrationGuard()
+    {
+        using var output = new StringWriter();
+        const string roleArgument = "--register-cloud-config-console-role-only";
+        Assert.True(CloudConfigRegistrationCommand.IsRequested([roleArgument]));
+        Assert.Equal(2, await CloudConfigRegistrationCommand.RunAsync([roleArgument], Config("invalid", false), Environment(), output));
+        Assert.Contains("cloud_config_registration_closed", output.ToString());
+    }
+
+    [PostgresFact]
+    public async Task DedicatedConsoleRoleModeRegistersOnlyExactRoleAndIsIdempotent()
+    {
+        await using var fixture = await AuthQualityPostgresFixture.CreateAsync();
+        await using var scope = fixture.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        var config = Config(db.Database.GetConnectionString()!);
+        using var output = new StringWriter();
+        const string roleArgument = "--register-cloud-config-console-role-only";
+
+        Assert.Equal(0, await CloudConfigRegistrationCommand.RunAsync([roleArgument], config, Environment(), output));
+        Assert.Equal(0, await CloudConfigRegistrationCommand.RunAsync([roleArgument], config, Environment(), output));
+
+        Assert.Equal("cloud-admin", (await db.Roles.AsNoTracking().SingleAsync()).Name);
+        Assert.Empty(await db.Users.ToListAsync());
+        Assert.Empty(await db.UserRoles.ToListAsync());
+        Assert.Empty(await db.Set<OpenIddictEntityFrameworkCoreApplication>().ToListAsync());
+        Assert.Empty(await db.Set<OpenIddictEntityFrameworkCoreScope>().ToListAsync());
+        Assert.Contains("cloud-config-console-role-only-v1", output.ToString());
+    }
+
     [PostgresFact]
     public async Task RegistersOnlyExistingConsoleAndFiveScopesAndReentryPreservesStoredSecrets()
     {
