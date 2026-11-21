@@ -28,8 +28,8 @@ internal sealed record NativeResourceClient(string ClientId, string Revision, st
         return new NativeResourceClient(clientId, revision!, configuration["Auth:Issuer"]!, resource);
     }
 
-    internal static bool IsConfiguredClient(IConfiguration configuration, string? clientId)
-        => !string.IsNullOrEmpty(clientId) && clientId == configuration[$"{SectionName}:ClientId"];
+    internal static bool IsConfiguredClient(IConfiguration? configuration, string? clientId)
+        => !string.IsNullOrEmpty(clientId) && clientId == configuration?[$"{SectionName}:ClientId"];
 
     internal bool IsCurrent(IConfiguration configuration)
         => IsEnabled(configuration) && IsConfiguredClient(configuration, ClientId)

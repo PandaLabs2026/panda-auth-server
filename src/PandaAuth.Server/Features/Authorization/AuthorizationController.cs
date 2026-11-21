@@ -40,7 +40,7 @@ public sealed class AuthorizationController(
             ?? throw new InvalidOperationException("无法解析 OIDC 授权请求。");
 
         if (request.GetScopes().Any(IsNativeOnlyScope)
-            || NativeResourceClient.IsConfiguredClient(HttpContext.RequestServices.GetRequiredService<IConfiguration>(), request.ClientId))
+            || NativeResourceClient.IsConfiguredClient(HttpContext.RequestServices.GetService<IConfiguration>(), request.ClientId))
             return InvalidNativeScope();
 
         if (tenantContextAccessor.Current is { } tenant
@@ -126,10 +126,10 @@ public sealed class AuthorizationController(
             ?? throw new InvalidOperationException("无法解析 OIDC Token 请求。");
 
         var native = HttpContext.RequestServices.GetService<NativeLoginRoute.Settings>();
-        var configuration = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
+        var configuration = HttpContext.RequestServices.GetService<IConfiguration>();
         var dedicated = native?.DedicatedResource is { } registered && registered.ClientId == request.ClientId ? registered : null;
         if ((dedicated is not null || NativeResourceClient.IsConfiguredClient(configuration, request.ClientId))
-            && (dedicated is null || !dedicated.IsCurrent(configuration) || !request.IsAuthorizationCodeGrantType()
+            && (dedicated is null || configuration is null || !dedicated.IsCurrent(configuration) || !request.IsAuthorizationCodeGrantType()
                 || !NativeLoginRoute.HasPilotRequestOrigin(Request)))
             return InvalidGrant("原生资源客户端只允许使用当前登记的原生授权码换码。");
 
@@ -180,7 +180,7 @@ public sealed class AuthorizationController(
             return InvalidGrant("账号不存在或已被冻结。");
         }
 
-        if (isPilotClient && (!native!.AllowsSubject(user.Id, configuration)
+        if (isPilotClient && (configuration is null || !native!.AllowsSubject(user.Id, configuration)
             || !authResult.Principal!.HasScope(PandeskCustomerRead.Scope)))
             return InvalidGrant("授权票据无效或已过期。");
 
