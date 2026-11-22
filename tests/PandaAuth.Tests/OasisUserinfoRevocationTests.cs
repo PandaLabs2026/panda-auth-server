@@ -79,14 +79,25 @@ public sealed class OasisUserinfoRevocationTests
         Assert.Equal(HttpStatusCode.Unauthorized, await Check());
     }
 
-    [PostgresFact]
-    public async Task Issued_oasis_token_reads_current_display_name_with_explicit_null()
+    [PostgresTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Issued_oasis_token_reads_current_display_name_with_explicit_null(bool columnsDropped)
     {
         await using var fixture = await SecurityProtocolFixture.CreateAsync(settings: new Dictionary<string, string>
         {
             ["Profile:AccountPresentationClients"] = FirstPartyClients.OasisWeb,
             ["Profile:LegacyNicknameClients"] = FirstPartyClients.OasisWeb,
         });
+        if (columnsDropped)
+        {
+            // The cutover executable must support the physical schema of the later release.
+            await using var db = fixture.Context();
+            await db.Database.ExecuteSqlRawAsync("""
+                ALTER TABLE panda_users DROP COLUMN "Nickname" RESTRICT,
+                    DROP COLUMN "AvatarUrl" RESTRICT, DROP COLUMN "Region" RESTRICT
+                """);
+        }
         await fixture.RegisterClientAsync(FirstPartyClients.OasisWeb);
         await fixture.EnableTotpAsync();
         using var browser = fixture.Browser();
