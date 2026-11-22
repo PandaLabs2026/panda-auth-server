@@ -90,7 +90,7 @@ public sealed class AdminResourceProtocolTests
         browser.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokens.GetProperty("access_token").GetString());
         Assert.Equal(expected, await SecurityProtocolFixture.ReadAdminAsync(browser, tokens.GetProperty("access_token").GetString()!));
         using var write = await browser.PostAsJsonAsync(PandaAuthAdminApi.Users,
-            new AdminCreateUserRequest("resource-created", "resource-created@example.test", null, null, "Created!Password123", false));
+            new AdminCreateUserRequest("resource-created", "resource-created@example.test", null, "Created!Password123", false));
         Assert.Equal(expected, write.StatusCode);
     }
 }

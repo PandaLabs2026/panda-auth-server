@@ -289,7 +289,7 @@ public class AdminUsersControllerTests
         controller.ControllerContext.HttpContext.User = AdminTestHost.AdminPrincipalWithoutMfa();
 
         var result = await controller.Create(
-            new AdminCreateUserRequest("create-without-mfa", null, null, null, null, GrantAdminRole: false),
+            new AdminCreateUserRequest("create-without-mfa", null, null, null, GrantAdminRole: false),
             CancellationToken.None);
 
         AdminMfaResponseTests.AssertStepUpResponse(result);
@@ -410,7 +410,7 @@ public class AdminUsersControllerTests
         var manager = provider.GetRequiredService<UserService>();
 
         var ok = Assert.IsType<OkObjectResult>(
-            await controller.Create(new AdminCreateUserRequest("new-user", "new@example.com", "纽", null, null, GrantAdminRole: false), CancellationToken.None));
+            await controller.Create(new AdminCreateUserRequest("new-user", "new@example.com", "纽", null, GrantAdminRole: false), CancellationToken.None));
         var response = Assert.IsType<AdminCreateUserResponse>(ok.Value);
 
         // 生成的明文密码仅本次返回且真实可用。
@@ -430,7 +430,7 @@ public class AdminUsersControllerTests
         var manager = provider.GetRequiredService<UserService>();
 
         var ok = Assert.IsType<OkObjectResult>(
-            await controller.Create(new AdminCreateUserRequest("custom-pw", null, null, null, "Custom!Passw0rdX", GrantAdminRole: false), CancellationToken.None));
+            await controller.Create(new AdminCreateUserRequest("custom-pw", null, null, "Custom!Passw0rdX", GrantAdminRole: false), CancellationToken.None));
         var response = Assert.IsType<AdminCreateUserResponse>(ok.Value);
 
         Assert.Null(response.Password);
@@ -445,7 +445,7 @@ public class AdminUsersControllerTests
         await SeedUserAsync(provider, "dup-user");
 
         var problem = Assert.IsType<ObjectResult>(
-            await controller.Create(new AdminCreateUserRequest("dup-user", null, null, null, null, GrantAdminRole: false), CancellationToken.None));
+            await controller.Create(new AdminCreateUserRequest("dup-user", null, null, null, GrantAdminRole: false), CancellationToken.None));
         Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
     }
 
@@ -455,7 +455,7 @@ public class AdminUsersControllerTests
         var (controller, provider, _) = Create();
 
         var problem = Assert.IsType<ObjectResult>(
-            await controller.Create(new AdminCreateUserRequest("weak-pw", null, null, null, "short", GrantAdminRole: false), CancellationToken.None));
+            await controller.Create(new AdminCreateUserRequest("weak-pw", null, null, "short", GrantAdminRole: false), CancellationToken.None));
         Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
         // 账号未残留：策略不过的建号不落库。
         Assert.Null(await provider.GetRequiredService<UserService>().FindByNameAsync("weak-pw"));
@@ -468,7 +468,7 @@ public class AdminUsersControllerTests
         await EnsureAdminRoleAsync(provider);
 
         var ok = Assert.IsType<OkObjectResult>(
-            await controller.Create(new AdminCreateUserRequest("born-admin", null, null, null, null, GrantAdminRole: true), CancellationToken.None));
+            await controller.Create(new AdminCreateUserRequest("born-admin", null, null, null, GrantAdminRole: true), CancellationToken.None));
         var response = Assert.IsType<AdminCreateUserResponse>(ok.Value);
 
         Assert.Contains(PandaAuthRoles.Admin,
@@ -484,7 +484,7 @@ public class AdminUsersControllerTests
         var manager = provider.GetRequiredService<UserService>();
 
         var problem = Assert.IsType<ObjectResult>(
-            await controller.Create(new AdminCreateUserRequest("orphan-admin", null, null, null, null, GrantAdminRole: true), CancellationToken.None));
+            await controller.Create(new AdminCreateUserRequest("orphan-admin", null, null, null, GrantAdminRole: true), CancellationToken.None));
         Assert.Equal(StatusCodes.Status500InternalServerError, problem.StatusCode);
 
         var created = await manager.FindByNameAsync("orphan-admin");
@@ -791,21 +791,98 @@ public class AdminUsersControllerTests
     // ---- 资料编辑（UpdateProfile） ----
 
     [Fact]
-    public async Task UpdateProfile_UpdatesNicknameAndRegion_Audits()
+    public async Task UpdateProfile_WithoutIfMatch_RequiresPrecondition()
+    {
+        var (controller, provider, revoker) = Create();
+        var user = await SeedUserAsync(provider, "missing-precondition");
+        var result = await controller.UpdateProfile(user.Id, new AdminUserProfileRequest { DisplayName = "Changed" }, CancellationToken.None);
+        Assert.Equal(428, Assert.IsType<ObjectResult>(result).StatusCode);
+        Assert.Empty(revoker.RevokedUsers);
+    }
+
+    private static async Task<IActionResult> PatchWithLatestAsync(
+        AdminUsersController controller, string id, AdminUserProfileRequest request, CancellationToken cancellationToken)
+    {
+        await controller.Detail(id);
+        controller.Request.Headers.IfMatch = controller.Response.Headers.ETag.ToString();
+        return await controller.UpdateProfile(id, request, cancellationToken);
+    }
+
+    [Fact]
+    public async Task UpdateProfile_RejectsAnOlderProfileRevisionAndPreservesOmittedEmail()
+    {
+        var (controller, provider, revoker) = Create();
+        var user = await SeedUserAsync(provider, "concurrent-name", "login@example.test");
+        user.EmailConfirmed = true;
+        await provider.GetRequiredService<UserService>().UpdateAsync(user);
+        await controller.Detail(user.Id);
+        var staleTag = controller.Response.Headers.ETag.ToString();
+        var db = provider.GetRequiredService<PandaAuthDbContext>();
+        db.UserProfiles.Add(new UserProfile { UserId = user.Id, DisplayName = "Me name", Revision = new string('a', 32) });
+        await db.SaveChangesAsync();
+
+        controller.Request.Headers.IfMatch = staleTag;
+        var stale = await controller.UpdateProfile(user.Id, new AdminUserProfileRequest { DisplayName = "Stale" }, CancellationToken.None);
+        Assert.Equal(412, Assert.IsType<ObjectResult>(stale).StatusCode);
+        Assert.Empty(revoker.RevokedUsers);
+
+        var updated = DetailOf(await PatchWithLatestAsync(controller, user.Id,
+            new AdminUserProfileRequest { DisplayName = "Current" }, CancellationToken.None));
+        Assert.Equal("login@example.test", updated.Email);
+        Assert.True(updated.EmailConfirmed);
+        Assert.Equal("Current", updated.DisplayName);
+    }
+
+    [Theory]
+    [InlineData("{\"region\":null}")]
+    [InlineData("{\"region\":\"cn-sh\"}")]
+    public void RetiredRegionIsRejectedDuringJsonBinding(string json)
+    {
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        Assert.Throws<System.Text.Json.JsonException>(() => System.Text.Json.JsonSerializer.Deserialize<AdminUserProfileRequest>(json, options));
+        Assert.Throws<System.Text.Json.JsonException>(() => System.Text.Json.JsonSerializer.Deserialize<AdminCreateUserRequest>(json, options));
+    }
+
+    [Fact]
+    public async Task UpdateProfile_UpdatesDisplayName_Audits()
     {
         var (controller, provider, revoker) = Create();
         var user = await SeedUserAsync(provider, "profile-edit");
 
-        var detail = DetailOf(await controller.UpdateProfile(
-            user.Id, new AdminUserProfileRequest(Email: null, Nickname: "新昵称", Region: "cn-sh"), CancellationToken.None));
+        var detail = DetailOf(await PatchWithLatestAsync(controller,
+            user.Id, new AdminUserProfileRequest { DisplayName = "新昵称" }, CancellationToken.None));
 
         Assert.Equal("新昵称", detail.Nickname);
-        Assert.Equal("cn-sh", detail.Region);
+        var db = provider.GetRequiredService<PandaAuthDbContext>();
+        Assert.Equal("新昵称", (await db.UserProfiles.FindAsync(user.Id))?.DisplayName);
         Assert.Equal([user.Id], revoker.RevokedUsers);
         var entry = SingleAudit(provider);
         Assert.Equal(AdminAuditAction.UserUpdateProfile, entry.Action);
         Assert.Contains("nicknameChanged\":true", entry.Detail);
         Assert.Contains("emailChanged\":false", entry.Detail);
+    }
+
+    [Fact]
+    public async Task UpdateProfile_UsesDisplayNameAndDistinguishesOmissionFromNull()
+    {
+        var (controller, provider, revoker) = Create();
+        var user = await SeedUserAsync(provider, "profile-name");
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        AdminUserProfileRequest Parse(string json)
+            => System.Text.Json.JsonSerializer.Deserialize<AdminUserProfileRequest>(json, options)!;
+
+        var result = await PatchWithLatestAsync(controller, user.Id, Parse("""{"displayName":"Administrator","nickname":"PandaAdmin"}"""), CancellationToken.None);
+        Assert.Equal(400, Assert.IsType<ObjectResult>(result).StatusCode);
+        Assert.Empty(revoker.RevokedUsers);
+
+        var name = Parse("""{"displayName":" Administrator "}""");
+        Assert.Equal("Administrator", DetailOf(await PatchWithLatestAsync(controller, user.Id, name, CancellationToken.None)).DisplayName);
+        Assert.Equal("Administrator", DetailOf(await PatchWithLatestAsync(controller, user.Id, Parse("{}"), CancellationToken.None)).DisplayName);
+
+        var clear = Parse("""{"displayName":null}""");
+        Assert.Contains("\"displayName\":null", System.Text.Json.JsonSerializer.Serialize(clear, options));
+        Assert.Null(DetailOf(await PatchWithLatestAsync(controller, user.Id, clear, CancellationToken.None)).DisplayName);
+        Assert.Equal([user.Id, user.Id], revoker.RevokedUsers);
     }
 
     [Fact]
@@ -818,8 +895,8 @@ public class AdminUsersControllerTests
         user.EmailConfirmed = true;
         await manager.UpdateAsync(user);
 
-        var detail = DetailOf(await controller.UpdateProfile(
-            user.Id, new AdminUserProfileRequest(Email: "new@example.com", Nickname: null, Region: null), CancellationToken.None));
+        var detail = DetailOf(await PatchWithLatestAsync(controller,
+            user.Id, new AdminUserProfileRequest(Email: "new@example.com", Nickname: null), CancellationToken.None));
 
         Assert.Equal("new@example.com", detail.Email);
         Assert.False(detail.EmailConfirmed);
@@ -837,8 +914,8 @@ public class AdminUsersControllerTests
         user.EmailConfirmed = true;
         await manager.UpdateAsync(user);
 
-        var detail = DetailOf(await controller.UpdateProfile(
-            user.Id, new AdminUserProfileRequest(Email: null, Nickname: null, Region: null), CancellationToken.None));
+        var detail = DetailOf(await PatchWithLatestAsync(controller,
+            user.Id, new AdminUserProfileRequest(Email: null, Nickname: null), CancellationToken.None));
 
         Assert.Null(detail.Email);
         Assert.False(detail.EmailConfirmed);
@@ -852,8 +929,8 @@ public class AdminUsersControllerTests
         var user = await SeedUserAsync(provider, "deleted-profile", status: UserStatus.Deleted);
 
         var problem = Assert.IsType<ObjectResult>(
-            await controller.UpdateProfile(
-                user.Id, new AdminUserProfileRequest(Email: "x@example.com", Nickname: null, Region: null), CancellationToken.None));
+            await PatchWithLatestAsync(controller,
+                user.Id, new AdminUserProfileRequest(Email: "x@example.com", Nickname: null), CancellationToken.None));
         Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
         Assert.Empty(revoker.RevokedUsers);
         Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());
@@ -865,8 +942,8 @@ public class AdminUsersControllerTests
         var (controller, provider, revoker) = Create();
         var user = await SeedUserAsync(provider, "profile-same", "same@example.com");
 
-        DetailOf(await controller.UpdateProfile(
-            user.Id, new AdminUserProfileRequest(Email: "same@example.com", Nickname: null, Region: null), CancellationToken.None));
+        DetailOf(await PatchWithLatestAsync(controller,
+            user.Id, new AdminUserProfileRequest(Email: "same@example.com", Nickname: null), CancellationToken.None));
 
         Assert.Empty(revoker.RevokedUsers);
         Assert.Empty(provider.GetRequiredService<PandaAuthDbContext>().AdminAuditLogs.AsEnumerable());

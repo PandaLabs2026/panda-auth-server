@@ -86,11 +86,30 @@ public sealed class SelfProfileService(PandaAuthDbContext db, SecurityEventWrite
         return new(profile ?? new UserProfile { UserId = actorId, Revision = "" }, profile?.Revision);
     }
 
+    internal static UserProfile NewNamedProfile(string userId, string displayName, DateTimeOffset now)
+        => new() { UserId = userId, DisplayName = displayName, Revision = NewRevision(), UpdatedAt = now };
+
+    private static string NewRevision() => Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+
     internal async Task PersistWriteAsync(Write write, CancellationToken ct, Guid? consumedChallenge = null)
     {
         var profile = write.Profile;
-        profile.Revision = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+        profile.Revision = NewRevision();
         profile.UpdatedAt = clock.GetUtcNow();
+        if (!db.Database.IsRelational())
+        {
+            if (write.PreviousRevision is null) db.UserProfiles.Add(profile);
+            else
+            {
+                var tracked = await db.UserProfiles.FindAsync([profile.UserId], ct) ?? throw Conflict();
+                var entry = db.Entry(tracked);
+                entry.CurrentValues.SetValues(profile);
+                entry.Property(item => item.Revision).OriginalValue = write.PreviousRevision;
+            }
+            await db.SaveChangesAsync(ct);
+            return;
+        }
+
         await db.ProfileContactChallenges.Where(c => c.UserId == profile.UserId
                 && (c.State == ProfileContactChallengeState.PendingDelivery || c.State == ProfileContactChallengeState.Delivered)
                 && (consumedChallenge == null || c.Id != consumedChallenge))

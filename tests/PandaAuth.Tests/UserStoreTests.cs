@@ -1,3 +1,4 @@
+using PandaAuth.Shared;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using PandaAuth.Server.Domain;
@@ -68,7 +69,7 @@ public class UserStoreTests
         var other = scope.ServiceProvider.GetRequiredService<UserService>();
         var stale = (await other.FindByIdAsync(user.Id))!;
         await users.ReplacePasswordAsync(user, "NewStrong!Pass123");
-        stale.Nickname = "stale update";
+        stale.RegisterChannel = RegisterChannel.Admin;
         Assert.False((await other.UpdateAsync(stale)).Succeeded);
         using var check = provider.CreateScope();
         var saved = await check.ServiceProvider.GetRequiredService<PandaAuthDbContext>().Users.SingleAsync();
@@ -88,7 +89,7 @@ public class UserStoreTests
         var sessions = scope.ServiceProvider.GetRequiredService<LoginSessionService>();
         var stale = (await concurrentUsers.FindByIdAsync(user.Id))!;
 
-        user.Nickname = "concurrent change";
+        user.RegisterChannel = RegisterChannel.Admin;
         Assert.True((await users.UpdateAsync(user)).Succeeded);
 
         var login = await sessions.CheckPasswordSignInAsync(stale, "Strong!Pass123", lockoutOnFailure: true);

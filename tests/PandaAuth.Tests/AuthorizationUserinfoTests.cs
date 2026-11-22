@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
 using OpenIddict.Server.AspNetCore;
@@ -51,6 +52,25 @@ public class AuthorizationUserinfoTests
         AssertInvalidToken(await InvokeResultAsync(principal));
     }
 
+    [Theory]
+    [InlineData("admin-web", true, false, "Administrator", true)]
+    [InlineData("oasis-web", true, false, null, true)]
+    [InlineData("admin-web", false, false, "Administrator", false)]
+    [InlineData("admin-web", true, true, "Administrator", false)]
+    [InlineData("third-party", true, false, "Administrator", false)]
+    public async Task Display_name_is_current_and_limited_to_approved_presenters(
+        string presenter, bool profileScope, bool multiplePresenters, string? displayName, bool expected)
+    {
+        var principal = CreateAccessTokenPrincipal([], profileScope ? [Scopes.OpenId, Scopes.Profile] : [Scopes.OpenId]);
+        principal.SetPresenters(multiplePresenters ? [presenter, "other"] : [presenter]);
+        var version = AccountSecurityVersion.From(new PandaUser { Id = "user-1", SecurityStamp = "userinfo-test-stamp" });
+        Assert.IsType<ClaimsIdentity>(principal.Identity).AddClaim(new Claim(PandaAuthClaims.SecurityVersion, version));
+        var result = await InvokeResultAsync(principal, displayName: displayName);
+        var response = Assert.IsType<Dictionary<string, object?>>(Assert.IsType<OkObjectResult>(result).Value);
+        Assert.Equal(expected, response.TryGetValue("display_name", out var actual));
+        if (expected) Assert.Equal(displayName, actual);
+    }
+
     [Fact]
     public async Task Userinfo_WithoutRolesScope_OmitsRoleClaims()
     {
@@ -88,7 +108,7 @@ public class AuthorizationUserinfoTests
     {
         var profile = await InvokeUserinfoAsync([Scopes.OpenId, Scopes.Profile]);
         Assert.Equal("alice", profile[Claims.Name]);
-        Assert.Equal("token-nickname", profile[PandaAuthClaims.Nickname]);
+        Assert.False(profile.ContainsKey(PandaAuthClaims.Nickname));
         Assert.False(profile.ContainsKey(Claims.Email));
         var email = await InvokeUserinfoAsync([Scopes.OpenId, Scopes.Email]);
         Assert.Equal("token@example.test", email[Claims.Email]);
@@ -165,13 +185,14 @@ public class AuthorizationUserinfoTests
         return Assert.IsType<Dictionary<string, object?>>(Assert.IsType<OkObjectResult>(result).Value);
     }
 
-    private static async Task<IActionResult> InvokeResultAsync(ClaimsPrincipal principal, bool seed = true, UserStatus status = UserStatus.Active)
+    private static async Task<IActionResult> InvokeResultAsync(ClaimsPrincipal principal, bool seed = true, UserStatus status = UserStatus.Active, string? displayName = null)
     {
         using var provider = TestUserStoreHost.Create();
         if (seed)
         {
             var db = provider.GetRequiredService<PandaAuthDbContext>();
-            db.Users.Add(new PandaUser { Id = "user-1", UserName = "database-name", Email = "database@example.test", Nickname = "database-nickname", SecurityStamp = "userinfo-test-stamp", Status = status });
+            db.Users.Add(new PandaUser { Id = "user-1", UserName = "database-name", Email = "database@example.test", SecurityStamp = "userinfo-test-stamp", Status = status });
+            if (displayName is not null) db.UserProfiles.Add(new UserProfile { UserId = "user-1", DisplayName = displayName, Revision = new string('a', 32) });
             await db.SaveChangesAsync();
         }
         var controller = TestUserStoreHost.CreateAuthorizationController(provider);
@@ -199,6 +220,8 @@ public class AuthorizationUserinfoTests
     private static ServiceProvider BuildAuthenticationServices(ClaimsPrincipal principal)
     {
         var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["Profile:AccountPresentationClients"] = "admin-web,oasis-web" }).Build());
         var ticket = new AuthenticationTicket(principal, OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
         services.AddSingleton<IAuthenticationService>(new StubAuthenticationService(
             AuthenticateResult.Success(ticket)));

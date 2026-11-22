@@ -24,6 +24,11 @@ public class UserService(
     PandaAuthDbContext db, IPasswordHasher hasher, TimeProvider clock)
 {
     internal PandaAuthDbContext Store => db;
+    internal Task<string?> GetDisplayNameAsync(string userId, CancellationToken cancellationToken = default)
+        => db.UserProfiles.Where(profile => profile.UserId == userId)
+            .Select(profile => profile.DisplayName)
+            .SingleOrDefaultAsync(cancellationToken);
+
     public IQueryable<PandaUser> Users => db.Users;
     internal static string? Normalize(string? value) => value?.Normalize().ToUpperInvariant();
     public string? NormalizeEmail(string? email) => Normalize(email);

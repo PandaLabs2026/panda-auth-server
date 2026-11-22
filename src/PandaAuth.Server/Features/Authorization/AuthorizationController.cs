@@ -251,7 +251,7 @@ public sealed class AuthorizationController(
             return UserinfoError(Errors.InsufficientScope);
         }
         // Token validation authenticates the bearer; current account state is a
-        // separate check. Do not expand claims from the database after issuance.
+        // separate check. Standard claims remain bounded by the issued token.
         var user = await userManager.FindByIdAsync(subjects[0].Value);
         if (user is null || user.Status != UserStatus.Active)
         {
@@ -281,12 +281,16 @@ public sealed class AuthorizationController(
             }
         }
 
-        if (principal.HasScope(Scopes.Profile))
+        if (principal.HasScope(Scopes.Profile) && presenters.Length == 1)
         {
-            var nickname = principal.GetClaim(PandaAuthClaims.Nickname);
-            if (!string.IsNullOrEmpty(nickname))
+            var config = HttpContext.RequestServices.GetService<IConfiguration>();
+            var presenter = presenters[0];
+            if (IncludesClient(config?["Profile:AccountPresentationClients"], presenter))
             {
-                response[PandaAuthClaims.Nickname] = nickname;
+                var displayName = await userManager.GetDisplayNameAsync(user.Id, HttpContext.RequestAborted);
+                response[PandaAuthClaims.DisplayName] = displayName;
+                if (displayName is not null && IncludesClient(config?["Profile:LegacyNicknameClients"], presenter))
+                    response[PandaAuthClaims.Nickname] = displayName;
             }
         }
 
@@ -376,11 +380,6 @@ public sealed class AuthorizationController(
             identity.AddClaim(new Claim(MfaClaimTypes.VerifiedAt, verifiedAt));
         }
 
-        if (scopes.Contains(Scopes.Profile))
-        {
-            identity.AddClaim(new Claim(PandaAuthClaims.Nickname, user.Nickname ?? user.UserName ?? string.Empty));
-        }
-
         // email 只在已确认时写入令牌（纵深）：授权端已有确认门，但本方法也被刷新令牌等
         // 重建主体的路径复用——门之外的任何调用路径都不应把未确认 email 投进令牌。
         if (scopes.Contains(Scopes.Email) && user.EmailConfirmed && !string.IsNullOrEmpty(user.Email))
@@ -421,6 +420,10 @@ public sealed class AuthorizationController(
         });
         return principal;
     }
+
+    private static bool IncludesClient(string? clients, string presenter)
+        => clients?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Contains(presenter, StringComparer.Ordinal) == true;
 
     private IActionResult InvalidGrant(string description)
         => Forbid(new AuthenticationProperties(new Dictionary<string, string?>

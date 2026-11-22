@@ -675,9 +675,6 @@ namespace PandaAuth.Server.Migrations
                     b.Property<int>("AccessFailedCount")
                         .HasColumnType("integer");
 
-                    b.Property<string>("AvatarUrl")
-                        .HasColumnType("text");
-
                     b.Property<string>("ConcurrencyStamp")
                         .IsConcurrencyToken()
                         .HasColumnType("text");
@@ -698,9 +695,6 @@ namespace PandaAuth.Server.Migrations
                     b.Property<DateTimeOffset?>("LockoutEnd")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<string>("Nickname")
-                        .HasColumnType("text");
-
                     b.Property<string>("NormalizedEmail")
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
@@ -710,9 +704,6 @@ namespace PandaAuth.Server.Migrations
                         .HasColumnType("character varying(256)");
 
                     b.Property<string>("PasswordHash")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Region")
                         .HasColumnType("text");
 
                     b.Property<int>("RegisterChannel")

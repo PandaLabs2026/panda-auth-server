@@ -1,7 +1,10 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Tokens;
 using PandaAuth.Server.Infrastructure.Persistence;
 using PandaAuth.Shared;
@@ -74,6 +77,60 @@ public sealed class OasisUserinfoRevocationTests
         Assert.Equal(HttpStatusCode.OK, await Check());
         clock.Offset = TimeSpan.FromHours(2);
         Assert.Equal(HttpStatusCode.Unauthorized, await Check());
+    }
+
+    [PostgresTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Issued_oasis_token_reads_current_display_name_with_explicit_null(bool columnsDropped)
+    {
+        await using var fixture = await SecurityProtocolFixture.CreateAsync(settings: new Dictionary<string, string>
+        {
+            ["Profile:AccountPresentationClients"] = FirstPartyClients.OasisWeb,
+            ["Profile:LegacyNicknameClients"] = FirstPartyClients.OasisWeb,
+        });
+        if (columnsDropped)
+        {
+            // The cutover executable must support the physical schema of the later release.
+            await using var db = fixture.Context();
+            await db.Database.ExecuteSqlRawAsync("""
+                ALTER TABLE panda_users DROP COLUMN "Nickname" RESTRICT,
+                    DROP COLUMN "AvatarUrl" RESTRICT, DROP COLUMN "Region" RESTRICT
+                """);
+        }
+        await fixture.RegisterClientAsync(FirstPartyClients.OasisWeb);
+        await fixture.EnableTotpAsync();
+        using var browser = fixture.Browser();
+        var tokens = await fixture.IssueAsync(browser, FirstPartyClients.OasisWeb, "openid profile");
+        var accessToken = tokens.GetProperty("access_token").GetString();
+
+        async Task<string?> ReadName()
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, "/connect/userinfo");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            using var response = await browser.SendAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.True(response.Headers.CacheControl?.NoStore);
+            var identity = await response.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal(fixture.UserId, identity.GetProperty("sub").GetString());
+            var displayName = identity.GetProperty(PandaAuthClaims.DisplayName).GetString();
+            if (displayName is null) Assert.False(identity.TryGetProperty(PandaAuthClaims.Nickname, out _));
+            else Assert.Equal(displayName, identity.GetProperty(PandaAuthClaims.Nickname).GetString());
+            return displayName;
+        }
+
+        Assert.Null(await ReadName());
+        await using (var db = fixture.Context())
+        {
+            db.UserProfiles.Add(new UserProfile
+            {
+                UserId = fixture.UserId,
+                DisplayName = "Administrator",
+                Revision = new string('a', 32),
+            });
+            await db.SaveChangesAsync();
+        }
+        Assert.Equal("Administrator", await ReadName());
     }
 
     private sealed class ProtocolClock : TimeProvider
