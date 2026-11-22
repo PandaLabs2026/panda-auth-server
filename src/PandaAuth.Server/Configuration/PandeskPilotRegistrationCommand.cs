@@ -48,7 +48,9 @@ internal static class PandeskPilotRegistrationCommand
             var resource = registerResource
                 ? NativeResourceClient.Read(configuration, clientId, NativeLoginRoute.ReadResourceAccess(configuration))
                 : null;
-            if (registerResource && (resource is null || FirstPartyClients.All.Contains(resource.ClientId)
+            if (registerResource && (resource is null
+                || !string.Equals(configuration[NativeResourceClient.SectionName + ":Enabled"], "false", StringComparison.OrdinalIgnoreCase)
+                || FirstPartyClients.All.Contains(resource.ClientId)
                 || resource.ClientId == PandeskCustomerRead.IntrospectionClientId || resource.Resource.Audiences.Contains(resource.ClientId)))
                 return Reject(output, NativeResourceClient.SectionName, "native_resource_registration_input_invalid");
 
@@ -75,8 +77,27 @@ internal static class PandeskPilotRegistrationCommand
             if (!await RegisterAsync(scope.ServiceProvider, db, resource?.ClientId ?? clientId, secret, resource?.Resource))
                 return Reject(output, "Auth:NativeLogin", "pandesk_registration_conflict");
 
-            var operation = registerResource ? "native-resource-registration-only-v1" : "pandesk-t0000-registration-only-v1";
-            OperationalCommand.Write(output, new { Schema = 1, Valid = true, Operation = operation, ClientId = resource?.ClientId ?? clientId });
+            if (resource is null)
+            {
+                OperationalCommand.Write(output, new
+                {
+                    Schema = 1, Valid = true, Operation = "pandesk-t0000-registration-only-v1", ClientId = clientId,
+                });
+            }
+            else
+            {
+                OperationalCommand.Write(output, new
+                {
+                    Schema = 1,
+                    Valid = true,
+                    Operation = "native-resource-registration-only-v1",
+                    resource.ClientId,
+                    resource.Issuer,
+                    resource.Revision,
+                    resource.Resource.Scope,
+                    Audiences = resource.Resource.Audiences.Order(StringComparer.Ordinal).ToArray(),
+                });
+            }
             return 0;
         }
         catch (Exception)

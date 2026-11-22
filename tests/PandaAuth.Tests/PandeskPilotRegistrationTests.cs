@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -119,6 +120,31 @@ public sealed class PandeskPilotRegistrationTests
         using var output = new StringWriter();
         Assert.Equal(0, await PandeskPilotRegistrationCommand.RunAsync([resourceArgument], configuration, environment, output));
         Assert.Equal(0, await PandeskPilotRegistrationCommand.RunAsync([resourceArgument], configuration, environment, output));
+
+        var receipts = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, receipts.Length);
+        Assert.Equal(receipts[0], receipts[1]);
+        using var receipt = JsonDocument.Parse(receipts[0]);
+        var result = receipt.RootElement;
+        Assert.Equal(1, result.GetProperty("schema").GetInt32());
+        Assert.True(result.GetProperty("valid").GetBoolean());
+        Assert.Equal("native-resource-registration-only-v1", result.GetProperty("operation").GetString());
+        Assert.Equal(resourceClient, result.GetProperty("clientId").GetString());
+        Assert.Equal(Issuer, result.GetProperty("issuer").GetString());
+        Assert.Equal(configuration[resource + "Revision"], result.GetProperty("revision").GetString());
+        Assert.Equal(resourceScope, result.GetProperty("scope").GetString());
+        Assert.Equal(new[] { PandeskCustomerRead.Audience, PandeskCustomerRead.IntrospectionAudience },
+            result.GetProperty("audiences").EnumerateArray().Select(audience => audience.GetString()));
+        Assert.Equal(8, result.EnumerateObject().Count());
+        Assert.DoesNotContain(Secret, output.ToString());
+        Assert.DoesNotContain(fixture.ConnectionString, output.ToString());
+
+        output.GetStringBuilder().Clear();
+        configuration[resource + "Enabled"] = "true";
+        Assert.Equal(2, await PandeskPilotRegistrationCommand.RunAsync([resourceArgument], configuration, environment, output));
+        Assert.Contains("native_resource_registration_input_invalid", output.ToString());
+        Assert.DoesNotContain("native-resource-registration-only-v1", output.ToString());
+        configuration[resource + "Enabled"] = "false";
 
         using var scope = fixture.Host.Services.CreateScope();
         var apps = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
