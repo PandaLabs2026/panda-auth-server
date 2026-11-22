@@ -104,26 +104,28 @@ public sealed class StartupConfigurationProcessTests
     [PostgresFact]
     public async Task SecurityState_ReportsActualSchema_WithoutSeedingOrCreatingKeys()
     {
-        await using var database = await AuthQualityPostgresFixture.CreateAsync();
+        await using var database = await AuthQualityPostgresFixture.CreateAsync(migrate: false);
         using var scope = database.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        await MigrateToPreSigningSchemaAsync(db);
         await using var process = new ProcessFixture();
         process.Environment["ConnectionStrings__Migration"] = db.Database.GetConnectionString()!;
-        var current = await process.RunAsync(["--security-state"]);
-        Assert.Equal(0, current.Code);
-        using var upgraded = JsonDocument.Parse(current.Output);
-        Assert.Equal("online-signing-v1", upgraded.RootElement.GetProperty("compatibility").GetString());
-        Assert.Empty(await db.SigningKeys.ToListAsync());
-        Assert.Empty(await db.Users.ToListAsync());
-        var migrations = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
-        Assert.Contains(OperationalCommand.SigningMigration, migrations);
-        await db.GetService<IMigrator>().MigrateAsync(migrations[Array.IndexOf(migrations, OperationalCommand.SigningMigration) - 1]);
         var legacy = await process.RunAsync(["--security-state"]);
         Assert.Equal(0, legacy.Code);
         using var old = JsonDocument.Parse(legacy.Output);
         Assert.Equal("legacy", old.RootElement.GetProperty("compatibility").GetString());
-        Assert.Equal(upgraded.RootElement.GetProperty("databaseFingerprint").GetString(), old.RootElement.GetProperty("databaseFingerprint").GetString());
+        var migrations = db.Database.GetMigrations().ToArray();
         Assert.Equal(Array.IndexOf(migrations, OperationalCommand.SigningMigration), (await db.Database.GetAppliedMigrationsAsync()).Count());
+
+        await db.Database.MigrateAsync();
+        var current = await process.RunAsync(["--security-state"]);
+        Assert.Equal(0, current.Code);
+        using var upgraded = JsonDocument.Parse(current.Output);
+        Assert.Equal("online-signing-v1", upgraded.RootElement.GetProperty("compatibility").GetString());
+        Assert.Equal(old.RootElement.GetProperty("databaseFingerprint").GetString(), upgraded.RootElement.GetProperty("databaseFingerprint").GetString());
+        Assert.Empty(await db.SigningKeys.ToListAsync());
+        Assert.Empty(await db.Users.ToListAsync());
+        Assert.Contains(OperationalCommand.SigningMigration, await db.Database.GetAppliedMigrationsAsync());
     }
 
     [PostgresFact]
@@ -158,9 +160,10 @@ public sealed class StartupConfigurationProcessTests
     [PostgresFact]
     public async Task ResourceMigration_UpgradesLegacySchemaWithoutFullSeedingOrKeyInitialization()
     {
-        await using var database = await AuthQualityPostgresFixture.CreateAsync();
+        await using var database = await AuthQualityPostgresFixture.CreateAsync(migrate: false);
         using var scope = database.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        await MigrateToPreSigningSchemaAsync(db);
         var manager = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
         await manager.CreateAsync(new OpenIddictApplicationDescriptor
         {
@@ -173,8 +176,6 @@ public sealed class StartupConfigurationProcessTests
         var original = await db.Set<OpenIddictEntityFrameworkCoreApplication>().AsNoTracking().SingleAsync();
         db.Users.Add(new PandaUser { Id = Guid.NewGuid().ToString(), UserName = "fixture-existing", PasswordHash = "unchanged", SecurityStamp = "unchanged" });
         await db.SaveChangesAsync();
-        var migrations = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
-        await db.GetService<IMigrator>().MigrateAsync(migrations[Array.IndexOf(migrations, OperationalCommand.SigningMigration) - 1]);
         await using var process = new ProcessFixture();
         process.Environment["ConnectionStrings__Migration"] = db.Database.GetConnectionString()!;
         process.Environment["Auth__Seed__Admin__Email"] = "must-not-create@example.invalid";
@@ -200,11 +201,10 @@ public sealed class StartupConfigurationProcessTests
     [PostgresFact]
     public async Task ResourceMigration_MissingExistingAdminClientRejectsBeforeDdl()
     {
-        await using var database = await AuthQualityPostgresFixture.CreateAsync();
+        await using var database = await AuthQualityPostgresFixture.CreateAsync(migrate: false);
         using var scope = database.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
-        var migrations = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
-        await db.GetService<IMigrator>().MigrateAsync(migrations[Array.IndexOf(migrations, OperationalCommand.SigningMigration) - 1]);
+        await MigrateToPreSigningSchemaAsync(db);
         await using var process = new ProcessFixture();
         process.Environment["ConnectionStrings__Migration"] = db.Database.GetConnectionString()!;
         var result = await process.RunAsync(["--migrate-admin-resource-only"]);
@@ -220,16 +220,15 @@ public sealed class StartupConfigurationProcessTests
     [PostgresFact]
     public async Task ResourceMigration_FailureAfterDdlKeepsUpgradedSchemaButRollsBackResourceWrites()
     {
-        await using var database = await AuthQualityPostgresFixture.CreateAsync();
+        await using var database = await AuthQualityPostgresFixture.CreateAsync(migrate: false);
         using var scope = database.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        await MigrateToPreSigningSchemaAsync(db);
         await scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>().CreateAsync(new OpenIddictApplicationDescriptor
         {
             ClientId = FirstPartyClients.AdminWeb, ClientType = OpenIddictConstants.ClientTypes.Confidential,
             ClientSecret = "synthetic-original-secret",
         });
-        var migrations = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
-        await db.GetService<IMigrator>().MigrateAsync(migrations[Array.IndexOf(migrations, OperationalCommand.SigningMigration) - 1]);
         await db.Database.ExecuteSqlRawAsync("""
             CREATE FUNCTION public.panda_r1_resource_failure() RETURNS trigger LANGUAGE plpgsql AS
             $$ BEGIN RAISE EXCEPTION 'synthetic-resource-write-fault'; END $$;
@@ -251,11 +250,10 @@ public sealed class StartupConfigurationProcessTests
     [PostgresFact]
     public async Task ResourceMigration_RejectsUnprotectedLegacyCredentialRemovalBeforeDdl()
     {
-        await using var database = await AuthQualityPostgresFixture.CreateAsync();
+        await using var database = await AuthQualityPostgresFixture.CreateAsync(migrate: false);
         using var scope = database.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
-        var migrations = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
-        await db.GetService<IMigrator>().MigrateAsync(migrations[Array.IndexOf(migrations, OperationalCommand.SigningMigration) - 1]);
+        await MigrateToPreSigningSchemaAsync(db);
         await scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>().CreateAsync(new OpenIddictApplicationDescriptor
         {
             ClientId = FirstPartyClients.AdminWeb, ClientType = OpenIddictConstants.ClientTypes.Confidential,
@@ -284,14 +282,13 @@ public sealed class StartupConfigurationProcessTests
     [InlineData(true)]
     public async Task ResourceMigration_PgDumpRestorePreservesStateAndAdmission(bool populated)
     {
-        await using var source = await AuthQualityPostgresFixture.CreateAsync();
+        await using var source = await AuthQualityPostgresFixture.CreateAsync(migrate: false);
         await using var restored = await AuthQualityPostgresFixture.CreateAsync(migrate: false);
         using var sourceScope = source.Services.CreateScope();
         using var restoredScope = restored.Services.CreateScope();
         var db = sourceScope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        await MigrateToPreSigningSchemaAsync(db);
         var target = restoredScope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
-        var migrations = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
-        await db.GetService<IMigrator>().MigrateAsync(migrations[Array.IndexOf(migrations, OperationalCommand.SigningMigration) - 1]);
         await sourceScope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>().CreateAsync(new OpenIddictApplicationDescriptor
         {
             ClientId = FirstPartyClients.AdminWeb, ClientType = OpenIddictConstants.ClientTypes.Confidential,
@@ -394,6 +391,12 @@ public sealed class StartupConfigurationProcessTests
         var rate = await target.ProfileRateLimits.AsNoTracking().SingleAsync();
         Assert.Equal(5, rate.CreationCount); Assert.Equal(7, rate.ConfirmationCount); Assert.Equal(2, rate.AvatarCount);
         Assert.False(target.Database.HasPendingModelChanges());
+    }
+
+    private static Task MigrateToPreSigningSchemaAsync(PandaAuthDbContext db)
+    {
+        var migrations = db.Database.GetMigrations().ToArray();
+        return db.GetService<IMigrator>().MigrateAsync(migrations[Array.IndexOf(migrations, OperationalCommand.SigningMigration) - 1]);
     }
 
     private static async Task RunPostgresToolAsync(string tool, string connection, string root, string[] arguments)
