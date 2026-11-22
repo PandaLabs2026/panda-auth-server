@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
 using OpenIddict.Server.AspNetCore;
@@ -107,7 +108,7 @@ public class AuthorizationUserinfoTests
     {
         var profile = await InvokeUserinfoAsync([Scopes.OpenId, Scopes.Profile]);
         Assert.Equal("alice", profile[Claims.Name]);
-        Assert.Equal("token-nickname", profile[PandaAuthClaims.Nickname]);
+        Assert.False(profile.ContainsKey(PandaAuthClaims.Nickname));
         Assert.False(profile.ContainsKey(Claims.Email));
         var email = await InvokeUserinfoAsync([Scopes.OpenId, Scopes.Email]);
         Assert.Equal("token@example.test", email[Claims.Email]);
@@ -190,7 +191,7 @@ public class AuthorizationUserinfoTests
         if (seed)
         {
             var db = provider.GetRequiredService<PandaAuthDbContext>();
-            db.Users.Add(new PandaUser { Id = "user-1", UserName = "database-name", Email = "database@example.test", Nickname = "database-nickname", SecurityStamp = "userinfo-test-stamp", Status = status });
+            db.Users.Add(new PandaUser { Id = "user-1", UserName = "database-name", Email = "database@example.test", SecurityStamp = "userinfo-test-stamp", Status = status });
             if (displayName is not null) db.UserProfiles.Add(new UserProfile { UserId = "user-1", DisplayName = displayName, Revision = new string('a', 32) });
             await db.SaveChangesAsync();
         }
@@ -219,6 +220,8 @@ public class AuthorizationUserinfoTests
     private static ServiceProvider BuildAuthenticationServices(ClaimsPrincipal principal)
     {
         var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["Profile:AccountPresentationClients"] = "admin-web,oasis-web" }).Build());
         var ticket = new AuthenticationTicket(principal, OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
         services.AddSingleton<IAuthenticationService>(new StubAuthenticationService(
             AuthenticateResult.Success(ticket)));

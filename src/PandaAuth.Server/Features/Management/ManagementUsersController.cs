@@ -56,7 +56,7 @@ public sealed class ManagementUsersController(UserService userManager, Managemen
             .Skip(PaginationOffset.Calculate(pageNumber, size))
             .Take(size)
             .Select(user => new AdminUserSummary(
-                user.Id, user.UserName!, user.Email, user.Nickname, user.Status, user.CreatedAt))
+                user.Id, user.UserName!, user.Email, null, user.Status, user.CreatedAt))
             .ToListAsync(cancellationToken);
 
         return Ok(new AdminPageResult<AdminUserSummary>(items, total, pageNumber, size));

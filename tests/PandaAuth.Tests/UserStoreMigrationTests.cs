@@ -186,8 +186,7 @@ public class UserStoreMigrationTests
             """).SingleAsync());
         Assert.Equal(1, await db.Database.SqlQueryRaw<int>("""SELECT count(*)::int AS "Value" FROM "AspNetUserTokens" """).SingleAsync());
 
-        user.Nickname = "new store only";
-        await db.SaveChangesAsync();
+        await db.Database.ExecuteSqlRawAsync("""UPDATE panda_users SET "Nickname" = 'new store only'""");
         Assert.Equal("legacy nickname", await db.Database.SqlQueryRaw<string>("""SELECT "Nickname" AS "Value" FROM "AspNetUsers" """).SingleAsync());
         // Observation tables remain readable, but accidental old binaries must fail closed.
         await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlRawAsync(

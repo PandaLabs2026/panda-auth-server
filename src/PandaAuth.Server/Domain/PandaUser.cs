@@ -22,11 +22,8 @@ public sealed class PandaUser
     public bool LockoutEnabled { get; set; } = true;
     public DateTimeOffset? LockoutEnd { get; set; }
     public int AccessFailedCount { get; set; }
-    public string? Nickname { get; set; }
-    public string? AvatarUrl { get; set; }
     public UserStatus Status { get; set; } = UserStatus.Active;
     public RegisterChannel RegisterChannel { get; set; } = RegisterChannel.Password;
-    public string? Region { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }

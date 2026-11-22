@@ -1,4 +1,7 @@
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text.Json;
+using Microsoft.Net.Http.Headers;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -105,6 +108,7 @@ public sealed class AdminUsersController(
         CancellationToken cancellationToken)
     {
         if (!AdminApiAuthorization.HasValidMfa(User)) return AdminApiAuthorization.MfaRequired();
+        if (!ModelState.IsValid) return ValidationProblem(ModelState);
 
         if (request is null || string.IsNullOrWhiteSpace(request.UserName))
         {
@@ -122,7 +126,6 @@ public sealed class AdminUsersController(
             UserName = request.UserName.Trim(),
             Email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim(),
             EmailConfirmed = false,
-            Region = string.IsNullOrWhiteSpace(request.Region) ? null : request.Region.Trim(),
             RegisterChannel = RegisterChannel.Admin,
         };
 
@@ -195,7 +198,11 @@ public sealed class AdminUsersController(
     public async Task<IActionResult> Detail(string id)
     {
         var user = await userManager.FindByIdAsync(id);
-        return user is null ? NotFound() : Ok(await DetailOf(user));
+        if (user is null) return NotFound();
+        var profile = await ReadProfileAsync(user.Id, HttpContext.RequestAborted);
+        Response.Headers.ETag = ProfileETag(user, profile);
+        Response.Headers.CacheControl = "no-store";
+        return Ok(await BuildDetailAsync(user, profile?.DisplayName));
     }
 
     /// <summary>冻结 / 解冻。幂等：状态未变化时不产生吊销与审计。冻结后该用户全部有效令牌即时吊销。</summary>
@@ -604,17 +611,14 @@ public sealed class AdminUsersController(
         return Ok(sessions);
     }
 
-    /// <summary>
-    /// 资料编辑（PUT 全量语义：每个字段携带最终值，null 即清空）。邮箱变更会重置 EmailConfirmed。
-    /// 允许编辑自己：吊销只造成一次可恢复的管理台重登，非死锁（自助资料页属 me 侧后续切片）。
-    /// </summary>
-    [HttpPut("{id}/profile")]
+    [HttpPatch("{id}/profile")]
     public async Task<IActionResult> UpdateProfile(
         string id,
         [FromBody] AdminUserProfileRequest? request,
         CancellationToken cancellationToken)
     {
         if (!AdminApiAuthorization.HasValidMfa(User)) return AdminApiAuthorization.MfaRequired();
+        if (!ModelState.IsValid) return ValidationProblem(ModelState);
 
         if (request is null)
         {
@@ -623,6 +627,16 @@ public sealed class AdminUsersController(
         }
 
         if (!TryReadDisplayName(request, out var displayName)) return InvalidDisplayName();
+
+        if (request.Email is not null && string.IsNullOrWhiteSpace(request.Email))
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "清空登录邮箱请使用 null");
+
+        var ifMatch = Request.Headers.IfMatch;
+        if (ifMatch.Count == 0)
+            return Problem(statusCode: StatusCodes.Status428PreconditionRequired, title: "请先读取账号资料");
+        if (ifMatch.Count != 1 || !EntityTagHeaderValue.TryParse(ifMatch[0], out var tag) ||
+            tag.IsWeak || tag.Equals(EntityTagHeaderValue.Any))
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "资料版本无效");
 
         await using var transaction = await AccountSecurityTransaction.BeginAsync(db, cancellationToken);
         await AccountSecurityTransaction.LockUserAsync(db, id, cancellationToken);
@@ -637,20 +651,20 @@ public sealed class AdminUsersController(
             return blocked;
         }
 
-        var newEmail = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim();
-        var editsDisplayName = request.HasDisplayName || request.HasNickname;
-        var profile = editsDisplayName
-            ? await db.UserProfiles.AsNoTracking().SingleOrDefaultAsync(record => record.UserId == id, cancellationToken)
-            : null;
-        var newRegion = string.IsNullOrWhiteSpace(request.Region) ? null : request.Region.Trim();
+        var profile = await ReadProfileAsync(id, cancellationToken);
+        var expected = ProfileETag(user, profile);
+        if (!string.Equals(tag.ToString(), expected, StringComparison.Ordinal))
+            return Problem(statusCode: StatusCodes.Status412PreconditionFailed, title: "资料已更新，请重新核对并保存");
 
-        var emailChanged = !string.Equals(user.Email, newEmail, StringComparison.OrdinalIgnoreCase);
-        var nicknameChanged = editsDisplayName && !string.Equals(profile?.DisplayName, displayName, StringComparison.Ordinal);
-        var regionChanged = !string.Equals(user.Region, newRegion, StringComparison.Ordinal);
-        if (!emailChanged && !nicknameChanged && !regionChanged)
+        var newEmail = request.Email is { } email ? email.Trim() : null;
+        var emailChanged = request.HasEmail && !string.Equals(user.Email, newEmail, StringComparison.OrdinalIgnoreCase);
+        var nicknameChanged = (request.HasDisplayName || request.HasNickname) &&
+            !string.Equals(profile?.DisplayName, displayName, StringComparison.Ordinal);
+        if (!emailChanged && !nicknameChanged)
         {
             await transaction.CommitAsync(cancellationToken);
-            return Ok(await DetailOf(user));
+            Response.Headers.ETag = expected;
+            return Ok(await BuildDetailAsync(user, profile?.DisplayName));
         }
 
         if (emailChanged)
@@ -661,7 +675,6 @@ public sealed class AdminUsersController(
             user.EmailConfirmed = false;
         }
 
-        user.Region = newRegion;
         user.SecurityStamp = Guid.NewGuid().ToString();
         user.UpdatedAt = DateTimeOffset.UtcNow;
         var update = await userManager.UpdateAsync(user);
@@ -684,18 +697,19 @@ public sealed class AdminUsersController(
         await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: cancellationToken);
         await audit.RecordAsync(
             AdminAuditing.Entry(User!, AdminAuditAction.UserUpdateProfile, "user", user.Id,
-                new { userName = user.UserName, emailChanged, nicknameChanged, regionChanged },
+                new { userName = user.UserName, emailChanged, nicknameChanged },
                 HttpContext.Connection.RemoteIpAddress?.ToString()),
             cancellationToken);
         await securityEvents.RecordAsync(SecurityEventEntryFor(
             "user.profile_updated", user.Id,
-            new { emailChanged, nicknameChanged, regionChanged }), cancellationToken);
+            new { emailChanged, nicknameChanged }), cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         logger.LogInformation(
-            "管理员 {Actor} 更新了用户 {UserId}（{UserName}）的资料（email={EmailChanged}, nickname={NicknameChanged}, region={RegionChanged}）。",
-            User.FindFirst(Claims.Subject)?.Value, user.Id, user.UserName, emailChanged, nicknameChanged, regionChanged);
+            "管理员 {Actor} 更新了用户 {UserId}（{UserName}）的资料（email={EmailChanged}, nickname={NicknameChanged}）。",
+            User.FindFirst(Claims.Subject)?.Value, user.Id, user.UserName, emailChanged, nicknameChanged);
 
-        return Ok(await DetailOf(user));
+        Response.Headers.ETag = ProfileETag(user, profile);
+        return Ok(await BuildDetailAsync(user, profile?.DisplayName));
     }
 
     /// <summary>
@@ -855,13 +869,25 @@ public sealed class AdminUsersController(
                 detail: "注销为终态，不可再变更；恢复须直接操作数据库。")
             : null;
 
+    private Task<UserProfile?> ReadProfileAsync(string userId, CancellationToken cancellationToken)
+        => db.UserProfiles.AsNoTracking().SingleOrDefaultAsync(row => row.UserId == userId, cancellationToken);
+
+    private static string ProfileETag(PandaUser user, UserProfile? profile)
+    {
+        var representation = JsonSerializer.SerializeToUtf8Bytes(new[] { user.Id, user.ConcurrencyStamp, profile?.Revision });
+        return "\"" + Convert.ToHexStringLower(SHA256.HashData(representation)) + "\"";
+    }
+
     private async Task<AdminUserDetail> DetailOf(PandaUser user)
+        => await BuildDetailAsync(user, await userManager.GetDisplayNameAsync(user.Id));
+
+    private async Task<AdminUserDetail> BuildDetailAsync(PandaUser user, string? displayName)
     {
         var roles = await userManager.GetRolesAsync(user);
         return new AdminUserDetail(
-            user.Id, user.UserName!, user.Email, user.EmailConfirmed, await userManager.GetDisplayNameAsync(user.Id), user.Status,
+            user.Id, user.UserName!, user.Email, user.EmailConfirmed, displayName, user.Status,
             [.. roles], user.LockoutEnd, user.AccessFailedCount, user.TwoFactorEnabled,
-            user.RegisterChannel, user.Region, user.CreatedAt, user.UpdatedAt);
+            user.RegisterChannel, user.CreatedAt, user.UpdatedAt);
     }
 
     private async Task<AdminUserSummary> SummaryOf(PandaUser user, CancellationToken cancellationToken)

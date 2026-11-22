@@ -32,7 +32,7 @@ public sealed class PasswordVerificationRetryTests
             case "frozen": user.Status = UserStatus.Frozen; break;
             case "lockout": user.LockoutEnd = DateTimeOffset.UtcNow.AddMinutes(5); break;
             case "mfa": user.TwoFactorEnabled = true; break;
-            default: user.Nickname = "concurrent metadata"; break;
+            default: user.RegisterChannel = RegisterChannel.Admin; break;
         }
         Assert.True((await users.UpdateAsync(user)).Succeeded);
         var result = await scope.ServiceProvider.GetRequiredService<LoginSessionService>()

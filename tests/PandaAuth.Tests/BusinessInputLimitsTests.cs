@@ -87,9 +87,8 @@ public sealed class BusinessInputLimitsTests
     {
         Assert.Empty(BusinessInputLimits.Validate("request", new AdminClaimRequest(new string('x', 128), new string('x', 2048), new string('x', 128))));
         Assert.NotEmpty(BusinessInputLimits.Validate("request", new AdminClaimRequest("panda:x", new string('x', 2049), "profile")));
-        Assert.NotEmpty(BusinessInputLimits.Validate("request", new AdminUserProfileRequest("a@b.test", new string('x', 129), null)));
-        Assert.NotEmpty(BusinessInputLimits.Validate("request", new AdminUserProfileRequest(null, null, new string('x', 65))));
-        Assert.NotEmpty(BusinessInputLimits.Validate("request", new AdminCreateUserRequest(new string('x', 257), null, null, null, null, false)));
+        Assert.NotEmpty(BusinessInputLimits.Validate("request", new AdminUserProfileRequest("a@b.test", new string('x', 129))));
+        Assert.NotEmpty(BusinessInputLimits.Validate("request", new AdminCreateUserRequest(new string('x', 257), null, null, null, false)));
         Assert.NotEmpty(BusinessInputLimits.Validate("query", new string('\u0344', 256)));
     }
 

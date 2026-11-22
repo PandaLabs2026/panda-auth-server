@@ -14,7 +14,7 @@ public sealed class SelfProfilePersistenceTests
     public async Task Profile_survives_context_restart_without_rewriting_login_identity()
     {
         await using var fixture = await AuthQualityPostgresFixture.CreateAsync();
-        var user = new PandaUser { Email = "login@example.invalid", Nickname = "login name" };
+        var user = new PandaUser { Email = "login@example.invalid" };
         await using (var scope = fixture.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
@@ -35,7 +35,6 @@ public sealed class SelfProfilePersistenceTests
             Assert.Equal(new byte[] {137, 80, 78, 71}, (await db.ProfileAvatars.SingleAsync()).Bytes);
             var unchanged = await db.Users.SingleAsync(p => p.Id == user.Id);
             Assert.Equal("login@example.invalid", unchanged.Email);
-            Assert.Equal("login name", unchanged.Nickname);
         }
     }
 
@@ -95,19 +94,30 @@ public sealed class SelfProfilePersistenceTests
         var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
         var migrator = db.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>();
         await migrator.MigrateAsync("20261110080800_AddProfileOrganizationVisibility");
-        db.Users.AddRange(
-            new PandaUser { Id = "existing", Nickname = "PandaAdmin" },
-            new PandaUser { Id = "empty", Nickname = " 旧名 " },
-            new PandaUser { Id = "new", Nickname = "\u3000名字\u00a0" },
-            new PandaUser { Id = "email", Nickname = "login@example.invalid" },
-            new PandaUser { Id = "long", Nickname = new string('界', 81) });
+        var legacy = new Dictionary<string, string>
+        {
+            ["existing"] = "PandaAdmin",
+            ["empty"] = " 旧名 ",
+            ["new"] = "\u3000名字\u00a0",
+            ["email"] = "login@example.invalid",
+            ["long"] = new string('界', 81),
+        };
+        db.Users.AddRange(legacy.Keys.Select(id => new PandaUser { Id = id }));
         db.UserProfiles.AddRange(
             new UserProfile { UserId = "existing", DisplayName = "Administrator", Revision = new string('a', 32) },
             new UserProfile { UserId = "empty", Biography = "keep", Revision = new string('b', 32) });
         await db.SaveChangesAsync();
 
-        await migrator.MigrateAsync();
+        foreach (var (id, nickname) in legacy)
+            await db.Database.ExecuteSqlInterpolatedAsync($"""UPDATE panda_users SET "Nickname" = {nickname} WHERE "Id" = {id}""");
+
+        await migrator.MigrateAsync("RetireLegacyUserColumnMappings");
         db.ChangeTracker.Clear();
+        Assert.Equal(3, await db.Database.SqlQueryRaw<int>("""
+            SELECT count(*)::int AS "Value" FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'panda_users'
+            AND column_name IN ('Nickname', 'AvatarUrl', 'Region')
+            """).SingleAsync());
         var profiles = await db.UserProfiles.ToDictionaryAsync(row => row.UserId);
         Assert.Equal(3, profiles.Count);
         Assert.Equal("Administrator", profiles["existing"].DisplayName);
@@ -119,7 +129,7 @@ public sealed class SelfProfilePersistenceTests
 
         profiles["new"].DisplayName = null;
         await db.SaveChangesAsync();
-        await migrator.MigrateAsync();
+        await migrator.MigrateAsync("RetireLegacyUserColumnMappings");
         Assert.Null(await db.UserProfiles.Where(row => row.UserId == "new").Select(row => row.DisplayName).SingleAsync());
     }
 

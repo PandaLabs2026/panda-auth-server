@@ -49,7 +49,8 @@ public class PortalAuthTimeProtocolTests
                 using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
                 Assert.True(body.RootElement.TryGetProperty(Claims.Subject, out _));
                 Assert.Equal(profile, body.RootElement.TryGetProperty(Claims.Name, out _));
-                Assert.Equal(profile, body.RootElement.TryGetProperty(PandaAuthClaims.Nickname, out _));
+                Assert.False(body.RootElement.TryGetProperty(PandaAuthClaims.Nickname, out _));
+                Assert.False(body.RootElement.TryGetProperty(PandaAuthClaims.DisplayName, out _));
                 Assert.False(body.RootElement.TryGetProperty(Claims.Email, out _));
                 Assert.False(body.RootElement.TryGetProperty(Claims.Role, out _));
             }

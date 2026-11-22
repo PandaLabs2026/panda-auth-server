@@ -7,7 +7,7 @@ namespace PandaAuth.Server.Infrastructure.Security;
 internal static class BusinessInputLimits
 {
     internal const int Name = 256, Identifier = 450, ClientId = 100, Nickname = 128,
-        Region = 64, DisplayName = 256, ClaimType = 128, ClaimValue = 2048,
+        DisplayName = 256, ClaimType = 128, ClaimValue = 2048,
         Scope = 128, Url = 2048, RedirectCount = 32, PermissionCount = 128, NewPassword = 1024;
     // OIDC authorization context includes protected state and PKCE parameters;
     // it is longer than a registered callback URI. Local-redirect checks remain in the actions.
@@ -33,11 +33,10 @@ internal static class BusinessInputLimits
             if (items.Count > RedirectCount) { errors.Add(field); return; }
             foreach (var item in items) Text(field, item, Url);
         }
-        void Profile(string? email, string? nickname, string? region)
+        void Profile(string? email, string? nickname)
         {
             Text("Email", email, Name, true);
             Text("Nickname", nickname, Nickname);
-            Text("Region", region, Region);
         }
         switch (value)
         {
@@ -53,10 +52,10 @@ internal static class BusinessInputLimits
                 break;
             case AdminCreateUserRequest request:
                 Text("UserName", request.UserName, Name, true);
-                Profile(request.Email, request.Nickname, request.Region);
+                Profile(request.Email, request.Nickname);
                 Text("Password", request.Password, NewPassword);
                 break;
-            case AdminUserProfileRequest request: Profile(request.Email, request.Nickname, request.Region); break;
+            case AdminUserProfileRequest request: Profile(request.Email, request.Nickname); break;
             case AdminResetPasswordRequest request: Text("NewPassword", request.NewPassword, NewPassword); break;
             case AdminDeactivateRequest request: Text("ConfirmUserName", request.ConfirmUserName, Name, true); break;
             case AdminUserRolesRequest request:

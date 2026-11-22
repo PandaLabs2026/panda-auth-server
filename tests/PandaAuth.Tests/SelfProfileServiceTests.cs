@@ -20,7 +20,7 @@ public sealed class SelfProfileServiceTests
         await using var fixture = await AuthQualityPostgresFixture.CreateAsync();
         await using var scope = fixture.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
-        var user = new PandaUser { Nickname = "login name", Email = "login@example.invalid" };
+        var user = new PandaUser { Email = "login@example.invalid" };
         db.Users.Add(user); await db.SaveChangesAsync();
         var service = Service(db);
         var dto = await service.ReadAsync(user.Id);
@@ -39,7 +39,7 @@ public sealed class SelfProfileServiceTests
         await using var fixture = await AuthQualityPostgresFixture.CreateAsync();
         await using var scope = fixture.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
-        var user = new PandaUser { Nickname = "login name", Email = "login@example.invalid" };
+        var user = new PandaUser { Email = "login@example.invalid" };
         db.Users.Add(user); await db.SaveChangesAsync();
         var service = Service(db);
         var dto = await service.PatchAsync(user.Id, "\"0\"",

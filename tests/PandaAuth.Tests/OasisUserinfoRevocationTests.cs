@@ -82,7 +82,11 @@ public sealed class OasisUserinfoRevocationTests
     [PostgresFact]
     public async Task Issued_oasis_token_reads_current_display_name_with_explicit_null()
     {
-        await using var fixture = await SecurityProtocolFixture.CreateAsync();
+        await using var fixture = await SecurityProtocolFixture.CreateAsync(settings: new Dictionary<string, string>
+        {
+            ["Profile:AccountPresentationClients"] = FirstPartyClients.OasisWeb,
+            ["Profile:LegacyNicknameClients"] = FirstPartyClients.OasisWeb,
+        });
         await fixture.RegisterClientAsync(FirstPartyClients.OasisWeb);
         await fixture.EnableTotpAsync();
         using var browser = fixture.Browser();
@@ -98,7 +102,10 @@ public sealed class OasisUserinfoRevocationTests
             Assert.True(response.Headers.CacheControl?.NoStore);
             var identity = await response.Content.ReadFromJsonAsync<JsonElement>();
             Assert.Equal(fixture.UserId, identity.GetProperty("sub").GetString());
-            return identity.GetProperty(PandaAuthClaims.DisplayName).GetString();
+            var displayName = identity.GetProperty(PandaAuthClaims.DisplayName).GetString();
+            if (displayName is null) Assert.False(identity.TryGetProperty(PandaAuthClaims.Nickname, out _));
+            else Assert.Equal(displayName, identity.GetProperty(PandaAuthClaims.Nickname).GetString());
+            return displayName;
         }
 
         Assert.Null(await ReadName());
