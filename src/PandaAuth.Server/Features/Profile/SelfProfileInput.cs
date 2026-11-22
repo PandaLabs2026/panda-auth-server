@@ -36,8 +36,7 @@ public static partial class SelfProfileInput
                 {
                     case "displayName":
                         if (property.Value.ValueKind != JsonValueKind.String) throw InvalidRequest();
-                        displayName = property.Value.GetString()!.Trim();
-                        ValidateScalars(displayName, 1, 80);
+                        displayName = NormalizeDisplayName(property.Value.GetString()!);
                         break;
                     case "biography":
                         if (property.Value.ValueKind == JsonValueKind.Null) break;
@@ -53,6 +52,13 @@ public static partial class SelfProfileInput
         }
         catch (JsonException) { throw InvalidRequest(); }
         catch (InvalidOperationException) { throw InvalidRequest(); }
+    }
+
+    internal static string NormalizeDisplayName(string value)
+    {
+        var normalized = value.Trim();
+        ValidateScalars(normalized, 1, 80);
+        return normalized;
     }
 
     public static string NormalizeContactAddress(string address)

@@ -251,7 +251,7 @@ public sealed class AuthorizationController(
             return UserinfoError(Errors.InsufficientScope);
         }
         // Token validation authenticates the bearer; current account state is a
-        // separate check. Do not expand claims from the database after issuance.
+        // separate check. Standard claims remain bounded by the issued token.
         var user = await userManager.FindByIdAsync(subjects[0].Value);
         if (user is null || user.Status != UserStatus.Active)
         {
@@ -284,6 +284,10 @@ public sealed class AuthorizationController(
         if (principal.HasScope(Scopes.Profile))
         {
             var nickname = principal.GetClaim(PandaAuthClaims.Nickname);
+            if (presenters.Length == 1 && presenters[0] is FirstPartyClients.AdminWeb or FirstPartyClients.OasisWeb)
+            {
+                response[PandaAuthClaims.DisplayName] = await userManager.GetDisplayNameAsync(user.Id, HttpContext.RequestAborted);
+            }
             if (!string.IsNullOrEmpty(nickname))
             {
                 response[PandaAuthClaims.Nickname] = nickname;

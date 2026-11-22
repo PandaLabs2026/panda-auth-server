@@ -800,12 +800,38 @@ public class AdminUsersControllerTests
             user.Id, new AdminUserProfileRequest(Email: null, Nickname: "新昵称", Region: "cn-sh"), CancellationToken.None));
 
         Assert.Equal("新昵称", detail.Nickname);
+        var db = provider.GetRequiredService<PandaAuthDbContext>();
+        Assert.Equal("新昵称", (await db.UserProfiles.FindAsync(user.Id))?.DisplayName);
+        Assert.Null((await db.Users.FindAsync(user.Id))?.Nickname);
         Assert.Equal("cn-sh", detail.Region);
         Assert.Equal([user.Id], revoker.RevokedUsers);
         var entry = SingleAudit(provider);
         Assert.Equal(AdminAuditAction.UserUpdateProfile, entry.Action);
         Assert.Contains("nicknameChanged\":true", entry.Detail);
         Assert.Contains("emailChanged\":false", entry.Detail);
+    }
+
+    [Fact]
+    public async Task UpdateProfile_UsesDisplayNameAndDistinguishesOmissionFromNull()
+    {
+        var (controller, provider, revoker) = Create();
+        var user = await SeedUserAsync(provider, "profile-name");
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        AdminUserProfileRequest Parse(string json)
+            => System.Text.Json.JsonSerializer.Deserialize<AdminUserProfileRequest>(json, options)!;
+
+        var result = await controller.UpdateProfile(user.Id, Parse("""{"displayName":"Administrator","nickname":"PandaAdmin"}"""), CancellationToken.None);
+        Assert.Equal(400, Assert.IsType<ObjectResult>(result).StatusCode);
+        Assert.Empty(revoker.RevokedUsers);
+
+        var name = Parse("""{"displayName":" Administrator "}""");
+        Assert.Equal("Administrator", DetailOf(await controller.UpdateProfile(user.Id, name, CancellationToken.None)).DisplayName);
+        Assert.Equal("Administrator", DetailOf(await controller.UpdateProfile(user.Id, Parse("{}"), CancellationToken.None)).DisplayName);
+
+        var clear = Parse("""{"displayName":null}""");
+        Assert.Contains("\"displayName\":null", System.Text.Json.JsonSerializer.Serialize(clear, options));
+        Assert.Null(DetailOf(await controller.UpdateProfile(user.Id, clear, CancellationToken.None)).DisplayName);
+        Assert.Equal([user.Id, user.Id], revoker.RevokedUsers);
     }
 
     [Fact]

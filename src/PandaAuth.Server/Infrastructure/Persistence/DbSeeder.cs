@@ -6,6 +6,7 @@ using OpenIddict.Abstractions;
 using PandaAuth.Server.Configuration;
 using PandaAuth.Shared;
 using PandaAuth.Server.Domain;
+using PandaAuth.Server.Features.Profile;
 using static OpenIddict.Abstractions.OpenIddictConstants;
 
 namespace PandaAuth.Server.Infrastructure.Persistence;
@@ -65,9 +66,9 @@ public static class DbSeeder
                     UserName = options.Seed.Admin.Email,
                     Email = options.Seed.Admin.Email,
                     EmailConfirmed = true,
-                    Nickname = "PandaAdmin",
                     RegisterChannel = RegisterChannel.Password,
                 };
+                await using var creation = await AccountSecurityTransaction.BeginAsync(userManager.Store);
                 var userResult = await userManager.CreateAsync(admin, options.Seed.Admin.Password);
                 if (!userResult.Succeeded)
                 {
@@ -75,7 +76,10 @@ public static class DbSeeder
                         $"创建管理员账号失败：{string.Join("; ", userResult.Errors.Select(e => e.Description))}");
                 }
 
+                userManager.Store.UserProfiles.Add(SelfProfileService.NewNamedProfile(admin.Id, "PandaAdmin", DateTimeOffset.UtcNow));
+                await userManager.Store.SaveChangesAsync();
                 await userManager.AddToRoleAsync(admin, PandaUser.AdminRole);
+                await creation.CommitAsync();
             }
         }
 

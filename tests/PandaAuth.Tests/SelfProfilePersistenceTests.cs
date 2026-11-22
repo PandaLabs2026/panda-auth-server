@@ -88,6 +88,42 @@ public sealed class SelfProfilePersistenceTests
     }
 
     [PostgresFact]
+    public async Task Backfill_preserves_existing_names_and_skips_invalid_legacy_values()
+    {
+        await using var fixture = await AuthQualityPostgresFixture.CreateAsync(migrate: false);
+        await using var scope = fixture.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        var migrator = db.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>();
+        await migrator.MigrateAsync("20261110080800_AddProfileOrganizationVisibility");
+        db.Users.AddRange(
+            new PandaUser { Id = "existing", Nickname = "PandaAdmin" },
+            new PandaUser { Id = "empty", Nickname = " 旧名 " },
+            new PandaUser { Id = "new", Nickname = "\u3000名字\u00a0" },
+            new PandaUser { Id = "email", Nickname = "login@example.invalid" },
+            new PandaUser { Id = "long", Nickname = new string('界', 81) });
+        db.UserProfiles.AddRange(
+            new UserProfile { UserId = "existing", DisplayName = "Administrator", Revision = new string('a', 32) },
+            new UserProfile { UserId = "empty", Biography = "keep", Revision = new string('b', 32) });
+        await db.SaveChangesAsync();
+
+        await migrator.MigrateAsync();
+        db.ChangeTracker.Clear();
+        var profiles = await db.UserProfiles.ToDictionaryAsync(row => row.UserId);
+        Assert.Equal(3, profiles.Count);
+        Assert.Equal("Administrator", profiles["existing"].DisplayName);
+        Assert.Equal(new string('a', 32), profiles["existing"].Revision);
+        Assert.Equal("旧名", profiles["empty"].DisplayName);
+        Assert.Equal("keep", profiles["empty"].Biography);
+        Assert.NotEqual(new string('b', 32), profiles["empty"].Revision);
+        Assert.Equal("名字", profiles["new"].DisplayName);
+
+        profiles["new"].DisplayName = null;
+        await db.SaveChangesAsync();
+        await migrator.MigrateAsync();
+        Assert.Null(await db.UserProfiles.Where(row => row.UserId == "new").Select(row => row.DisplayName).SingleAsync());
+    }
+
+    [PostgresFact]
     public async Task Upgrade_preserves_existing_accounts_and_does_not_backfill_profiles()
     {
         await using var fixture = await AuthQualityPostgresFixture.CreateAsync(migrate: false);

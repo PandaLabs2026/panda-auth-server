@@ -6,6 +6,7 @@ using OpenIddict.EntityFrameworkCore.Models;
 using OpenIddict.Validation.AspNetCore;
 using PandaAuth.Server.Domain;
 using PandaAuth.Server.Features.Tokens;
+using PandaAuth.Server.Features.Profile;
 using PandaAuth.Server.Infrastructure.Security;
 using PandaAuth.Server.Infrastructure.Security.Mfa;
 using PandaAuth.Server.Infrastructure.Persistence;
@@ -81,8 +82,14 @@ public sealed class AdminUsersController(
         var items = await ordered
             .Skip(PaginationOffset.Calculate(pageNumber, size))
             .Take(size)
-            .Select(user => new AdminUserSummary(
-                user.Id, user.UserName!, user.Email, user.Nickname, user.Status, user.CreatedAt))
+            .Select(user => new
+            {
+                User = user,
+                DisplayName = db.UserProfiles.Where(profile => profile.UserId == user.Id)
+                    .Select(profile => profile.DisplayName).FirstOrDefault(),
+            })
+            .Select(row => new AdminUserSummary(row.User.Id, row.User.UserName!, row.User.Email,
+                row.DisplayName, row.User.Status, row.User.CreatedAt) { DisplayName = row.DisplayName })
             .ToListAsync(cancellationToken);
 
         return Ok(new AdminPageResult<AdminUserSummary>(items, total, pageNumber, size));
@@ -105,6 +112,8 @@ public sealed class AdminUsersController(
                 detail: "必须提供 UserName。");
         }
 
+        if (!TryReadDisplayName(request, out var displayName)) return InvalidDisplayName();
+
         var generated = string.IsNullOrEmpty(request.Password);
         var password = generated ? AdminPasswordGenerator.Generate() : request.Password!;
 
@@ -113,17 +122,26 @@ public sealed class AdminUsersController(
             UserName = request.UserName.Trim(),
             Email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim(),
             EmailConfirmed = false,
-            Nickname = string.IsNullOrWhiteSpace(request.Nickname) ? null : request.Nickname.Trim(),
             Region = string.IsNullOrWhiteSpace(request.Region) ? null : request.Region.Trim(),
             RegisterChannel = RegisterChannel.Admin,
         };
 
         // Identity 负责规范化、唯一性校验与密码策略：任何失败都以 400 带回原始描述。
-        var create = await userManager.CreateAsync(user, password);
-        if (!create.Succeeded)
+        await using (var accountCreation = await AccountSecurityTransaction.BeginAsync(db, cancellationToken))
         {
-            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "建号失败",
-                detail: string.Join("; ", create.Errors.Select(error => error.Description)));
+            var create = await userManager.CreateAsync(user, password);
+            if (!create.Succeeded)
+            {
+                return Problem(statusCode: StatusCodes.Status400BadRequest, title: "建号失败",
+                    detail: string.Join("; ", create.Errors.Select(error => error.Description)));
+            }
+
+            if (displayName is not null)
+            {
+                db.UserProfiles.Add(SelfProfileService.NewNamedProfile(user.Id, displayName, DateTimeOffset.UtcNow));
+                await db.SaveChangesAsync(cancellationToken);
+            }
+            await accountCreation.CommitAsync(cancellationToken);
         }
 
         // 部分成功也要留痕：账号一旦建成即写入审计；授角色失败时明文初始密码不返回，
@@ -223,7 +241,7 @@ public sealed class AdminUsersController(
 
         if (user.Status == request.Status)
         {
-            return Ok(SummaryOf(user));
+            return Ok(await SummaryOf(user, cancellationToken));
         }
 
         var previous = user.Status;
@@ -253,7 +271,7 @@ public sealed class AdminUsersController(
             "管理员 {Actor} 将用户 {UserId}（{UserName}）状态由 {Previous} 变更为 {Status}。",
             User.FindFirst(Claims.Subject)?.Value, user.Id, user.UserName, previous, request.Status);
 
-        return Ok(SummaryOf(user));
+        return Ok(await SummaryOf(user, cancellationToken));
     }
 
     /// <summary>
@@ -604,6 +622,10 @@ public sealed class AdminUsersController(
                 detail: "请求体不能为空。");
         }
 
+        if (!TryReadDisplayName(request, out var displayName)) return InvalidDisplayName();
+
+        await using var transaction = await AccountSecurityTransaction.BeginAsync(db, cancellationToken);
+        await AccountSecurityTransaction.LockUserAsync(db, id, cancellationToken);
         var user = await userManager.FindByIdAsync(id);
         if (user is null)
         {
@@ -616,18 +638,21 @@ public sealed class AdminUsersController(
         }
 
         var newEmail = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim();
-        var newNickname = string.IsNullOrWhiteSpace(request.Nickname) ? null : request.Nickname.Trim();
+        var editsDisplayName = request.HasDisplayName || request.HasNickname;
+        var profile = editsDisplayName
+            ? await db.UserProfiles.AsNoTracking().SingleOrDefaultAsync(record => record.UserId == id, cancellationToken)
+            : null;
         var newRegion = string.IsNullOrWhiteSpace(request.Region) ? null : request.Region.Trim();
 
         var emailChanged = !string.Equals(user.Email, newEmail, StringComparison.OrdinalIgnoreCase);
-        var nicknameChanged = !string.Equals(user.Nickname, newNickname, StringComparison.Ordinal);
+        var nicknameChanged = editsDisplayName && !string.Equals(profile?.DisplayName, displayName, StringComparison.Ordinal);
         var regionChanged = !string.Equals(user.Region, newRegion, StringComparison.Ordinal);
         if (!emailChanged && !nicknameChanged && !regionChanged)
         {
+            await transaction.CommitAsync(cancellationToken);
             return Ok(await DetailOf(user));
         }
 
-        await using var transaction = await AccountSecurityTransaction.BeginAsync(db, cancellationToken);
         if (emailChanged)
         {
             // 直写字段而非 SetEmailAsync：要同时覆盖「清空邮箱」（Email = null）这一分支。
@@ -636,7 +661,6 @@ public sealed class AdminUsersController(
             user.EmailConfirmed = false;
         }
 
-        user.Nickname = newNickname;
         user.Region = newRegion;
         user.SecurityStamp = Guid.NewGuid().ToString();
         user.UpdatedAt = DateTimeOffset.UtcNow;
@@ -647,7 +671,16 @@ public sealed class AdminUsersController(
                 detail: string.Join("; ", update.Errors.Select(error => error.Description)));
         }
 
-        // nickname/role 一样会进访问令牌 claim（profile scope），吊销保证新资料即时生效。
+        if (nicknameChanged)
+        {
+            var previousRevision = profile?.Revision;
+            profile ??= new UserProfile { UserId = id, Revision = "" };
+            profile.DisplayName = displayName;
+            var profiles = new SelfProfileService(db, securityEvents, TimeProvider.System);
+            await profiles.PersistWriteAsync(new(profile, previousRevision), cancellationToken);
+        }
+
+        // Preserve administrator-initiated session revocation when account presentation changes.
         await sessionSecurity.RevokeUserAuthorizationsAsync(user.Id, cancellationToken: cancellationToken);
         await audit.RecordAsync(
             AdminAuditing.Entry(User!, AdminAuditAction.UserUpdateProfile, "user", user.Id,
@@ -826,13 +859,36 @@ public sealed class AdminUsersController(
     {
         var roles = await userManager.GetRolesAsync(user);
         return new AdminUserDetail(
-            user.Id, user.UserName!, user.Email, user.EmailConfirmed, user.Nickname, user.Status,
+            user.Id, user.UserName!, user.Email, user.EmailConfirmed, await userManager.GetDisplayNameAsync(user.Id), user.Status,
             [.. roles], user.LockoutEnd, user.AccessFailedCount, user.TwoFactorEnabled,
             user.RegisterChannel, user.Region, user.CreatedAt, user.UpdatedAt);
     }
 
-    private static AdminUserSummary SummaryOf(PandaUser user)
-        => new(user.Id, user.UserName!, user.Email, user.Nickname, user.Status, user.CreatedAt);
+    private async Task<AdminUserSummary> SummaryOf(PandaUser user, CancellationToken cancellationToken)
+    {
+        var displayName = await userManager.GetDisplayNameAsync(user.Id, cancellationToken);
+        return new(user.Id, user.UserName!, user.Email, displayName, user.Status, user.CreatedAt) { DisplayName = displayName };
+    }
+
+    private static bool TryReadDisplayName(AdminDisplayNameRequest request, out string? result)
+    {
+        result = null;
+        try
+        {
+            var displayName = request.DisplayName is { } name ? SelfProfileInput.NormalizeDisplayName(name) : null;
+            var nickname = request.Nickname is { } legacy ? SelfProfileInput.NormalizeDisplayName(legacy) : null;
+            result = request.HasDisplayName ? displayName : nickname;
+            return !request.HasDisplayName || !request.HasNickname || string.Equals(displayName, nickname, StringComparison.Ordinal);
+        }
+        catch (ProfileInputException)
+        {
+            return false;
+        }
+    }
+
+    private ObjectResult InvalidDisplayName()
+        => Problem(statusCode: StatusCodes.Status400BadRequest, title: "显示名无效",
+            detail: "显示名须包含 1–80 个 Unicode 字符。兼容昵称字段必须与显示名一致。");
 
     private SecurityEventEntry SecurityEventEntryFor(string eventType, string userId, object? metadata)
         => new(
