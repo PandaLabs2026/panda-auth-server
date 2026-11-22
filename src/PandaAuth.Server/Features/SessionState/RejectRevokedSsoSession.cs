@@ -23,6 +23,7 @@ public sealed class RejectRevokedSsoSession(SessionRevocationService revocations
             if (principal is null || (ids.Length == 0 && kinds.Length == 1 && kinds[0].Value == PandaAuthClaims.SubjectTypes.Machine))
                 continue; // Machine identities have no browser login session.
             if (NativeLoginRoute.RejectInactivePilotPrincipal(principal, configuration)
+                || NativeResourceClient.RejectInactivePrincipal(principal, configuration)
                 || !await AccountSecurityVersion.IsCurrentAsync(principal, users)
                 || ids.Length != 1 || !Guid.TryParseExact(ids[0].Value, "N", out _)
                 || await revocations.IsRevokedAsync(PandaAuthSessionApi.SsoPartition, ids[0].Value, context.CancellationToken))

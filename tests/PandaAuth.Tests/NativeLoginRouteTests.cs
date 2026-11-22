@@ -358,6 +358,104 @@ public sealed class NativeLoginRouteTests
         }
     }
 
+    [PostgresFact]
+    public async Task Dedicated_native_resource_is_separate_from_the_read_only_client()
+    {
+        const string resource = "Auth:NativeLogin:ResourceAccess:";
+        const string apiScope = "fixture.native.api";
+        const string resourceClient = "native-resource-fixture";
+        var settings = PilotSettings();
+        settings[resource + "Enabled"] = "true";
+        settings[resource + "ClientId"] = resourceClient;
+        settings[resource + "Revision"] = Guid.NewGuid().ToString("D");
+        settings[resource + "Scope"] = apiScope;
+        settings[resource + "Audiences:0"] = PandeskCustomerRead.Audience;
+        settings[resource + "Audiences:1"] = PandeskCustomerRead.IntrospectionAudience;
+        await using var fixture = await SecurityProtocolFixture.CreateAsync(settings: settings, userId: PilotSubject);
+        await fixture.EnableTotpAsync();
+        using var scope = fixture.Host.Services.CreateScope();
+        var scopes = scope.ServiceProvider.GetRequiredService<IOpenIddictScopeManager>();
+        foreach (var name in new[] { PandeskCustomerRead.Scope, apiScope })
+            await scopes.CreateAsync(new OpenIddictScopeDescriptor
+            {
+                Name = name, Resources = { PandeskCustomerRead.Audience, PandeskCustomerRead.IntrospectionAudience },
+            });
+        var callback = PilotIssuer + "connect/native/callback";
+        var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+        foreach (var id in new[] { PilotClient, resourceClient })
+            await applications.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = id, ClientType = ClientTypes.Public, ConsentType = ConsentTypes.Implicit,
+                RedirectUris = { new Uri(callback) },
+                Permissions = { Permissions.Endpoints.Authorization, Permissions.Endpoints.Token,
+                    Permissions.GrantTypes.AuthorizationCode, Permissions.ResponseTypes.Code,
+                    Permissions.Prefixes.Scope + (id == PilotClient ? PandeskCustomerRead.Scope : apiScope) },
+                Requirements = { Requirements.Features.ProofKeyForCodeExchange },
+            });
+        var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        await applications.CreateAsync(new OpenIddictApplicationDescriptor
+        {
+            ClientId = PandeskCustomerRead.IntrospectionClientId, ClientType = ClientTypes.Confidential,
+            ClientSecret = secret, Permissions = { Permissions.Endpoints.Introspection },
+        });
+        using var client = CreateClient(fixture, PilotIssuer);
+        var verifier = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
+        var fields = new Dictionary<string, string>
+        {
+            ["client_id"] = resourceClient,
+            ["code_challenge"] = WebEncoders.Base64UrlEncode(SHA256.HashData(Encoding.ASCII.GetBytes(verifier))),
+            ["code_challenge_method"] = CodeChallengeMethods.Sha256,
+            ["nonce"] = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32)),
+            ["step"] = "password", ["username"] = "security-admin", ["password"] = fixture.AdminPassword,
+        };
+        using var started = await client.PostAsync(Path, new FormUrlEncodedContent(fields));
+        Assert.Equal(HttpStatusCode.Accepted, started.StatusCode);
+        var pending = await started.Content.ReadFromJsonAsync<JsonElement>();
+        var verify = new Dictionary<string, string>(fields);
+        verify.Remove("username");
+        verify.Remove("password");
+        verify["step"] = "totp";
+        verify["challenge"] = pending.GetProperty("challenge").GetString()!;
+        verify["otp"] = fixture.CurrentTotpCode();
+        verify["client_id"] = PilotClient;
+        using var wrongChallenge = await client.PostAsync(Path, new FormUrlEncodedContent(verify));
+        Assert.Equal(HttpStatusCode.Conflict, wrongChallenge.StatusCode);
+        verify["client_id"] = resourceClient;
+        using var verified = await client.PostAsync(Path, new FormUrlEncodedContent(verify));
+        Assert.Equal(HttpStatusCode.OK, verified.StatusCode);
+        var approval = await verified.Content.ReadFromJsonAsync<JsonElement>();
+
+        var exchange = new Dictionary<string, string>
+        {
+            ["grant_type"] = GrantTypes.AuthorizationCode, ["client_id"] = resourceClient, ["redirect_uri"] = callback,
+            ["code"] = approval.GetProperty("authorization_code").GetString()!, ["code_verifier"] = verifier,
+        };
+        using var exchanged = await client.PostAsync("/connect/token", new FormUrlEncodedContent(exchange));
+        Assert.Equal(HttpStatusCode.OK, exchanged.StatusCode);
+        var tokens = await exchanged.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(tokens.TryGetProperty("refresh_token", out _));
+        var introspect = new Dictionary<string, string>
+        {
+            ["client_id"] = PandeskCustomerRead.IntrospectionClientId, ["client_secret"] = secret,
+            ["token"] = tokens.GetProperty("access_token").GetString()!,
+        };
+        using var valid = await client.PostAsync("/connect/introspect", new FormUrlEncodedContent(introspect));
+        var claims = await valid.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(claims.GetProperty("active").GetBoolean());
+        var issuedScopes = claims.GetProperty("scope").GetString()!.Split(' ');
+        Assert.Contains(apiScope, issuedScopes);
+        Assert.DoesNotContain(PandeskCustomerRead.Scope, issuedScopes);
+
+        fixture.Host.Services.GetRequiredService<IConfiguration>()[resource + "Enabled"] = "false";
+        using var inactive = await client.PostAsync("/connect/introspect", new FormUrlEncodedContent(introspect));
+        Assert.False((await inactive.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("active").GetBoolean());
+        using var closed = await client.PostAsync(Path, new FormUrlEncodedContent(fields));
+        Assert.Equal(HttpStatusCode.BadRequest, closed.StatusCode);
+        fields["client_id"] = PilotClient;
+        using var stillReadable = await client.PostAsync(Path, new FormUrlEncodedContent(fields));
+        Assert.Equal(HttpStatusCode.Accepted, stillReadable.StatusCode);
+    }
+
     private static Dictionary<string, string> PilotSettings() => new()
     {
         ["Auth:Issuer"] = PilotIssuer,
