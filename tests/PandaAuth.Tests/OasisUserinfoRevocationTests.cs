@@ -88,15 +88,16 @@ public sealed class OasisUserinfoRevocationTests
         {
             ["Profile:AccountPresentationClients"] = FirstPartyClients.OasisWeb,
             ["Profile:LegacyNicknameClients"] = FirstPartyClients.OasisWeb,
-        });
-        if (columnsDropped)
+        }, targetMigration: columnsDropped ? "DropLegacyUserColumns" : "RetireLegacyUserColumnMappings");
+        await using (var db = fixture.Context())
         {
-            // The cutover executable must support the physical schema of the later release.
-            await using var db = fixture.Context();
-            await db.Database.ExecuteSqlRawAsync("""
-                ALTER TABLE panda_users DROP COLUMN "Nickname" RESTRICT,
-                    DROP COLUMN "AvatarUrl" RESTRICT, DROP COLUMN "Region" RESTRICT
-                """);
+            var legacyColumns = await db.Database.SqlQueryRaw<int>("""
+                SELECT count(*)::int AS "Value"
+                FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'panda_users'
+                  AND column_name IN ('Nickname', 'AvatarUrl', 'Region')
+                """).SingleAsync();
+            Assert.Equal(columnsDropped ? 0 : 3, legacyColumns);
         }
         await fixture.RegisterClientAsync(FirstPartyClients.OasisWeb);
         await fixture.EnableTotpAsync();
