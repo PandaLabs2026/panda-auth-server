@@ -30,7 +30,7 @@ public sealed class TotpRotationPostgresTests
     [InlineData(true)]
     public async Task Rotation_PreservesOldFactorUntilConfirmation_OnFreshAndUpgradedDatabase(bool upgrade)
     {
-        await using var fixture = await AuthQualityPostgresFixture.CreateAsync();
+        await using var fixture = await AuthQualityPostgresFixture.CreateAsync(migrate: !upgrade);
         await using var scope = fixture.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
         if (upgrade)
@@ -367,9 +367,10 @@ public sealed class TotpRotationPostgresTests
     [PostgresFact]
     public async Task Downgrade_WithActiveRotationFailsWithoutDroppingConstraintsOrFactors()
     {
-        await using var fixture = await AuthQualityPostgresFixture.CreateAsync();
+        await using var fixture = await AuthQualityPostgresFixture.CreateAsync(migrate: false);
         await using var scope = fixture.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
+        await db.GetService<IMigrator>().MigrateAsync("20261031111911_AllowTotpRotation");
         var (user, service) = await CreateUserAsync(db);
         var principal = Principal(user.Id);
         var first = await service.BeginEnrollmentAsync(user.Id, principal, default);

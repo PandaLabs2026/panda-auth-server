@@ -37,10 +37,10 @@ public class ManagementUsersControllerTests
         await manager.CreateAsync(user, "Passw0rd!1234");
     }
 
-    private static AdminPageResult<AdminUserSummary> PageOf(IActionResult result)
+    private static AdminPageResult<ManagementUserSummary> PageOf(IActionResult result)
     {
         var ok = Assert.IsType<OkObjectResult>(result);
-        return Assert.IsType<AdminPageResult<AdminUserSummary>>(ok.Value);
+        return Assert.IsType<AdminPageResult<ManagementUserSummary>>(ok.Value);
     }
 
     [Theory]

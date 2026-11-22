@@ -55,10 +55,13 @@ public sealed class ManagementUsersController(UserService userManager, Managemen
             .OrderByDescending(user => user.CreatedAt)
             .Skip(PaginationOffset.Calculate(pageNumber, size))
             .Take(size)
-            .Select(user => new AdminUserSummary(
+            .Select(user => new ManagementUserSummary(
                 user.Id, user.UserName!, user.Email, null, user.Status, user.CreatedAt))
             .ToListAsync(cancellationToken);
 
-        return Ok(new AdminPageResult<AdminUserSummary>(items, total, pageNumber, size));
+        return Ok(new AdminPageResult<ManagementUserSummary>(items, total, pageNumber, size));
     }
 }
+
+internal sealed record ManagementUserSummary(
+    string Id, string UserName, string? Email, string? Nickname, UserStatus Status, DateTimeOffset CreatedAt);
