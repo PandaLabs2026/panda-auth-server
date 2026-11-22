@@ -9,6 +9,8 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -44,7 +46,7 @@ internal sealed class SecurityProtocolFixture : IAsyncDisposable
 
     internal static async Task<SecurityProtocolFixture> CreateAsync(Action<IServiceCollection>? configure = null,
         IReadOnlyDictionary<string, string>? settings = null, Action<Factory>? configureHost = null,
-        string? userId = null, string environmentName = "Development")
+        string? userId = null, string environmentName = "Development", string? targetMigration = null)
     {
         var builder = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("PANDA_AUTH_TEST_POSTGRES"));
         PostgresTestBoundary.ValidateEndpoint(builder, PostgresTestBoundary.SharedMode);
@@ -61,7 +63,13 @@ internal sealed class SecurityProtocolFixture : IAsyncDisposable
         try
         {
             configureHost?.Invoke(fixture.Host);
-            await using (var db = fixture.Context()) await db.Database.MigrateAsync();
+            await using (var db = fixture.Context())
+            {
+                if (targetMigration is null)
+                    await db.Database.MigrateAsync();
+                else
+                    await db.GetService<IMigrator>().MigrateAsync(targetMigration);
+            }
             using var scope = fixture.Host.Services.CreateScope();
             var users = scope.ServiceProvider.GetRequiredService<UserService>();
             var roles = scope.ServiceProvider.GetRequiredService<RoleService>();

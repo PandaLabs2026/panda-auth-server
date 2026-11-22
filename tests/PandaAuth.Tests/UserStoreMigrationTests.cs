@@ -192,7 +192,7 @@ public class UserStoreMigrationTests
         await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlRawAsync(
             """UPDATE "AspNetUsers" SET "Nickname" = 'must fail'"""));
 
-        await db.Database.MigrateAsync();
+        await db.GetService<IMigrator>().MigrateAsync("AspNetLegacyTablesDrop");
         Assert.False(await db.Database.SqlQueryRaw<bool>("""
             SELECT to_regclass('"AspNetUsers"') IS NOT NULL AS "Value"
             """).SingleAsync());
