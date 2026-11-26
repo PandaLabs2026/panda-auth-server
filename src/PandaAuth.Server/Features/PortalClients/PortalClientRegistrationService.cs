@@ -36,7 +36,7 @@ internal sealed class PortalClientRegistrationService(IServiceScopeFactory scope
     // creation, SaveChanges or audit write is allowed on this path.
     internal async Task<string> VerifyAsync(byte[] raw)
     {
-        var request = Parse(raw, false, clock.GetUtcNow());
+        var request = Parse(raw, false, clock.GetUtcNow(), verify: true);
         Require(request.ClientId is not null && request.InWindow(clock.GetUtcNow()), "invalid-read-only-request");
         await using var scope = scopes.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<PandaAuthDbContext>();
@@ -45,7 +45,7 @@ internal sealed class PortalClientRegistrationService(IServiceScopeFactory scope
         await db.Database.ExecuteSqlRawAsync("SET TRANSACTION READ ONLY");
         var application = await manager.FindByClientIdAsync(request.ClientId!);
         Require(application is OpenIddictEntityFrameworkCoreApplication, "registered-client-missing");
-        var descriptor = await ReadMatchingAsync(manager, (OpenIddictEntityFrameworkCoreApplication)application!);
+        var descriptor = await ReadMatchingAsync(manager, (OpenIddictEntityFrameworkCoreApplication)application!, request.IsApex);
         var proof = Receipt(request, descriptor, "verified-existing", clock.GetUtcNow());
         await transaction.CommitAsync();
         return proof;
@@ -139,22 +139,40 @@ internal sealed class PortalClientRegistrationService(IServiceScopeFactory scope
     private static async Task<OpenIddictEntityFrameworkCoreApplication?> LockedApplicationAsync(PandaAuthDbContext db, string clientId)
         => await db.Set<OpenIddictEntityFrameworkCoreApplication>()
             .FromSqlInterpolated($"SELECT * FROM \"OpenIddictApplications\" WHERE \"ClientId\" = {clientId} FOR UPDATE").SingleOrDefaultAsync();
-    private static async Task<OpenIddictApplicationDescriptor> ReadMatchingAsync(IOpenIddictApplicationManager manager, OpenIddictEntityFrameworkCoreApplication application)
+    private static async Task<OpenIddictApplicationDescriptor> ReadMatchingAsync(
+        IOpenIddictApplicationManager manager, OpenIddictEntityFrameworkCoreApplication application, bool apex = false)
     {
         var descriptor = new OpenIddictApplicationDescriptor();
         await manager.PopulateAsync(descriptor, application);
-        Require(application.ClientSecret is null && descriptor.ClientSecret is null && descriptor.ClientId is not null &&
-            MatchesSupportedRegistration(descriptor), "registration-mismatch");
+        Require(application.ClientSecret is null && descriptor.ClientSecret is null && descriptor.ClientId is not null, "registration-mismatch");
+        if (apex)
+        {
+            var redirects = await manager.GetRedirectUrisAsync(application);
+            var logout = await manager.GetPostLogoutRedirectUrisAsync(application);
+            var redirectSet = redirects.ToHashSet(StringComparer.Ordinal);
+            var logoutSet = logout.ToHashSet(StringComparer.Ordinal);
+            Require(redirectSet.Count == redirects.Length && logoutSet.Count == logout.Length &&
+                redirectSet.Contains(ApexCallback) &&
+                redirectSet.All(uri => uri is ApexCallback or PartitionCallback or Callback) &&
+                logoutSet.SetEquals(redirectSet.Select(uri => uri + "/logout")), "registration-mismatch");
+            // The proof describes the observed apex registration. The populated
+            // descriptor is local to this read-only transaction and is never saved.
+            descriptor.RedirectUris.Clear();
+            descriptor.RedirectUris.Add(new Uri(ApexCallback));
+            descriptor.PostLogoutRedirectUris.Clear();
+            descriptor.PostLogoutRedirectUris.Add(new Uri(ApexLogoutCallback));
+        }
+        Require(MatchesSupportedRegistration(descriptor, apex), "registration-mismatch");
         return descriptor;
     }
-    private static bool MatchesSupportedRegistration(OpenIddictApplicationDescriptor descriptor)
+    private static bool MatchesSupportedRegistration(OpenIddictApplicationDescriptor descriptor, bool apex)
     {
-        var expected = Descriptor(descriptor.ClientId!);
-        var actual = RegistrationDigest(descriptor);
-        if (actual == RegistrationDigest(expected)) return true;
+        var expected = Descriptor(descriptor.ClientId!, apex);
+        var actual = RegistrationDigest(descriptor, apex);
+        if (actual == RegistrationDigest(expected, apex)) return true;
         // Preserve an existing Portal roles grant; do not add permissions to a client.
         expected.Permissions.Add(OpenIddictConstants.Permissions.Scopes.Roles);
-        return actual == RegistrationDigest(expected);
+        return actual == RegistrationDigest(expected, apex);
     }
     private static JsonElement ReceiptJson(PortalOperationRecord record) => ClosedJson(Encoding.UTF8.GetBytes(record.ReceiptRaw));
     private static void BindOriginal(PortalClientRequest request, PortalOperationRecord original, JsonElement receipt)
