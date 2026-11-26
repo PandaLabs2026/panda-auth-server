@@ -16,11 +16,16 @@ internal sealed record PortalClientRequest(JsonElement Json, string Digest, bool
     internal const string Issuer = "https://t0000-auth.s001.pandalabs.cn/";
     internal const string Callback = "https://t0000.s001.pandalabs.cn/callback";
     internal const string LogoutCallback = "https://t0000.s001.pandalabs.cn/callback/logout";
+    internal const string ApexIssuer = "https://t0000-auth.pandacloud.cc/";
+    internal const string ApexCallback = "https://t0000.pandacloud.cc/callback";
+    internal const string ApexLogoutCallback = ApexCallback + "/logout";
+    internal const string PartitionCallback = "https://t0000.s001.pandacloud.cc/callback";
     internal const string Executor = "jiayuhu@tcloud-sh-01";
     internal static readonly string[] PermissionsSet = [Permissions.Endpoints.Authorization, Permissions.Endpoints.Token,
         Permissions.Endpoints.EndSession, Permissions.GrantTypes.AuthorizationCode, Permissions.ResponseTypes.Code, Permissions.Scopes.Profile];
     internal static readonly string[] RequirementsSet = [Requirements.Features.ProofKeyForCodeExchange];
     internal string this[string key] => Json.GetProperty(key).GetString()!;
+    internal bool IsApex => this["zone"] == "";
     internal string OperationId => this["operationId"];
     internal string? ClientId => Json.TryGetProperty("clientId", out var value) ? value.GetString() : null;
     internal bool InWindow(DateTimeOffset now) => Utc(this["maintenanceStartUtc"]) <= now && now <= Utc(this["maintenanceEndUtc"]);
@@ -53,7 +58,7 @@ internal sealed record PortalClientRequest(JsonElement Json, string Digest, bool
         else if (element.ValueKind == JsonValueKind.Array)
             foreach (var value in element.EnumerateArray()) CheckDuplicates(value);
     }
-    internal static PortalClientRequest Parse(byte[] raw, bool unregister, DateTimeOffset now)
+    internal static PortalClientRequest Parse(byte[] raw, bool unregister, DateTimeOffset now, bool verify = false)
     {
         var json = ClosedJson(raw);
         Require(json.ValueKind == JsonValueKind.Object);
@@ -70,7 +75,8 @@ internal sealed record PortalClientRequest(JsonElement Json, string Digest, bool
             Require(!property.Value.GetString()!.Any(char.IsControl));
         }
         var request = new PortalClientRequest(json, Hash(raw), unregister);
-        Require(request["deploymentKind"] == Kind && request["tenantId"] == "t0000" && request["zone"] == "s001" && request["machineId"] == "tcloud-sh-01");
+        Require(request["deploymentKind"] == Kind && request["tenantId"] == "t0000" && request["machineId"] == "tcloud-sh-01");
+        Require(request["zone"] == "s001" || (verify && !unregister && request.IsApex));
         Require(Guid.TryParseExact(request.OperationId, "D", out var operation) && operation != Guid.Empty && operation.ToString("D") == request.OperationId);
         Require(request["executor"] == Executor);
         foreach (var name in new[] { "authMetaSource", "authServerSource" })
@@ -81,25 +87,28 @@ internal sealed record PortalClientRequest(JsonElement Json, string Digest, bool
         Require(start < end && end <= valid && end - start <= TimeSpan.FromDays(1) && valid - start <= TimeSpan.FromDays(90) && now <= valid, "expired-request");
         if (unregister)
             foreach (var name in new[] { "requestDigest", "registrationDigest" }) Require(Regex.IsMatch(request[name], @"\A[0-9a-f]{64}\z", RegexOptions.CultureInvariant));
-        else Require(request["issuer"] == Issuer && request["redirectUri"] == Callback && request["postLogoutRedirectUri"] == LogoutCallback);
+        else Require(request["issuer"] == (request.IsApex ? ApexIssuer : Issuer) &&
+            request["redirectUri"] == (request.IsApex ? ApexCallback : Callback) &&
+            request["postLogoutRedirectUri"] == (request.IsApex ? ApexLogoutCallback : LogoutCallback));
         return request;
     }
 
-    internal static OpenIddictApplicationDescriptor Descriptor(string clientId)
+    internal static OpenIddictApplicationDescriptor Descriptor(string clientId, bool apex = false)
     {
         var descriptor = new OpenIddictApplicationDescriptor { ClientId = clientId, ClientType = ClientTypes.Public, ConsentType = ConsentTypes.Implicit };
-        descriptor.RedirectUris.Add(new Uri(Callback)); descriptor.PostLogoutRedirectUris.Add(new Uri(LogoutCallback));
+        descriptor.RedirectUris.Add(new Uri(apex ? ApexCallback : Callback));
+        descriptor.PostLogoutRedirectUris.Add(new Uri(apex ? ApexLogoutCallback : LogoutCallback));
         descriptor.Permissions.UnionWith(PermissionsSet); descriptor.Requirements.UnionWith(RequirementsSet);
         return descriptor;
     }
-    internal static byte[] RegistrationBytes(OpenIddictApplicationDescriptor descriptor)
+    internal static byte[] RegistrationBytes(OpenIddictApplicationDescriptor descriptor, bool apex = false)
     {
         using var output = new MemoryStream();
         using (var writer = new Utf8JsonWriter(output))
         {
             writer.WriteStartObject();
             writer.WriteString("clientId", descriptor.ClientId); writer.WriteString("clientType", descriptor.ClientType);
-            writer.WriteString("consentType", descriptor.ConsentType); writer.WriteString("issuer", Issuer);
+            writer.WriteString("consentType", descriptor.ConsentType); writer.WriteString("issuer", apex ? ApexIssuer : Issuer);
             WriteArray(writer, "redirectUris", descriptor.RedirectUris.Select(u => u.AbsoluteUri));
             WriteArray(writer, "postLogoutRedirectUris", descriptor.PostLogoutRedirectUris.Select(u => u.AbsoluteUri));
             WriteArray(writer, "permissions", descriptor.Permissions); WriteArray(writer, "requirements", descriptor.Requirements);
@@ -113,17 +122,18 @@ internal sealed record PortalClientRequest(JsonElement Json, string Digest, bool
         foreach (var value in values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)) writer.WriteStringValue(value);
         writer.WriteEndArray();
     }
-    internal static string RegistrationDigest(OpenIddictApplicationDescriptor descriptor) => Hash(RegistrationBytes(descriptor));
+    internal static string RegistrationDigest(OpenIddictApplicationDescriptor descriptor, bool apex = false) => Hash(RegistrationBytes(descriptor, apex));
     internal static string Receipt(PortalClientRequest request, OpenIddictApplicationDescriptor descriptor, string result, DateTimeOffset now)
     {
         var values = new Dictionary<string, object?>
         {
-            ["schemaVersion"] = 1, ["deploymentKind"] = Kind, ["tenantId"] = "t0000", ["zone"] = "s001", ["machineId"] = "tcloud-sh-01",
+            ["schemaVersion"] = 1, ["deploymentKind"] = Kind, ["tenantId"] = "t0000", ["zone"] = request["zone"], ["machineId"] = "tcloud-sh-01",
             ["operationId"] = request.OperationId, ["requestDigest"] = request.Digest, ["clientId"] = descriptor.ClientId,
-            ["result"] = result, ["clientType"] = descriptor.ClientType, ["consentType"] = descriptor.ConsentType, ["issuer"] = Issuer,
-            ["redirectUris"] = new[] { Callback }, ["postLogoutRedirectUris"] = new[] { LogoutCallback },
+            ["result"] = result, ["clientType"] = descriptor.ClientType, ["consentType"] = descriptor.ConsentType, ["issuer"] = request.IsApex ? ApexIssuer : Issuer,
+            ["redirectUris"] = new[] { request.IsApex ? ApexCallback : Callback },
+            ["postLogoutRedirectUris"] = new[] { request.IsApex ? ApexLogoutCallback : LogoutCallback },
             ["permissions"] = descriptor.Permissions.Order(StringComparer.Ordinal).ToArray(), ["requirements"] = descriptor.Requirements.Order(StringComparer.Ordinal).ToArray(),
-            ["registrationDigest"] = RegistrationDigest(descriptor), ["authMetaSource"] = request["authMetaSource"], ["authServerSource"] = request["authServerSource"],
+            ["registrationDigest"] = RegistrationDigest(descriptor, request.IsApex), ["authMetaSource"] = request["authMetaSource"], ["authServerSource"] = request["authServerSource"],
             ["planReference"] = request["planReference"], ["executionReference"] = request["executionReference"], ["executor"] = Executor, ["observedUtc"] = Timestamp(now),
         };
         return JsonSerializer.Serialize(values) + "\n";

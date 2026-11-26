@@ -50,6 +50,15 @@ public class PortalClientCommandTests
     public void ReadOnlyProof_AcceptsOnlyTheTwoRegisteredIssuerForms(string issuer,bool valid)
         => Assert.Equal(valid,PortalClientCommand.IsRegisteredProofIssuer(issuer));
 
+    [Theory]
+    [InlineData("https://t0000-auth.pandacloud.cc/", true)]
+    [InlineData("https://t0000-auth.pandacloud.cc", true)]
+    [InlineData("https://t0000-auth.s001.pandalabs.cn/", false)]
+    [InlineData("https://t0000-auth.s001.pandacloud.cc/", false)]
+    [InlineData("https://t0000-auth.pandacloud.cc/other", false)]
+    public void ApexProofRequiresTheMatchingRuntimeIssuer(string configured, bool valid)
+        => Assert.Equal(valid, PortalClientCommand.IsRegisteredProofIssuer(configured, "https://t0000-auth.pandacloud.cc/"));
+
     [Fact]
     public void NormalHostBootstrap_OnlyKnownActualHostingPairsAreAccepted()
     {

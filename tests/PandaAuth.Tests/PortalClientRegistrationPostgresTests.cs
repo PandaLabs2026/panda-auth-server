@@ -6,6 +6,7 @@ using OpenIddict.Abstractions;
 using PandaAuth.Server.Domain;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -48,6 +49,79 @@ public class PortalClientRegistrationPostgresTests
             await scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>().CreateAsync(descriptor);
         await Assert.ThrowsAsync<PortalClientClosedException>(() => fixture.Service.VerifyAsync(Request("proof-drift")));
         Assert.Equal((1, 0), await fixture.CountsAsync());
+    }
+
+    [PostgresFact]
+    public async Task ReadOnlyProof_ApexProjectsTheExistingCallbackPairWithoutChangingRegistration()
+    {
+        await using var fixture = await RegistrationDatabase.CreateAsync();
+        var descriptor = PortalClientRequest.Descriptor("proof-apex");
+        descriptor.RedirectUris.Add(new Uri("https://t0000.s001.pandacloud.cc/callback"));
+        descriptor.PostLogoutRedirectUris.Add(new Uri("https://t0000.s001.pandacloud.cc/callback/logout"));
+        descriptor.RedirectUris.Add(new Uri("https://t0000.pandacloud.cc/callback"));
+        descriptor.PostLogoutRedirectUris.Add(new Uri("https://t0000.pandacloud.cc/callback/logout"));
+        descriptor.Permissions.Add(OpenIddictConstants.Permissions.Scopes.Roles);
+        await using var scope = fixture.Provider.CreateAsyncScope();
+        var manager = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+        await manager.CreateAsync(descriptor);
+        var raw = ApexRequest("proof-apex");
+        using var json = JsonDocument.Parse(await fixture.Service.VerifyAsync(raw));
+        var proof = json.RootElement;
+        Assert.Equal("", proof.GetProperty("zone").GetString());
+        Assert.Equal("https://t0000-auth.pandacloud.cc/", proof.GetProperty("issuer").GetString());
+        Assert.Equal("https://t0000.pandacloud.cc/callback", Assert.Single(proof.GetProperty("redirectUris").EnumerateArray()).GetString());
+        Assert.Equal("https://t0000.pandacloud.cc/callback/logout", Assert.Single(proof.GetProperty("postLogoutRedirectUris").EnumerateArray()).GetString());
+        Assert.Equal(PortalClientRequest.Hash(raw), proof.GetProperty("requestDigest").GetString());
+        Assert.Contains("scp:roles", proof.GetProperty("permissions").EnumerateArray().Select(x => x.GetString()));
+        var projected = new Dictionary<string, JsonElement>();
+        foreach (var name in new[] { "clientId", "clientType", "consentType", "issuer", "redirectUris",
+            "postLogoutRedirectUris", "permissions", "requirements" })
+            projected.Add(name, proof.GetProperty(name));
+        Assert.Equal(PortalClientRequest.Hash(JsonSerializer.SerializeToUtf8Bytes(projected)), proof.GetProperty("registrationDigest").GetString());
+        await Assert.ThrowsAsync<PortalClientClosedException>(() => fixture.Service.ExecuteAsync(raw));
+        await using var observedScope = fixture.Provider.CreateAsyncScope();
+        var observedManager = observedScope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+        var observed = new OpenIddictApplicationDescriptor();
+        await observedManager.PopulateAsync(observed, (await observedManager.FindByClientIdAsync("proof-apex"))!);
+        Assert.Equal(3, observed.RedirectUris.Count);
+        Assert.Equal(3, observed.PostLogoutRedirectUris.Count);
+        Assert.Equal((1, 0), await fixture.CountsAsync());
+    }
+
+    [PostgresFact]
+    public async Task ReadOnlyProof_ApexRejectsUnknownAndUnpairedCallbacksWithoutAudit()
+    {
+        await using var fixture = await RegistrationDatabase.CreateAsync();
+        foreach (var invalid in new[] { "unknown", "unpaired", "missing", "extra-scope" })
+        {
+            var descriptor = PortalClientRequest.Descriptor("proof-" + invalid);
+            descriptor.RedirectUris.Add(new Uri("https://t0000.pandacloud.cc/callback"));
+            if (invalid != "missing")
+                descriptor.PostLogoutRedirectUris.Add(new Uri("https://t0000.pandacloud.cc/callback/logout"));
+            if (invalid == "unknown")
+            {
+                descriptor.RedirectUris.Add(new Uri("https://foreign.invalid/callback"));
+                descriptor.PostLogoutRedirectUris.Add(new Uri("https://foreign.invalid/callback/logout"));
+            }
+            if (invalid == "unpaired")
+                descriptor.RedirectUris.Add(new Uri("https://t0000.s001.pandacloud.cc/callback"));
+            if (invalid == "extra-scope") descriptor.Permissions.Add("scp:email");
+            await using var scope = fixture.Provider.CreateAsyncScope();
+            await scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>().CreateAsync(descriptor);
+            var failure = await Assert.ThrowsAsync<PortalClientClosedException>(() => fixture.Service.VerifyAsync(ApexRequest("proof-" + invalid)));
+            Assert.Equal("registration-mismatch", failure.Message);
+        }
+        Assert.Equal((4, 0), await fixture.CountsAsync());
+    }
+
+    private static byte[] ApexRequest(string clientId)
+    {
+        var document = JsonNode.Parse(Request(clientId))!;
+        document["zone"] = "";
+        document["issuer"] = "https://t0000-auth.pandacloud.cc/";
+        document["redirectUri"] = "https://t0000.pandacloud.cc/callback";
+        document["postLogoutRedirectUri"] = "https://t0000.pandacloud.cc/callback/logout";
+        return JsonSerializer.SerializeToUtf8Bytes(document);
     }
 
     [PostgresFact]
