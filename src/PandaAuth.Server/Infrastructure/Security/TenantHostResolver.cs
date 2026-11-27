@@ -89,7 +89,9 @@ public sealed class TenantRedirectPolicy
 
         // 同租户同分区的任一产品规范主机上的回调均放行（跨产品单点登录面）；
         // apex 上下文(zone 空串)经 For 自动取 apex 形态，分区上下文取分区形态。
-        return Enum.GetValues<TenantProduct>().Any(product =>
-            string.Equals(redirectUri.Host, TenantCanonicalHost.For(context.TenantId, product, context.Zone), StringComparison.OrdinalIgnoreCase)); // F2 收口
+        // 标签双收（meta ADR-092）：并存窗口内各产品被接受的主机形态都放行（目前多出熊猫助理的 -pandy）。
+        return Enum.GetValues<TenantProduct>()
+            .SelectMany(product => TenantCanonicalHost.AcceptedHosts(context.TenantId, product, context.Zone))
+            .Any(host => string.Equals(redirectUri.Host, host, StringComparison.OrdinalIgnoreCase)); // F2 收口
     }
 }

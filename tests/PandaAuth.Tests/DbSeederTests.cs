@@ -1130,6 +1130,26 @@ public class DbSeederTests
         Assert.Contains("https://t0042-asst.s001.pandacloud.cc/admin/callback/logout/pandaauth",
             await applications.GetPostLogoutRedirectUrisAsync(asstAdmin));
 
+        // meta ADR-092 并存窗口：PandaAssistant 绑定同时展开出 -pandy 主机的回调白名单，
+        // 与 TenantRedirectPolicy 的放行口径一致（登录与登出回调成对）。
+        Assert.Contains("https://t0042-pandy.s001.pandacloud.cc/app/callback/login/pandaauth",
+            await applications.GetRedirectUrisAsync(asstWeb));
+        Assert.Contains("https://t0042-pandy.s001.pandacloud.cc/app/callback/logout/pandaauth",
+            await applications.GetPostLogoutRedirectUrisAsync(asstWeb));
+        Assert.Contains("https://t0042-pandy.s001.pandacloud.cc/admin/callback/login/pandaauth",
+            await applications.GetRedirectUrisAsync(asstAdmin));
+        Assert.Contains("https://t0042-pandy.s001.pandacloud.cc/admin/callback/logout/pandaauth",
+            await applications.GetPostLogoutRedirectUrisAsync(asstAdmin));
+
+        // auth 产品没有并存标签：me-web / admin-web 的租户白名单不出现 -pandy。
+        foreach (var clientId in new[] { FirstPartyClients.MeWeb, FirstPartyClients.AdminWeb })
+        {
+            var authClient = await applications.FindByClientIdAsync(clientId);
+            Assert.NotNull(authClient);
+            Assert.DoesNotContain(await applications.GetRedirectUrisAsync(authClient),
+                uri => uri.Contains("-pandy", StringComparison.Ordinal));
+        }
+
         // asst-mobile：App Links 回调按配置入库（公共客户端无密钥可验）。
         Assert.Contains("https://t0042-asst.s001.pandalabs.cn/app/callback/mobile",
             await applications.GetRedirectUrisAsync(asstMobile));
