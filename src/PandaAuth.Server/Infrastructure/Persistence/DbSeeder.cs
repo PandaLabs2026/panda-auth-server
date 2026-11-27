@@ -169,13 +169,52 @@ public static class DbSeeder
 
         if (options.Seed.AsstMobile.Enabled)
         {
-            await SeedAsstMobileApplicationAsync(applications, reconciliation, options.Seed.AsstMobile);
+            await SeedAssistantMobileApplicationAsync(
+                applications, reconciliation, FirstPartyClients.AsstMobile, "熊猫助理 App（公共客户端 / PKCE）",
+                "Auth:Seed:AsstMobile", options.Seed.AsstMobile.RedirectUris, options.Seed.AsstMobile.PostLogoutRedirectUris, AsstClientPermissions());
         }
 
         if (options.Seed.AsstServer.Enabled)
         {
-            await SeedAsstServerApplicationAsync(applications, reconciliation, logger, db, options.Seed.AsstServer);
+            await SeedAssistantServerApplicationAsync(
+                applications, reconciliation, logger, db, FirstPartyClients.AsstServer, "熊猫助理 API（内省客户端）",
+                "Auth:Seed:AsstServer", options.Seed.AsstServer.ClientSecret);
             await SeedAsstEmailScopeAsync(scopes);
+        }
+
+        // Pandy 客户端族（meta ADR-092 并存窗口）：asst-* 的双注册目标，形态与 asst 客户端族一致。
+        // 默认关闭；由生产切换批次显式开启并经配置复用 asst-* 的密钥，旧客户端族保留作回退锚点。
+        // 令牌受众同时含新旧两个内省身份，资源方在内省身份切换前后都能取到身份声明。
+        if (options.Seed.PandyWeb.Enabled)
+        {
+            await SeedFirstPartyWebApplicationAsync(
+                applications, reconciliation, logger, db, FirstPartyClients.PandyWeb, "Pandy 工作台", "Auth:Seed:PandyWeb", options.Seed.PandyWeb,
+                options.TenantRouting, "app", PandyClientPermissions(), TenantProduct.PandaAssistant,
+                postLogoutSuffix: "callback/logout/pandaauth");
+        }
+
+        if (options.Seed.PandyAdmin.Enabled)
+        {
+            await SeedFirstPartyWebApplicationAsync(
+                applications, reconciliation, logger, db, FirstPartyClients.PandyAdmin, "Pandy 管理后台", "Auth:Seed:PandyAdmin", options.Seed.PandyAdmin,
+                options.TenantRouting, "admin", PandyClientPermissions(), TenantProduct.PandaAssistant,
+                postLogoutSuffix: "callback/logout/pandaauth");
+        }
+
+        if (options.Seed.PandyMobile.Enabled)
+        {
+            await SeedAssistantMobileApplicationAsync(
+                applications, reconciliation, FirstPartyClients.PandyMobile, "Pandy App（公共客户端 / PKCE）",
+                "Auth:Seed:PandyMobile", options.Seed.PandyMobile.RedirectUris, options.Seed.PandyMobile.PostLogoutRedirectUris,
+                PandyClientPermissions());
+        }
+
+        if (options.Seed.PandyServer.Enabled)
+        {
+            await SeedAssistantServerApplicationAsync(
+                applications, reconciliation, logger, db, FirstPartyClients.PandyServer, "Pandy API（内省客户端）",
+                "Auth:Seed:PandyServer", options.Seed.PandyServer.ClientSecret);
+            await SeedPandyEmailScopeResourceAsync(scopes);
         }
 
         if (options.Seed.Fleet.Enabled)
@@ -769,7 +808,20 @@ public static class DbSeeder
     /// - Introspection 端点不授——内省只属于 asst-server（资源方）。
     /// Revocation 端点保留：BFF 登出走 RP-initiated signout + revoke。
     /// </summary>
-    private static string[] AsstClientPermissions() =>
+    private static string[] AsstClientPermissions() => AssistantClientPermissions(FirstPartyClients.AsstServer);
+
+    /// <summary>
+    /// Pandy 客户端族（meta ADR-092 并存窗口）权限集：裁剪同 asst 系，令牌受众同时含新旧两个内省身份——
+    /// 资源方从 asst-server 切到 pandy-server 的前后，经 /connect/introspect 都落在令牌 aud 里。
+    /// asst 系客户端的权限集不变。
+    /// </summary>
+    private static string[] PandyClientPermissions() =>
+        AssistantClientPermissions(FirstPartyClients.AsstServer, FirstPartyClients.PandyServer);
+
+    /// <summary>
+    /// 熊猫助理客户端族的公共权限集；内省方（资源方客户端）逐个登记为受众。
+    /// </summary>
+    private static string[] AssistantClientPermissions(params string[] introspectionClients) =>
     [
         Permissions.Endpoints.Authorization,
         Permissions.Endpoints.Token,
@@ -781,11 +833,11 @@ public static class DbSeeder
         Permissions.Scopes.Email,
         Permissions.Scopes.Profile,
         Permissions.Prefixes.Scope + Scopes.OfflineAccess,
-        // asst-server 经 /connect/introspect 裁决 asst* 客户端的用户令牌（ADR 0095 exchange）。
+        // 资源方经 /connect/introspect 裁决本族客户端的用户令牌（ADR 0095 exchange）。
         // OpenIddict 只在内省方 ∈ 令牌 aud 时返回敏感应用声明（email/panda:tenant_id），
         // 缺失时内省结果只剩 active/sub——换发端拿不到邮箱，Dual 窗口既不能匹配也不能 JIT，
-        // 一律 oidc_subject_not_bound。asst 系客户端的令牌受众因此必须含 asst-server。
-        Permissions.Prefixes.Audience + FirstPartyClients.AsstServer,
+        // 一律 oidc_subject_not_bound。本族客户端的令牌受众因此必须含每一个内省方。
+        .. introspectionClients.SelectMany(client => new[] { Permissions.Prefixes.Audience + client }),
         Requirements.Features.ProofKeyForCodeExchange,
     ];
 
@@ -880,35 +932,37 @@ public static class DbSeeder
     }
 
     /// <summary>
-    /// asst-mobile（公共客户端 / PKCE）的 upsert 播种：无密钥，仅回调白名单订正；
-    /// 回调为 App Links（https://t####-asst.sNNN.../app/callback/mobile），全部经配置注入。
+    /// 熊猫助理 App 公共客户端（asst-mobile / 并存窗口内的 pandy-mobile；公共客户端 / PKCE）的 upsert 播种：
+    /// 无密钥，仅回调白名单订正；回调为 App Links（https://t####-asst.sNNN.../app/callback/mobile），全部经配置注入。
     /// </summary>
-    private static async Task SeedAsstMobileApplicationAsync(IOpenIddictApplicationManager applications, SeedPermissionReconciler reconciliation, AsstMobileSeedOptions seed)
+    private static async Task SeedAssistantMobileApplicationAsync(
+        IOpenIddictApplicationManager applications, SeedPermissionReconciler reconciliation,
+        string clientId, string displayName, string configPrefix, string[] redirectUris, string[] postLogoutRedirectUris, string[] permissions)
     {
-        var existing = await applications.FindByClientIdAsync(FirstPartyClients.AsstMobile);
+        var existing = await applications.FindByClientIdAsync(clientId);
         if (existing is null)
         {
-            if (seed.RedirectUris.Length == 0)
+            if (redirectUris.Length == 0)
             {
-                throw new InvalidOperationException("缺少 Auth:Seed:AsstMobile:RedirectUris 配置（asst-mobile 为 App Links 公共客户端）。");
+                throw new InvalidOperationException($"缺少 {configPrefix}:RedirectUris 配置（{clientId} 为 App Links 公共客户端）。");
             }
 
             var descriptor = new OpenIddictApplicationDescriptor
             {
-                ClientId = FirstPartyClients.AsstMobile,
+                ClientId = clientId,
                 ClientType = ClientTypes.Public,
                 ConsentType = ConsentTypes.Implicit,
-                DisplayName = "熊猫助理 App（公共客户端 / PKCE）",
+                DisplayName = displayName,
             };
-            foreach (var permission in AsstClientPermissions())
+            foreach (var permission in permissions)
             {
                 descriptor.Permissions.Add(permission);
             }
-            foreach (var uri in seed.RedirectUris)
+            foreach (var uri in redirectUris)
             {
                 descriptor.RedirectUris.Add(new Uri(uri, UriKind.Absolute));
             }
-            foreach (var uri in seed.PostLogoutRedirectUris)
+            foreach (var uri in postLogoutRedirectUris)
             {
                 descriptor.PostLogoutRedirectUris.Add(new Uri(uri, UriKind.Absolute));
             }
@@ -917,9 +971,9 @@ public static class DbSeeder
             return;
         }
 
-        await reconciliation.ApplyAsync(existing, AsstClientPermissions());
-        var replaceRedirectUris = seed.RedirectUris.Length > 0;
-        var replacePostLogout = seed.PostLogoutRedirectUris.Length > 0;
+        await reconciliation.ApplyAsync(existing, permissions);
+        var replaceRedirectUris = redirectUris.Length > 0;
+        var replacePostLogout = postLogoutRedirectUris.Length > 0;
         if (!replaceRedirectUris && !replacePostLogout)
             return;
 
@@ -928,7 +982,7 @@ public static class DbSeeder
         if (replaceRedirectUris)
         {
             updated.RedirectUris.Clear();
-            foreach (var uri in seed.RedirectUris)
+            foreach (var uri in redirectUris)
             {
                 updated.RedirectUris.Add(new Uri(uri, UriKind.Absolute));
             }
@@ -936,7 +990,7 @@ public static class DbSeeder
         if (replacePostLogout)
         {
             updated.PostLogoutRedirectUris.Clear();
-            foreach (var uri in seed.PostLogoutRedirectUris)
+            foreach (var uri in postLogoutRedirectUris)
             {
                 updated.PostLogoutRedirectUris.Add(new Uri(uri, UriKind.Absolute));
             }
@@ -964,26 +1018,49 @@ public static class DbSeeder
     }
 
     /// <summary>
-    /// asst-server（资源方机密客户端）：仅内省端点权限——换发端点（panda-asst /auth/oidc/exchange）
-    /// 以本客户端凭据对用户令牌做一次性 introspection；无回调、无授权码面。
+    /// Pandy 并存窗口（meta ADR-092）：pandy-server 是熊猫助理资源方在内省身份切换后的凭据。
+    /// 令牌受众经 scope Resources 投影（见上），所以把 pandy-server 加进 email scope 的资源集合，
+    /// 该身份经 /connect/introspect 才落在令牌 aud 里、才取得到身份声明。
+    /// 幂等：已含则不动。只在显式开启 Auth:Seed:PandyServer 时执行——生效后所有请求 email scope 的
+    /// 令牌都会多出这一受众（与 asst-server 今天的情况同类），所以不随默认播种发生。
     /// </summary>
-    private static async Task SeedAsstServerApplicationAsync(IOpenIddictApplicationManager applications, SeedPermissionReconciler reconciliation, ILogger? logger, PandaAuthDbContext? db, AsstServerSeedOptions seed)
+    private static async Task SeedPandyEmailScopeResourceAsync(IOpenIddictScopeManager scopes)
     {
-        if (string.IsNullOrWhiteSpace(seed.ClientSecret))
+        var email = await scopes.FindByNameAsync(Scopes.Email)
+            ?? throw new InvalidOperationException(
+                "email scope 不存在：开启 Auth:Seed:PandyServer 前须先有 email scope 实体（由 Auth:Seed:AsstServer 播种）。");
+        if ((await scopes.GetResourcesAsync(email)).Contains(FirstPartyClients.PandyServer)) return;
+
+        var descriptor = new OpenIddictScopeDescriptor();
+        await scopes.PopulateAsync(descriptor, email);
+        descriptor.Resources.Add(FirstPartyClients.PandyServer);
+        await scopes.UpdateAsync(email, descriptor);
+    }
+
+    /// <summary>
+    /// 熊猫助理资源方机密客户端（asst-server / 并存窗口内的 pandy-server）：仅内省端点权限——
+    /// 换发端点（panda-asst /auth/oidc/exchange）以本客户端凭据对用户令牌做一次性 introspection；
+    /// 无回调、无授权码面。
+    /// </summary>
+    private static async Task SeedAssistantServerApplicationAsync(
+        IOpenIddictApplicationManager applications, SeedPermissionReconciler reconciliation, ILogger? logger, PandaAuthDbContext? db,
+        string clientId, string displayName, string configPrefix, string clientSecret)
+    {
+        if (string.IsNullOrWhiteSpace(clientSecret))
         {
-            throw new InvalidOperationException("缺少 Auth:Seed:AsstServer:ClientSecret 配置（asst-server 内省客户端密钥）。");
+            throw new InvalidOperationException($"缺少 {configPrefix}:ClientSecret 配置（{clientId} 内省客户端密钥）。");
         }
 
-        var existing = await applications.FindByClientIdAsync(FirstPartyClients.AsstServer);
+        var existing = await applications.FindByClientIdAsync(clientId);
         if (existing is null)
         {
             await applications.CreateAsync(new OpenIddictApplicationDescriptor
             {
-                ClientId = FirstPartyClients.AsstServer,
+                ClientId = clientId,
                 ClientType = ClientTypes.Confidential,
-                ClientSecret = seed.ClientSecret,
+                ClientSecret = clientSecret,
                 ConsentType = ConsentTypes.Implicit,
-                DisplayName = "熊猫助理 API（内省客户端）",
+                DisplayName = displayName,
                 Permissions =
                 {
                     Permissions.Endpoints.Introspection,
@@ -993,10 +1070,10 @@ public static class DbSeeder
         }
 
         await reconciliation.ApplyAsync(existing, [Permissions.Endpoints.Introspection]);
-        if (!await applications.ValidateClientSecretAsync(existing, seed.ClientSecret))
+        if (!await applications.ValidateClientSecretAsync(existing, clientSecret))
         {
-            await WarnSecretRewriteAsync(logger, db, "asst-server", "Auth:Seed:AsstServer");
-            await applications.UpdateAsync(existing, seed.ClientSecret);
+            await WarnSecretRewriteAsync(logger, db, clientId, configPrefix);
+            await applications.UpdateAsync(existing, clientSecret);
         }
     }
 }

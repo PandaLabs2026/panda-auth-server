@@ -1037,6 +1037,31 @@ public class DbSeederTests
             Enabled = true,
             ClientSecret = "asst-server-secret-0123456789abcdef",
         };
+        options.Seed.PandyWeb = new PandyWebSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "pandy-web-secret-0123456789abcdef",
+            RedirectUris = ["https://pandy.example.local/app/callback/pandaauth"],
+            PostLogoutRedirectUris = ["https://pandy.example.local/app/"],
+        };
+        options.Seed.PandyAdmin = new PandyAdminSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "pandy-admin-secret-0123456789abcd",
+            RedirectUris = ["https://pandy.example.local/admin/callback/pandaauth"],
+            PostLogoutRedirectUris = ["https://pandy.example.local/admin/"],
+        };
+        options.Seed.PandyMobile = new PandyMobileSeedOptions
+        {
+            Enabled = true,
+            RedirectUris = ["https://t0042-pandy.s001.pandacloud.cc/app/callback/mobile"],
+            PostLogoutRedirectUris = ["https://t0042-pandy.s001.pandacloud.cc/app/"],
+        };
+        options.Seed.PandyServer = new PandyServerSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "asst-server-secret-0123456789abcdef",
+        };
         options.Seed.Fleet = new FleetSeedOptions { Enabled = true, ClientSecret = "fleet-api-test-secret" };
         options.Seed.Mgmt = new MgmtSeedOptions { Enabled = true, ClientSecret = "mgmt-api-test-secret" };
         options.Seed.Demo = new DemoSeedOptions
@@ -1157,6 +1182,193 @@ public class DbSeederTests
         // asst-server：密钥可验 + 内省权限（无回调面）。
         Assert.True(await applications.ValidateClientSecretAsync(asstServer, "asst-server-secret-0123456789abcdef"));
         Assert.Empty(await applications.GetRedirectUrisAsync(asstServer));
+    }
+
+    private static AuthOptions AssistantFamiliesOptions(bool withPandy)
+    {
+        // asst 客户端族常开（提供 email scope 并作为对照基线）；pandy 客户端族按参数开启，密钥复用 asst-* 的同值。
+        var options = ValidOptions();
+        options.Seed.AsstWeb = new AsstWebSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "asst-web-secret-0123456789abcdef",
+            RedirectUris = ["https://asst.example.local/app/callback/pandaauth"],
+            PostLogoutRedirectUris = ["https://asst.example.local/app/"],
+        };
+        options.Seed.AsstAdmin = new AsstAdminSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "asst-admin-secret-0123456789abcd",
+            RedirectUris = ["https://asst.example.local/admin/callback/pandaauth"],
+            PostLogoutRedirectUris = ["https://asst.example.local/admin/"],
+        };
+        options.Seed.AsstMobile = new AsstMobileSeedOptions
+        {
+            Enabled = true,
+            RedirectUris = ["https://t0042-asst.s001.pandalabs.cn/app/callback/mobile"],
+            PostLogoutRedirectUris = ["https://t0042-asst.s001.pandalabs.cn/app/"],
+        };
+        options.Seed.AsstServer = new AsstServerSeedOptions
+        {
+            Enabled = true,
+            ClientSecret = "asst-server-secret-0123456789abcdef",
+        };
+        if (withPandy)
+        {
+            options.Seed.PandyWeb = new PandyWebSeedOptions
+            {
+                Enabled = true,
+                ClientSecret = "asst-web-secret-0123456789abcdef",
+                RedirectUris = ["https://pandy.example.local/app/callback/pandaauth"],
+                PostLogoutRedirectUris = ["https://pandy.example.local/app/"],
+            };
+            options.Seed.PandyAdmin = new PandyAdminSeedOptions
+            {
+                Enabled = true,
+                ClientSecret = "asst-admin-secret-0123456789abcd",
+                RedirectUris = ["https://pandy.example.local/admin/callback/pandaauth"],
+                PostLogoutRedirectUris = ["https://pandy.example.local/admin/"],
+            };
+            options.Seed.PandyMobile = new PandyMobileSeedOptions
+            {
+                Enabled = true,
+                RedirectUris = ["https://t0042-pandy.s001.pandacloud.cc/app/callback/mobile"],
+                PostLogoutRedirectUris = ["https://t0042-pandy.s001.pandacloud.cc/app/"],
+            };
+            options.Seed.PandyServer = new PandyServerSeedOptions
+            {
+                Enabled = true,
+                ClientSecret = "asst-server-secret-0123456789abcdef",
+            };
+        }
+        options.TenantRouting.Bindings =
+        [
+            new TenantRouteBindingOptions { TenantId = "t0042", Product = TenantProduct.PandaAuth, Zone = "s001", State = TenantRouteState.Ready },
+            new TenantRouteBindingOptions { TenantId = "t0042", Product = TenantProduct.PandaAssistant, Zone = "s001", State = TenantRouteState.Ready },
+        ];
+        return options;
+    }
+
+    [Fact]
+    public async Task PandyClientFamily_IsNotSeededByDefault_AndLeavesTheAssistantFamilyUnchanged()
+    {
+        // meta ADR-092 并存窗口：pandy-* 默认关闭——未显式开启时不落任何新客户端，
+        // email scope 的资源集合与 asst 客户端的权限集都不变。
+        using var provider = BuildProvider(AssistantFamiliesOptions(withPandy: false));
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+        foreach (var clientId in new[] { FirstPartyClients.PandyWeb, FirstPartyClients.PandyAdmin, FirstPartyClients.PandyMobile, FirstPartyClients.PandyServer })
+        {
+            Assert.Null(await applications.FindByClientIdAsync(clientId));
+        }
+
+        var scopes = provider.GetRequiredService<IOpenIddictScopeManager>();
+        var email = await scopes.FindByNameAsync(Scopes.Email);
+        Assert.NotNull(email);
+        Assert.Equal(new[] { FirstPartyClients.AsstServer }, (await scopes.GetResourcesAsync(email)).ToArray());
+
+        var asstWeb = await applications.FindByClientIdAsync(FirstPartyClients.AsstWeb);
+        Assert.NotNull(asstWeb);
+        Assert.False(await applications.HasPermissionAsync(asstWeb, Permissions.Prefixes.Audience + FirstPartyClients.PandyServer));
+    }
+
+    [Fact]
+    public async Task PandyClientFamily_SeedsDualRegistrationOfTheAssistantFamily()
+    {
+        // meta ADR-092 并存窗口：pandy-* 是 asst-* 的双注册目标。形态逐项对应 asst 客户端，
+        // 令牌受众同时含新旧两个内省身份；asst 客户端的权限集不变。
+        using var provider = BuildProvider(AssistantFamiliesOptions(withPandy: true));
+        await DbSeeder.SeedAsync(provider);
+
+        var applications = provider.GetRequiredService<IOpenIddictApplicationManager>();
+
+        foreach (var (pandyClientId, asstClientId) in new[]
+        {
+            (FirstPartyClients.PandyWeb, FirstPartyClients.AsstWeb),
+            (FirstPartyClients.PandyAdmin, FirstPartyClients.AsstAdmin),
+            (FirstPartyClients.PandyMobile, FirstPartyClients.AsstMobile),
+        })
+        {
+            var pandy = await applications.FindByClientIdAsync(pandyClientId);
+            var asst = await applications.FindByClientIdAsync(asstClientId);
+            Assert.NotNull(pandy);
+            Assert.NotNull(asst);
+
+            // 权限集 = 对应 asst 客户端的全部权限 + 新内省身份的受众。
+            var pandyAudience = Permissions.Prefixes.Audience + FirstPartyClients.PandyServer;
+            Assert.Equal((await applications.GetPermissionsAsync(asst)).Order(StringComparer.Ordinal),
+                (await applications.GetPermissionsAsync(pandy)).Where(permission => permission != pandyAudience).Order(StringComparer.Ordinal));
+            Assert.Contains(Permissions.Prefixes.Audience + FirstPartyClients.AsstServer, await applications.GetPermissionsAsync(pandy));
+            Assert.Contains(pandyAudience, await applications.GetPermissionsAsync(pandy));
+            // asst 客户端不多出任何权限。
+            Assert.False(await applications.HasPermissionAsync(asst, pandyAudience));
+
+            Assert.Equal(await applications.GetClientTypeAsync(asst), await applications.GetClientTypeAsync(pandy));
+        }
+
+        // 回调白名单：新旧两种主机标签成对展开，与 asst 客户端同口径。
+        var pandyWeb = await applications.FindByClientIdAsync(FirstPartyClients.PandyWeb);
+        var pandyAdmin = await applications.FindByClientIdAsync(FirstPartyClients.PandyAdmin);
+        Assert.NotNull(pandyWeb);
+        Assert.NotNull(pandyAdmin);
+        foreach (var host in new[] { "t0042-asst.s001.pandacloud.cc", "t0042-pandy.s001.pandacloud.cc" })
+        {
+            Assert.Contains($"https://{host}/app/callback/login/pandaauth", await applications.GetRedirectUrisAsync(pandyWeb));
+            Assert.Contains($"https://{host}/app/callback/logout/pandaauth", await applications.GetPostLogoutRedirectUrisAsync(pandyWeb));
+            Assert.Contains($"https://{host}/admin/callback/login/pandaauth", await applications.GetRedirectUrisAsync(pandyAdmin));
+            Assert.Contains($"https://{host}/admin/callback/logout/pandaauth", await applications.GetPostLogoutRedirectUrisAsync(pandyAdmin));
+        }
+
+        // pandy-mobile：公共客户端，回调按配置入库。
+        var pandyMobile = await applications.FindByClientIdAsync(FirstPartyClients.PandyMobile);
+        Assert.NotNull(pandyMobile);
+        Assert.Equal(ClientTypes.Public, await applications.GetClientTypeAsync(pandyMobile));
+        Assert.Contains("https://t0042-pandy.s001.pandacloud.cc/app/callback/mobile",
+            await applications.GetRedirectUrisAsync(pandyMobile));
+
+        // pandy-server：与 asst-server 同形态——仅内省端点、无回调面、密钥可验。
+        var pandyServer = await applications.FindByClientIdAsync(FirstPartyClients.PandyServer);
+        Assert.NotNull(pandyServer);
+        Assert.Equal(ClientTypes.Confidential, await applications.GetClientTypeAsync(pandyServer));
+        Assert.Equal(Permissions.Endpoints.Introspection, Assert.Single(await applications.GetPermissionsAsync(pandyServer)));
+        Assert.Empty(await applications.GetRedirectUrisAsync(pandyServer));
+        Assert.True(await applications.ValidateClientSecretAsync(pandyServer, "asst-server-secret-0123456789abcdef"));
+
+        // email scope：新旧两个内省身份都在资源集合里，令牌受众才会同时投影出两者。
+        var scopes = provider.GetRequiredService<IOpenIddictScopeManager>();
+        var email = await scopes.FindByNameAsync(Scopes.Email);
+        Assert.NotNull(email);
+        Assert.Equal(new[] { FirstPartyClients.AsstServer, FirstPartyClients.PandyServer }.Order(),
+            (await scopes.GetResourcesAsync(email)).Order());
+    }
+
+    [Fact]
+    public async Task PandyServer_AddsItsAudienceToTheEmailScopeIdempotently()
+    {
+        using var provider = BuildProvider(AssistantFamiliesOptions(withPandy: true));
+        await DbSeeder.SeedAsync(provider);
+        await DbSeeder.SeedAsync(provider);
+
+        var scopes = provider.GetRequiredService<IOpenIddictScopeManager>();
+        var email = await scopes.FindByNameAsync(Scopes.Email);
+        Assert.NotNull(email);
+        Assert.Equal(new[] { FirstPartyClients.AsstServer, FirstPartyClients.PandyServer }.Order(),
+            (await scopes.GetResourcesAsync(email)).Order());
+    }
+
+    [Fact]
+    public async Task PandyServer_WithoutTheEmailScope_FailsClosed()
+    {
+        // email scope 由 Auth:Seed:AsstServer 创建；pandy-server 的受众要加在它上面，缺它即拒绝启动播种。
+        var options = AssistantFamiliesOptions(withPandy: true);
+        options.Seed.AsstServer.Enabled = false;
+
+        using var provider = BuildProvider(options);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => DbSeeder.SeedAsync(provider));
+
+        Assert.Contains("email scope", exception.Message);
     }
 
     [Fact]

@@ -149,6 +149,14 @@ public sealed class SeedOptions
 
     public AsstServerSeedOptions AsstServer { get; set; } = new();
 
+    public PandyWebSeedOptions PandyWeb { get; set; } = new();
+
+    public PandyAdminSeedOptions PandyAdmin { get; set; } = new();
+
+    public PandyMobileSeedOptions PandyMobile { get; set; } = new();
+
+    public PandyServerSeedOptions PandyServer { get; set; } = new();
+
     public FleetSeedOptions Fleet { get; set; } = new();
 
     public MgmtSeedOptions Mgmt { get; set; } = new();
@@ -313,6 +321,54 @@ public sealed class AsstMobileSeedOptions
 public sealed class AsstServerSeedOptions
 {
     /// <summary>默认关闭；panda-asst 租户实例经 Auth__Seed__AsstServer__Enabled 显式开启。</summary>
+    public bool Enabled { get; set; }
+
+    public string ClientSecret { get; set; } = string.Empty;
+}
+
+// ---- Pandy 客户端族（meta ADR-092 并存窗口：asst-* 的双注册目标）----
+// 默认全部关闭：由生产切换批次显式开启，密钥经配置复用 asst-* 的同值；asst-* 保留作回退锚点。
+// 本族客户端的令牌受众同时含 asst-server 与 pandy-server——资源方在内省身份切换前后都取得到身份声明。
+
+/// <summary>
+/// pandy-web：形态同 asst-web（机密客户端，授权码 + PKCE + 刷新令牌）；
+/// 回调租户展开按 TenantProduct.PandaAssistant 绑定（callbackArea=app），新旧两种主机标签都展开。
+/// </summary>
+public sealed class PandyWebSeedOptions : FirstPartyWebSeedOptions
+{
+    /// <summary>默认关闭；经 Auth__Seed__PandyWeb__Enabled 显式开启。</summary>
+    public override bool Enabled { get; set; }
+}
+
+/// <summary>pandy-admin：形态同 asst-admin，callbackArea=admin。</summary>
+public sealed class PandyAdminSeedOptions : FirstPartyWebSeedOptions
+{
+    /// <summary>默认关闭；经 Auth__Seed__PandyAdmin__Enabled 显式开启。</summary>
+    public override bool Enabled { get; set; }
+}
+
+/// <summary>
+/// pandy-mobile：形态同 asst-mobile（公共客户端 + 强制 PKCE + 刷新令牌）；
+/// 回调为 App Links，经配置注入，不做租户展开。
+/// </summary>
+public sealed class PandyMobileSeedOptions
+{
+    /// <summary>默认关闭；经 Auth__Seed__PandyMobile__Enabled 显式开启。</summary>
+    public bool Enabled { get; set; }
+
+    public string[] RedirectUris { get; set; } = [];
+
+    public string[] PostLogoutRedirectUris { get; set; } = [];
+}
+
+/// <summary>
+/// pandy-server：形态同 asst-server（机密客户端，仅内省端点）——熊猫助理资源方在内省身份切换后的凭据。
+/// 开启时同时把 pandy-server 加进 email scope 的资源集合（见 DbSeeder），这是该身份在内省里取到
+/// 身份声明的前提；生效后所有请求 email scope 的令牌都会多出这一受众。
+/// </summary>
+public sealed class PandyServerSeedOptions
+{
+    /// <summary>默认关闭；经 Auth__Seed__PandyServer__Enabled 显式开启。</summary>
     public bool Enabled { get; set; }
 
     public string ClientSecret { get; set; } = string.Empty;
