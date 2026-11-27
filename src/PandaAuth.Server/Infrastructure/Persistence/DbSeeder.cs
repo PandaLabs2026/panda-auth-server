@@ -866,15 +866,15 @@ public static class DbSeeder
         if (tenantRouting is null || callbackArea is null)
             return configuredUris;
 
+        // 标签双收（meta ADR-092）：每个就绪绑定展开出该产品在并存窗口内被接受的全部主机形态
+        // （规范形态在前，其后是熊猫助理的 -pandy），与 TenantRedirectPolicy 的放行口径一致。
         var tenantUris = tenantRouting.Bindings
             .Where(binding => binding.Product == hostProduct && binding.State == TenantRouteState.Ready)
-            .Select(binding =>
-            {
-                var host = TenantCanonicalHost.For(TenantId.Parse(binding.TenantId), hostProduct, binding.Zone);
-                return suffix.Length == 0
-                    ? $"https://{host}/{callbackArea}/"
-                    : $"https://{host}/{callbackArea}/{suffix}";
-            });
+            .SelectMany(binding =>
+                TenantCanonicalHost.AcceptedHosts(TenantId.Parse(binding.TenantId), hostProduct, binding.Zone)
+                    .Select(host => suffix.Length == 0
+                        ? $"https://{host}/{callbackArea}/"
+                        : $"https://{host}/{callbackArea}/{suffix}"));
 
         return configuredUris.Concat(tenantUris).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }

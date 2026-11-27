@@ -112,4 +112,33 @@ public sealed class TenantRedirectPolicyTests
         Assert.False(policy.IsAllowed(tenant, new Uri("https://t0042-asst.s002.pandalabs.cn/app/account/login")));
         Assert.False(policy.IsAllowed(tenant, new Uri("//t0043-asst.s001.pandalabs.cn/app")));
     }
+
+    [Fact]
+    public void Allows_the_dual_pandy_label_host_of_the_assistant_product_only()
+    {
+        // meta ADR-092 并存窗口：熊猫助理的 -pandy 主机与其余产品主机一样放行；其他产品没有并存标签。
+        var tenant = new TenantContext(TenantId.Parse("t0042"), TenantProduct.PandaAuth, "s001",
+            "t0042-auth.s001.pandacloud.cc", 1, TenantRouteState.Ready);
+        var policy = new TenantRedirectPolicy();
+
+        Assert.True(policy.IsAllowed(tenant, new Uri("https://t0042-pandy.s001.pandacloud.cc/app/callback/login/pandaauth")));
+        Assert.False(policy.IsAllowed(tenant, new Uri("https://t0043-pandy.s001.pandacloud.cc/app/callback/login/pandaauth")));
+        Assert.False(policy.IsAllowed(tenant, new Uri("https://t0042-pandy.s002.pandacloud.cc/app/callback/login/pandaauth")));
+        Assert.False(policy.IsAllowed(tenant, new Uri("https://t0042-pandy.s001.pandalabs.cn/app/callback/login/pandaauth"))); // F2 收口
+        Assert.False(policy.IsAllowed(tenant, new Uri("https://t0042-pandyy.s001.pandacloud.cc/app/callback/login/pandaauth")));
+        Assert.False(policy.IsAllowed(tenant, new Uri("https://t0042-pandy.s001.pandacloud.cc.evil.test/app/callback/login/pandaauth")));
+        // auth 与 oasis 产品没有并存标签。
+        Assert.False(policy.IsAllowed(tenant, new Uri("https://t0042-pandy-oasis.s001.pandacloud.cc/login")));
+    }
+
+    [Fact]
+    public void Apex_context_allows_the_dual_label_host_in_apex_form_only()
+    {
+        var tenant = new TenantContext(TenantId.Parse("t0042"), TenantProduct.PandaAuth, "",
+            "t0042-auth.pandacloud.cc", 1, TenantRouteState.Ready);
+        var policy = new TenantRedirectPolicy();
+
+        Assert.True(policy.IsAllowed(tenant, new Uri("https://t0042-pandy.pandacloud.cc/app/callback/login/pandaauth")));
+        Assert.False(policy.IsAllowed(tenant, new Uri("https://t0042-pandy.s001.pandacloud.cc/app/callback/login/pandaauth")));
+    }
 }
