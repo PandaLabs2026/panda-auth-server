@@ -32,6 +32,12 @@ public static class FirstPartyClients
     public const string MgmtApi = "mgmt-api";
     public const string PandamadeApi = "pandamade-api";
 
+    // ---- Pandy 客户端族（meta ADR-092 并存窗口：asst-* 的双注册目标；DbSeeder 播种，默认关闭）----
+    public const string PandyWeb = "pandy-web";
+    public const string PandyAdmin = "pandy-admin";
+    public const string PandyMobile = "pandy-mobile";
+    public const string PandyServer = "pandy-server";
+
     // ---- 宿主机操作命令注册（不经 DbSeeder；auth.appliket.com 专用实例）----
     public const string CloudOperationWeb = "cloud-operation-web";
 
@@ -47,6 +53,7 @@ public static class FirstPartyClients
         PandamadeAdmin, PandaMadeScopes.ProductWebClient, PandaMadeScopes.ProductApi,
         AsstMobile,
         AsstServer, FleetApi, MgmtApi, PandamadeApi,
+        PandyWeb, PandyAdmin, PandyMobile, PandyServer,
         CloudOperationWeb,
         DemoPublic, DemoWeb, DemoService,
     };
